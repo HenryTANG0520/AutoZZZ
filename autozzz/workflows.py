@@ -66,6 +66,8 @@ class DailyWorkflow:
         self._coffee_ordered = False
         self._coffee_reward_claimed = False
         self._video_opened = False
+        self._video_start_pending = False
+        self._video_return_pending = False
         self._monthly_claim_clicks = 0
         self._monthly_claim_pending = False
 
@@ -135,7 +137,37 @@ class DailyWorkflow:
 
     def _video_screen(self, scene):
         return scene.has("经营状况", roi(1180, 0, 1650, 130)) or scene.has(
-            ("昨日账本", "选择宣传员", "上架筛选", "推荐上架", "还未上架录像带", "还未选择宣传员", "诚信经营丁尼为本"))
+            ("昨日账本", "选择宣传员", "上架筛选", "推荐上架", "还未上架录像带", "还未选择宣传员")) or self._video_opening_result(scene)
+
+    def _video_opening_result(self, scene):
+        return scene.has(("诚信经营丁尼为本", "开店大吉丁尼遍地"), DIALOG, exact=True)
+
+    def _video_after_opening_ready(self, scene):
+        return self._world(scene) or (self._video_business_panel(scene) and scene.has(
+            "正在营业", roi(1480, 900, 1840, 1040), exact=True))
+
+    def _resume_video_transition(self, scene):
+        # Keep sent confirmations across F9; a loading frame must never trigger
+        # a new navigation/opening attempt after a manual pause.
+        if self._video_start_pending:
+            scene = self._wait(lambda s: self._video_opening_result(s) or (self._video_business_panel(s)
+                               and s.has("正在营业", roi(1480, 900, 1840, 1040), exact=True)),
+                               "开店成功提示或正在营业面板")
+            self._video_start_pending = False
+        if self._video_return_pending:
+            scene = self._wait(self._video_after_opening_ready, "营业确认后的正在营业面板或大世界")
+            self._video_return_pending = False
+        return scene
+
+    def _accept_video_opening_result(self, scene):
+        confirms = [t for t in scene.tokens if t.within(DIALOG) and normalize(t.text) == "确认"]
+        if len(confirms) != 1 or not confirms[0].within(roi(770, 570, 1100, 710)):
+            return self._partial("video", scene, "营业结果页没有唯一且位置已校准的确认。")
+        self.c.evidence(scene, "video_opened")
+        self.c.click(scene, confirms[0])
+        self._video_opened = True
+        self._video_return_pending = True
+        return self._resume_video_transition(scene)
 
     def _promoter_picker(self, scene):
         # The variable-length description moves the customer-flow section; bind
@@ -500,7 +532,7 @@ class DailyWorkflow:
     def ensure_main(self):
         first_call = not self._startup_checked
         try:
-            scene = self._snapshot()
+            scene = self._resume_video_transition(self._snapshot())
             if first_call and self.c.settings.auto_launch and not self._startup_ready(scene):
                 scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口")
         except InputInterrupted:
@@ -519,6 +551,11 @@ class DailyWorkflow:
             scene = self._dismiss_monthly_card(scene)
             if self._monthly_card_visible(scene):
                 self._unknown(scene, "月卡领取特征不完整或出现购买选项")
+            if self._video_opening_result(scene):
+                after = self._accept_video_opening_result(scene)
+                if isinstance(after, TaskResult):
+                    raise AutomationError(after.detail)
+                continue
             if self._result_screen(scene):
                 confirm = scene.find("确认", DIALOG, exact=True)
                 self.c.click(scene, confirm)
@@ -870,7 +907,7 @@ class DailyWorkflow:
         return self._partial("coffee", scene, "免费点单已执行，结果动画或弹窗尚未校准。")
 
     def video(self):
-        scene = self._snapshot()
+        scene = self._resume_video_transition(self._snapshot())
         promoter_configured = False
         if self._daily_verified(scene):
             self._record_daily_complete(scene)
@@ -885,14 +922,10 @@ class DailyWorkflow:
             if isinstance(scene, TaskResult):
                 return scene
         for _ in range(16):
-            if scene.has("诚信经营丁尼为本", DIALOG):
-                confirms = [t for t in scene.tokens if t.within(DIALOG) and normalize(t.text) == "确认"]
-                if len(confirms) != 1:
-                    return self._partial("video", scene, "营业结果页没有唯一确认。")
-                self.c.evidence(scene, "video_opened")
-                self.c.click(scene, confirms[0])
-                self._video_opened = True
-                scene = self._wait(lambda s: self._video_screen(s) or self._world(s), "营业确认后的经营面板或大世界")
+            if self._video_opening_result(scene):
+                scene = self._accept_video_opening_result(scene)
+                if isinstance(scene, TaskResult):
+                    return scene
                 if self._world(scene):
                     return self._ok("video", scene, "已识别营业成功提示、确认并返回大世界。")
                 continue
@@ -957,11 +990,8 @@ class DailyWorkflow:
                 confirm = scene.find("确认", roi(1000, 570, 1270, 700), exact=True)
                 if confirm and scene.has(("营业", "宣传员", "录像带"), DIALOG):
                     self.c.click(scene, confirm)
-                    scene = self._snapshot()
-                    done = scene.find("确认", roi(770, 570, 1100, 710), exact=True)
-                    if done and scene.has(("营业成功", "开始营业", "营业已开始"), DIALOG):
-                        self.c.click(scene, done)
-                        scene = self._snapshot()
+                    self._video_start_pending = True
+                    scene = self._resume_video_transition(scene)
                     continue
                 return self._partial("video", scene, "已请求开始营业，但没有可核实的营业确认或宣传员/录像带尚未配置。")
             return self._partial("video", scene, "已识别录像店，但宣传员或录像带设置需要实机校准。")

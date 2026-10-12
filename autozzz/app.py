@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .config import GAME_PATHS, ROOT, RESOURCE_ROOT, Settings
-from .models import AutomationError, FocusLost, InputInterrupted, RunReport, Scene, Stopped, TaskResult, Token
+from .models import AutomationError, FocusLost, InputInterrupted, RunReport, Scene, ScreenshotNotReady, Stopped, TaskResult, Token
 from .vision import Vision, save_scene
 from .windows import find_game, is_admin, is_elevated, launch
 
@@ -432,6 +432,39 @@ class Runner:
                 self.toggle_pause()
             previous = current
 
+    def _initial_snapshot(self, context: Context) -> Scene:
+        if not self.settings.auto_launch:
+            return context.snapshot()
+        # A newly created window can be valid before its first rendered frame.
+        # Only this initial read may wait for black frames; no input is sent.
+        started = time.monotonic()
+        inactive_before = self.inactive_duration
+        timeout = self.settings.transition_timeout
+        announced = False
+
+        def remaining():
+            elapsed = max(0, time.monotonic() - started -
+                          (self.inactive_duration - inactive_before))
+            return timeout - elapsed
+
+        while True:
+            self.checkpoint()
+            if remaining() <= 0:
+                raise ScreenshotNotReady(f"等待游戏首次画面超时（{timeout} 秒）；截图仍为空或黑屏，请查看游戏加载状态。")
+            try:
+                return context.snapshot()
+            except ScreenshotNotReady:
+                if not announced:
+                    self.log("游戏正在加载首次画面，等待画面可识别后继续；此时不发送输入。")
+                    announced = True
+            except InputInterrupted:
+                # Manual pause invalidates the first frame but must not restart
+                # the loading budget or consume a game action.
+                pass
+            delay = min(0.5, max(0, remaining()))
+            if delay:
+                context.sleep(delay)
+
     def run(self) -> RunReport:
         from .workflows import DailyWorkflow
         from .windows import kernel32
@@ -478,7 +511,7 @@ class Runner:
             vision = Vision(self.settings.ocr_confidence)
             context = Context(self, self._window, vision)
             workflow = DailyWorkflow(context)
-            initial = context.snapshot()
+            initial = self._initial_snapshot(context)
             context.evidence(initial, "start")
             self._resume_step(workflow.ensure_main)
             if not self._daily_completed():

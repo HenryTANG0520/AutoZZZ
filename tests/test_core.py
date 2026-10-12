@@ -1513,7 +1513,7 @@ class VideoFlowVerificationTests(unittest.TestCase):
                                           ("click", "开始营业"), ("click", "确认"), ("click", "确认")])
         self.assertEqual(context.evidence_frames, [(empty, "video_empty_slots"),
                                                   (opened, "video_opened"), (world, "video_verified")])
-        self.assertEqual(context.wait.call_count, 2)
+        self.assertEqual(context.wait.call_count, 3)
         self.assertTrue(all(call.kwargs["timeout"] == context.settings.transition_timeout
                             for call in context.wait.call_args_list))
         slot_calls = [call.args for call in context.template.call_args_list if call.args[1] == "video_slot_plus"]

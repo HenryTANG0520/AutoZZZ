@@ -38,4 +38,6 @@ The OCR geometry in `tests/fixtures/promoter_picker.json` and `promoter_business
 
 `tests/fixtures/promoter_selected_long.json` preserves seven non-personal OCR anchors from the 2026-10-12 promoter-selection failure, including the long-description layout and the actual “确定” control. No screenshot pixels or account identifiers are included.
 
+`tests/test_video_opening_result.py` preserves only the two text anchors and normalized geometry of the 2026-10-12 opening-success popup. It excludes screenshot pixels, account identifiers and unrelated screen content.
+
 The desktop build includes the template assets, this notice and the GPL license text. Keep the full output folder and its dependency license files when redistributing.

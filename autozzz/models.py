@@ -61,6 +61,11 @@ class AutomationError(RuntimeError):
     pass
 
 
+class ScreenshotNotReady(AutomationError):
+    """Valid foreground client captured only a uniform/black loading frame."""
+    pass
+
+
 class Stopped(AutomationError):
     pass
 

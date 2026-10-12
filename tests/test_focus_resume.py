@@ -432,11 +432,13 @@ class FocusResumeTests(unittest.TestCase):
         from tests.test_core import WorkflowContext, calibrated_video_opened, world_with_npc
         opened, world = calibrated_video_opened(), world_with_npc()
         context = WorkflowContext([opened, world])
+        original_wait = context.wait
         context.wait = Mock(side_effect=InputInterrupted("manual pause after opening confirmation"))
         workflow = DailyWorkflow(context)
         with self.assertRaises(InputInterrupted):
             workflow.video()
         self.assertTrue(workflow._video_opened)
+        context.wait = Mock(wraps=original_wait)
         workflow._daily_jump = Mock(side_effect=AssertionError("completed store must not navigate or reopen"))
         result = workflow.video()
         self.assertEqual(result.status, "ok")

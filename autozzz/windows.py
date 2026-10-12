@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import time
 
-from .models import AutomationError, FocusLost, InputInterrupted
+from .models import AutomationError, FocusLost, InputInterrupted, ScreenshotNotReady
 
 user32 = C.WinDLL("user32", use_last_error=True)
 kernel32 = C.WinDLL("kernel32", use_last_error=True)
@@ -234,7 +234,7 @@ class GameWindow:
             bgr = np.asarray(raw)[:, :, :3].copy()
         self.guard(g)
         if bgr.std() < 2:
-            raise AutomationError("截图为空或黑屏；请等待加载完成，关闭 HDR/滤镜并使用窗口模式。")
+            raise ScreenshotNotReady("截图为空或黑屏；请等待加载完成，关闭 HDR/滤镜并使用窗口模式。")
         return bgr, g
 
     @staticmethod
