@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .models import AutomationError, InputInterrupted, Scene, TaskResult, normalize
+from .models import AutomationError, InputInterrupted, Scene, Stopped, TaskResult, normalize
 from .policy import coffee_is_free, guard_scene
 
 
@@ -138,10 +138,14 @@ class DailyWorkflow:
             ("昨日账本", "选择宣传员", "上架筛选", "推荐上架", "还未上架录像带", "还未选择宣传员", "诚信经营丁尼为本"))
 
     def _promoter_picker(self, scene):
-        # The left description repeats character names; only the right card grid is selectable.
+        # The variable-length description moves the customer-flow section; bind
+        # the stable header/footer and a named card in the right-hand grid.
+        confidence = getattr(self.c.settings, "ocr_confidence", .60)
         return (scene.has("选择宣传员", roi(20, 975, 400, 1070), exact=True)
                 and scene.has("宣传风格", roi(20, 200, 470, 350), exact=True)
-                and scene.has("目标客流量", roi(20, 380, 470, 550), exact=True))
+                and any(token.score >= confidence and token.within(PROMOTER_CARDS)
+                        and (self._promoter_name(token.text) is not None
+                             or normalize(token.text) == "empty") for token in scene.tokens))
 
     def _video_business_panel(self, scene):
         return (scene.has("经营状况", roi(1180, 0, 1650, 130), exact=True)
@@ -230,12 +234,20 @@ class DailyWorkflow:
     def _promoter_slot_verified(self, scene, wanted):
         if not self._video_business_panel(scene):
             return False
-        names = [self._promoter_name(token.text) for token in scene.tokens if token.within(PROMOTER_SLOT)]
-        return names.count(wanted) == 1 and not self._template(
+        names = [name for token in scene.tokens if token.within(PROMOTER_SLOT)
+                 and (name := self._promoter_name(token.text)) is not None]
+        return names == [wanted] and not self._template(
             scene, "video_slot_plus", roi(790, 650, 1030, 900))
 
     def _configure_video_promoter(self, scene):
         """Set the requested owned promoter, or the first visible card after returning to the top."""
+        wanted_text = getattr(self.c.settings, "promoter", "")
+        wanted = self._promoter_name(wanted_text) if wanted_text else None
+        if (wanted and scene.has("开始营业", roi(1480, 900, 1840, 1040), exact=True)
+                and self._promoter_slot_verified(scene, wanted)):
+            self.c.evidence(scene, "video_promoter_selected")
+            self.c.log(f"经营页已核实指定宣传员{wanted}，无需重复选择。")
+            return scene
         if not self._promoter_picker(scene):
             if not self._video_business_panel(scene) or not scene.has(
                     "开始营业", roi(1480, 900, 1840, 1040), exact=True):
@@ -257,8 +269,6 @@ class DailyWorkflow:
             scene = self._wait(self._promoter_picker, "宣传员列表与卡片名字")
         if scene.has("正在营业", PROMOTER_CONFIRM, exact=True):
             return self._ok("video", scene, "录像店已经营业，未修改宣传员。")
-        wanted_text = getattr(self.c.settings, "promoter", "")
-        wanted = self._promoter_name(wanted_text) if wanted_text else None
         if wanted_text and wanted is None:
             return self._partial("video", scene, "指定宣传员不在内置名单中，未选择其他角色。")
         scene = self._promoter_top(scene)
@@ -298,13 +308,20 @@ class DailyWorkflow:
         self.c.evidence(scene, "video_promoter_candidates")
         self.c.click(scene, card)
         scene = self._snapshot()
-        if not self._promoter_picker(scene):
-            return self._partial("video", scene, "点击宣传员卡后没有可核实的选择页面。")
-        preview = [self._promoter_name(token.text) for token in scene.tokens if token.within(PROMOTER_PREVIEW)]
-        if preview.count(selected_name) != 1:
-            return self._partial("video", scene, "宣传员介绍标题未匹配所选角色，未确认选择。")
+        def selected_preview(frame):
+            preview = [self._promoter_name(token.text) for token in frame.tokens
+                       if token.within(PROMOTER_PREVIEW)]
+            return self._promoter_picker(frame) and preview.count(selected_name) == 1
+        if not selected_preview(scene):
+            try:
+                scene = self._wait(selected_preview, "宣传员卡片选择后的页面与所选角色标题")
+            except (InputInterrupted, Stopped):
+                raise
+            except AutomationError:
+                latest = getattr(self.c, "last_scene", None) or getattr(self.c, "last", None) or scene
+                return self._partial("video", latest, "宣传员介绍标题未匹配所选角色，未确认选择。")
         confirms = [token for token in scene.tokens if token.within(PROMOTER_CONFIRM)
-                    and normalize(token.text) == "确认"]
+                    and normalize(token.text) in ("确定", "确认")]
         if len(confirms) == 1:
             self.c.evidence(scene, "video_promoter_confirm")
             self.c.click(scene, confirms[0])
@@ -917,7 +934,8 @@ class DailyWorkflow:
                     return scene
                 promoter_configured = True
                 continue
-            if scene.has("选择宣传员", exact=True) and scene.has("开始营业", exact=True):
+            if (self._video_business_panel(scene) and scene.has(
+                    "开始营业", roi(1480, 900, 1840, 1040), exact=True)):
                 empty_video = self._template(scene, "video_slot_plus", roi(1100, 650, 1320, 900))
                 if empty_video:
                     self.c.evidence(scene, "video_empty_slots")

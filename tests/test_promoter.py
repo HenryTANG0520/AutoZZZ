@@ -291,11 +291,11 @@ class PromoterSelectionTests(unittest.TestCase):
         self.assertIsInstance(DailyWorkflow(context)._configure_video_promoter(context.snapshot()), Scene)
         self.assertEqual(context.current_name, "蕾米埃尔")
 
-    def test_already_assigned_target_is_closed_without_clicking_deselect(self):
+    def test_already_assigned_target_is_preserved_without_selection_input(self):
         context = self.context("安比", current_name="安比")
         context.selected_control = "换下"
         self.assertIsInstance(DailyWorkflow(context)._configure_video_promoter(context.snapshot()), Scene)
-        self.assertIn(("key", "esc"), context.inputs)
+        self.assertEqual(context.inputs, [])
         self.assertNotIn(("click", "换下"), context.inputs)
 
     def test_empty_grid_returns_partial_without_clicking_a_placeholder(self):

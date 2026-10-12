@@ -36,4 +36,6 @@ The OCR geometry in `tests/fixtures/promoter_picker.json` and `promoter_business
 
 `tests/fixtures/monthly_card.json` contains only three OCR text anchors and their normalized geometry from the user-reported monthly-card timeout capture on 2026-10-12. It excludes screenshot pixels, account identifiers and unrelated content; the original capture is retained only in ignored local run evidence.
 
+`tests/fixtures/promoter_selected_long.json` preserves seven non-personal OCR anchors from the 2026-10-12 promoter-selection failure, including the long-description layout and the actual “确定” control. No screenshot pixels or account identifiers are included.
+
 The desktop build includes the template assets, this notice and the GPL license text. Keep the full output folder and its dependency license files when redistributing.

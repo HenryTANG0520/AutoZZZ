@@ -5,12 +5,17 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $taskVenvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 $taskOutputDirectory = [IO.Path]::GetFullPath((Join-Path $projectRoot 'dist\AutoZZZ'))
+$taskStagingRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot ('build\package-' + [guid]::NewGuid().ToString('N'))))
+$taskStagingOutput = Join-Path $taskStagingRoot 'AutoZZZ'
 $taskBackupDirectory = $null
 
 # PyInstaller replaces its output recursively. Validate that output stays in this project.
 if (-not $taskOutputDirectory.StartsWith($projectRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
     $taskOutputDirectory -ne (Join-Path $projectRoot 'dist\AutoZZZ')) {
     throw 'The resolved build output is outside the intended AutoZZZ directory.'
+}
+if (-not $taskStagingRoot.StartsWith((Join-Path $projectRoot 'build') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The resolved package staging directory is outside the project build directory.'
 }
 foreach ($taskRequiredName in @('.venv\Scripts\python.exe', 'launcher.py', 'LICENSE', 'requirements.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $taskRequiredName) -PathType Leaf)) {
@@ -39,10 +44,24 @@ try {
         & $taskVenvPython -m pip install --disable-pip-version-check 'PyInstaller>=6,<7'
         if ($LASTEXITCODE -ne 0) { throw 'PyInstaller installation failed.' }
     }
-    & $taskVenvPython -m PyInstaller --noconfirm --onedir --windowed --uac-admin --name AutoZZZ `
+    # Build elsewhere: Explorer or a process can keep the output directory itself open.
+    & $taskVenvPython -m PyInstaller --noconfirm --onedir --windowed --uac-admin --name AutoZZZ --distpath $taskStagingRoot `
         --collect-all rapidocr_onnxruntime --collect-all onnxruntime `
         --add-data 'assets;assets' --add-data 'LICENSE;.' launcher.py
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed. See output above.' }
+    New-Item -ItemType Directory -Path $taskOutputDirectory -Force | Out-Null
+    $taskStagingPrefix = $taskStagingOutput.TrimEnd('\') + '\'
+    $taskMainExecutable = Join-Path $taskStagingOutput 'AutoZZZ.exe'
+    # Copy dependencies first and publish the executable last. User data stays in place.
+    $taskPackageFiles = @(Get-ChildItem -LiteralPath $taskStagingOutput -Recurse -File -Force |
+        Where-Object { $_.FullName -ne $taskMainExecutable })
+    $taskPackageFiles += Get-Item -LiteralPath $taskMainExecutable
+    foreach ($taskPackageFile in $taskPackageFiles) {
+        $taskRelativePath = $taskPackageFile.FullName.Substring($taskStagingPrefix.Length)
+        $taskTargetPath = Join-Path $taskOutputDirectory $taskRelativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $taskTargetPath) -Force | Out-Null
+        Copy-Item -LiteralPath $taskPackageFile.FullName -Destination $taskTargetPath -Force
+    }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination (Join-Path $taskOutputDirectory 'LICENSE') -Force
     foreach ($taskDocument in @('README.md', 'DAILY_FLOW.md', 'VALIDATION.md', 'LICENSE_NOTICE.md')) {
         $taskDocumentPath = Join-Path $projectRoot $taskDocument
@@ -54,20 +73,7 @@ try {
     Write-Host "Build complete: $(Join-Path $taskOutputDirectory 'AutoZZZ.exe')"
 } finally {
     if ($taskBackupDirectory) {
-        New-Item -ItemType Directory -Path $taskOutputDirectory -Force | Out-Null
-        # Restore files individually to avoid nesting an existing runs directory.
-        $taskBackupPrefix = $taskBackupDirectory.TrimEnd('\') + '\'
-        foreach ($taskSavedItem in Get-ChildItem -LiteralPath $taskBackupDirectory -Recurse -Force) {
-            $taskRelativePath = $taskSavedItem.FullName.Substring($taskBackupPrefix.Length)
-            $taskRestorePath = Join-Path $taskOutputDirectory $taskRelativePath
-            if ($taskSavedItem.PSIsContainer) {
-                New-Item -ItemType Directory -Path $taskRestorePath -Force | Out-Null
-            } else {
-                New-Item -ItemType Directory -Path (Split-Path -Parent $taskRestorePath) -Force | Out-Null
-                Copy-Item -LiteralPath $taskSavedItem.FullName -Destination $taskRestorePath -Force
-            }
-        }
-        Write-Host "Configuration and run evidence restored. Recovery copy: $taskBackupDirectory"
+        Write-Host "Configuration and run evidence left in place. Recovery copy: $taskBackupDirectory"
     }
     Pop-Location
 }
