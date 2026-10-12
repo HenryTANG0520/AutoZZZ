@@ -129,7 +129,7 @@ class AutoZZZWindow:
         browse.grid(row=0, column=4, padx=(8, 0))
         launch_setting = ttk.Checkbutton(game, text="开始时自动启动游戏", variable=self.auto_launch)
         launch_setting.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(game, text="首次登录、更新和弹窗请先手动完成。国际服请使用简体中文界面。", style="Hint.TLabel").grid(row=1, column=3, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(game, text="首次登录、更新和验证码请手动完成。国际服请使用简体中文界面。", style="Hint.TLabel").grid(row=1, column=3, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Label(game, text="游戏以管理员运行时，请用 Start-AutoZZZ-Admin.cmd 启动助手，并同意 Windows 管理员提示。",
                   style="Hint.TLabel", wraplength=870).grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
         self.setting_controls.extend((self.server_combo, path_entry, browse, launch_setting))

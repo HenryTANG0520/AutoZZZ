@@ -6,6 +6,7 @@ Missing controls return partial results; unrecognized pages stop all input.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from .models import AutomationError, InputInterrupted, Scene, TaskResult, normalize
 from .policy import coffee_is_free, guard_scene
@@ -42,6 +43,12 @@ MENU_LABELS = ("快捷手册", "绳网", "邮件", "仓库", "代理人", "设�
 HANDBOOK_TABS = ("训练", "目标", "日常", "作战", "战术")
 START_BLOCKERS = ("密码", "验证码", "扫码", "同意", "更新", "下载", "password",
                   "verification code", "captcha", "scan QR", "update", "download", "agree to terms")
+MONTHLY_TODAY = roi(650, 345, 1250, 540)
+MONTHLY_DAYS = roi(650, 515, 1250, 675)
+MONTHLY_AMOUNT = roi(650, 570, 1250, 735)
+MONTHLY_PURCHASE = ("购买", "续费", "续购", "充值", "支付", "兑换", "售价", "purchase", "buy",
+                    "renew", "top up", "payment")
+MONTHLY_CLAIM_LIMIT = 3
 PROMOTER_CARDS = roi(520, 130, 1800, 965)
 PROMOTER_SLOT = roi(790, 550, 1040, 950)
 PROMOTER_PREVIEW = roi(25, 115, 465, 210)
@@ -59,6 +66,8 @@ class DailyWorkflow:
         self._coffee_ordered = False
         self._coffee_reward_claimed = False
         self._video_opened = False
+        self._monthly_claim_clicks = 0
+        self._monthly_claim_pending = False
 
     def _snapshot(self):
         scene = self.c.snapshot()
@@ -86,7 +95,8 @@ class DailyWorkflow:
             ("等级回馈", "成长任务", "城募赠礼")) >= 2
 
     def _main(self, scene):
-        return self._world(scene) or self._menu(scene)
+        # The monthly ticket overlays the world; its background HUD is not ready for input.
+        return not self._monthly_card_visible(scene) and (self._world(scene) or self._menu(scene))
 
     def _map(self, scene):
         names = sum(scene.has(label, MAP_AREAS, exact=True) for label in REGIONS)
@@ -356,9 +366,95 @@ class DailyWorkflow:
                    and normalize(t.text) == normalize("点击进入游戏")]
         return buttons[0] if len(buttons) == 1 else None
 
+    @staticmethod
+    def _monthly_text(text):
+        return normalize(unicodedata.normalize("NFKC", text))
+
+    def _monthly_labels(self, scene):
+        confidence = getattr(self.c.settings, "ocr_confidence", .60)
+        today, remaining = [], []
+        for token in scene.tokens:
+            if token.score < confidence:
+                continue
+            text = self._monthly_text(token.text)
+            if token.within(MONTHLY_TODAY) and text.lstrip("+✦★☆✧") == "今日到账":
+                today.append(token)
+            if token.within(MONTHLY_DAYS) and re.fullmatch(r"月卡剩余(?:\d{1,3}天)?", text):
+                remaining.append(token)
+        return today, remaining
+
+    def _monthly_card_visible(self, scene):
+        today, remaining = self._monthly_labels(scene)
+        # Either distinctive ticket label can survive an animation or partial OCR read.
+        return bool(today or remaining)
+
+    def _monthly_card(self, scene):
+        """Only the daily ticket, never a monthly-card purchase or renewal screen."""
+        if scene.has(START_BLOCKERS) or scene.has(MONTHLY_PURCHASE):
+            return None
+        today, remaining = self._monthly_labels(scene)
+        if len(today) != 1 or len(remaining) != 1:
+            return None
+        amounts = []
+        confidence = getattr(self.c.settings, "ocr_confidence", .60)
+        for token in scene.tokens:
+            if token.score < confidence or not token.within(MONTHLY_AMOUNT):
+                continue
+            text = self._monthly_text(token.text).replace("×", "x").replace("*", "x").replace("✕", "x")
+            if re.fullmatch(r"(?:菲林)?x90", text):
+                amounts.append(token)
+            elif text == "90" and any(
+                    other.score >= confidence and other.within(MONTHLY_AMOUNT)
+                    and self._monthly_text(other.text) == "菲林"
+                    and abs(other.center[1] - token.center[1]) < .035
+                    and abs(other.center[0] - token.center[0]) < .15 for other in scene.tokens):
+                amounts.append(token)
+        if len(amounts) != 1:
+            return None
+        # All three anchors must describe the same compact ticket in their observed row order.
+        top, days, amount = today[0].center, remaining[0].center, amounts[0].center
+        if not (top[1] < days[1] < amount[1]
+                and abs(top[0] - days[0]) < .15 and abs(amount[0] - days[0]) < .15):
+            return None
+        return remaining[0]
+
+    def _monthly_transition_ready(self, scene):
+        ready = self._entry_ready(scene)
+        if self._monthly_card_visible(scene):
+            return ready  # Partial ticket OCR must not expose the dimmed background as ready.
+        return ready or self._known(scene)
+
+    def _dismiss_monthly_card(self, scene):
+        if self._monthly_card_visible(scene) and scene.has(MONTHLY_PURCHASE):
+            self._unknown(scene, "月卡画面出现购买、充值或续费选项")
+        if (self._monthly_claim_pending or self._monthly_card_visible(scene)) and not self._monthly_transition_ready(scene):
+            # A manual pause after the click can resume on a transient loading frame.
+            scene = self._wait(self._monthly_transition_ready, "月卡领取后的已校准界面")
+        while True:
+            target = self._monthly_card(scene)
+            if target is None:
+                if self._monthly_claim_pending:
+                    self._monthly_claim_pending = False
+                    self.c.evidence(scene, "monthly_card_dismissed")
+                    self.c.log("月卡领取画面已关闭，继续每日流程。")
+                return scene
+            if self._monthly_claim_clicks >= MONTHLY_CLAIM_LIMIT:
+                self._unknown(scene, "月卡领取画面在有限点击后仍未关闭")
+            self.c.evidence(scene, "monthly_card")
+            self.c.log("已识别月卡今日到账、剩余天数与 ×90 奖励，点击领取。")
+            self._monthly_claim_pending = True
+            self.c.click(scene, target)
+            # Context.click only raises InputInterrupted before sending; focus waits after
+            # a sent click stay on the same stack. Pre-send pauses must not consume a click.
+            self._monthly_claim_clicks += 1
+            self.c.sleep(1)
+            scene = self._wait(self._monthly_transition_ready, "月卡领取后的已校准界面")
+
     def _entry_ready(self, scene):
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
+        if self._monthly_card_visible(scene):
+            return self._monthly_card(scene) is not None
         return bool(self._main(scene) or self._start_button(scene) or self._cached_login(scene))
 
     def _startup_ready(self, scene):
@@ -403,6 +499,13 @@ class DailyWorkflow:
                 scene = self._snapshot()
             if scene.has(START_BLOCKERS):
                 self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
+            scene = self._dismiss_monthly_card(scene)
+            if self._monthly_card_visible(scene):
+                self._unknown(scene, "月卡领取特征不完整或出现购买选项")
+            if self._result_screen(scene):
+                confirm = scene.find("确认", DIALOG, exact=True)
+                self.c.click(scene, confirm)
+                continue
             if self._main(scene):
                 return TaskResult("main", "ok", "已识别大世界或游戏菜单。")
             login = self._cached_login(scene)
@@ -420,16 +523,19 @@ class DailyWorkflow:
                 continue
             if not self._known(scene):
                 self._unknown(scene, "无法确认游戏已进入非战斗主界面")
-            if self._result_screen(scene):
-                confirm = scene.find("确认", DIALOG, exact=True)
-                self.c.click(scene, confirm)
-                continue
             # Escape is only issued on a recognized non-combat page.
             self.c.key("esc", scene)
             self.c.sleep(0.5)
         scene = self._snapshot()
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
+        scene = self._dismiss_monthly_card(scene)
+        if self._monthly_card_visible(scene):
+            self._unknown(scene, "月卡领取特征不完整或出现购买选项")
+        if self._monthly_claim_clicks and self._result_screen(scene):
+            self.c.click(scene, scene.find("确认", DIALOG, exact=True))
+            scene = self._wait(lambda after: self._entry_ready(after) and self._main(after)
+                               and not self._result_screen(after), "月卡奖励确认后的大世界或游戏菜单")
         if self._main(scene):
             return TaskResult("main", "ok", "已识别大世界或游戏菜单。")
         self._unknown(scene, "已识别页面未能返回大世界")

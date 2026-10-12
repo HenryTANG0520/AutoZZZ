@@ -34,4 +34,6 @@ The capture provenance does not transfer ownership of the underlying game UI; th
 
 The OCR geometry in `tests/fixtures/promoter_picker.json` and `promoter_business.json`, and the narrow card-name strip in `promoter_name_pixels.png`, derive from game screenshots provided by the user for promoter selection calibration. Account identifiers, portraits and unrelated screen content are excluded. These are test materials; rights in the underlying game text and UI remain with their respective rights holders.
 
+`tests/fixtures/monthly_card.json` contains only three OCR text anchors and their normalized geometry from the user-reported monthly-card timeout capture on 2026-10-12. It excludes screenshot pixels, account identifiers and unrelated content; the original capture is retained only in ignored local run evidence.
+
 The desktop build includes the template assets, this notice and the GPL license text. Keep the full output folder and its dependency license files when redistributing.
