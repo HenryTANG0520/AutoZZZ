@@ -1,0 +1,402 @@
+{
+  "provenance": "Cropped from 8 screenshots supplied by the user on 2026-10-13 for AutoZZZ reward claim workflow development. Only reward controls are retained; no character portraits, full screen pixels, account identifiers, or UID. Coordinates describe unmodified original screenshot crops. Original source image SHA-256 recorded for traceability without retaining originals.",
+  "purpose": "Offline reward-vision regression fixtures, not actual claim proof.",
+  "entries": [
+    {
+      "file": "weekly_milestone_claimable.png",
+      "source_image": 3,
+      "source_sha256": "b9eff58f6f0d8b20ccb518ef4ad3a1a430fceefab542c7f1d1db7b52e0338903",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3136,
+        1064,
+        3252,
+        1177
+      ],
+      "normalized_source_box": [
+        0.817,
+        0.493,
+        0.847,
+        0.545
+      ],
+      "sha256": "755922c059f87ddfbbac6d8b5ce06bd77722f2e6a93a1f6efbff7c0fe9213d02"
+    },
+    {
+      "file": "weekly_milestone_claimed.png",
+      "source_image": 2,
+      "source_sha256": "a2747f5103cabb971403ba07a7f26b1c0ee72e5052c179b92e0f694f4409c238",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3136,
+        557,
+        3252,
+        669
+      ],
+      "normalized_source_box": [
+        0.817,
+        0.258,
+        0.847,
+        0.31
+      ],
+      "sha256": "21963c4db7eeda028b9020b2690469c8a93290bb8431e50896dab96dfc63d1d9"
+    },
+    {
+      "file": "weekly_milestone_locked.png",
+      "source_image": 3,
+      "source_sha256": "b9eff58f6f0d8b20ccb518ef4ad3a1a430fceefab542c7f1d1db7b52e0338903",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3136,
+        1313,
+        3252,
+        1425
+      ],
+      "normalized_source_box": [
+        0.817,
+        0.608,
+        0.847,
+        0.66
+      ],
+      "sha256": "082986a291e104ef30ed1e00bbebd9308b0c11b8def5b0302df63d5a56e82569"
+    },
+    {
+      "file": "weekly_task_claimable.png",
+      "source_image": 2,
+      "source_sha256": "a2747f5103cabb971403ba07a7f26b1c0ee72e5052c179b92e0f694f4409c238",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        906,
+        1751,
+        1463,
+        1835
+      ],
+      "normalized_source_box": [
+        0.236,
+        0.811,
+        0.381,
+        0.85
+      ],
+      "sha256": "b3f18f2d4f4fbd32204350cbdeb4a876626205ce525781d589940383340d8ac7"
+    },
+    {
+      "file": "weekly_task_claimed.png",
+      "source_image": 3,
+      "source_sha256": "b9eff58f6f0d8b20ccb518ef4ad3a1a430fceefab542c7f1d1db7b52e0338903",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        906,
+        1751,
+        1463,
+        1835
+      ],
+      "normalized_source_box": [
+        0.236,
+        0.811,
+        0.381,
+        0.85
+      ],
+      "sha256": "76624c2b6c7c594bc0a3ff70cb4cf8925e1dd7982380d10dc5282a59021f461e"
+    },
+    {
+      "file": "weekly_task_incomplete.png",
+      "source_image": 2,
+      "source_sha256": "a2747f5103cabb971403ba07a7f26b1c0ee72e5052c179b92e0f694f4409c238",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        269,
+        1282,
+        845,
+        1375
+      ],
+      "normalized_source_box": [
+        0.07,
+        0.594,
+        0.22,
+        0.637
+      ],
+      "sha256": "a2ba3c2eef616a20169273201178e822b67f9280a645d2d5d7d08876b6130875"
+    },
+    {
+      "file": "weekly_entry_notification.png",
+      "source_image": 1,
+      "source_sha256": "134bcf3bd2758407348b4da2da1223f83559e12ca2de0c7a459b3ef948e118d7",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        810,
+        1643,
+        1236,
+        1796
+      ],
+      "normalized_source_box": [
+        0.211,
+        0.761,
+        0.322,
+        0.832
+      ],
+      "sha256": "fc59d19f466001474b81d4cd510b0b62e025321bf46c8e3417e6f5e43570076e"
+    },
+    {
+      "file": "weekly_entry_plain.png",
+      "source_image": 1,
+      "source_sha256": "134bcf3bd2758407348b4da2da1223f83559e12ca2de0c7a459b3ef948e118d7",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        921,
+        1701,
+        1159,
+        1766
+      ],
+      "normalized_source_box": [
+        0.24,
+        0.788,
+        0.302,
+        0.818
+      ],
+      "sha256": "3e96d1d1cd70aa6fa37471c9fcda7112ee80b809fb24ca263d45867f19d68d95"
+    },
+    {
+      "file": "city_growth_notification.png",
+      "source_image": 7,
+      "source_sha256": "9c5c21c2fd8e8cd30d8532b29f94346f3f8a4e475842719074a24851195fd15d",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        2745,
+        6,
+        3255,
+        184
+      ],
+      "normalized_source_box": [
+        0.715,
+        0.003,
+        0.848,
+        0.085
+      ],
+      "sha256": "d7a9ca3fd5ed2126a7033e7725038a1945dede16c84fc35077e0f46bc0b556d8"
+    },
+    {
+      "file": "city_level_notification.png",
+      "source_image": 8,
+      "source_sha256": "1bda68e2258562ae3606bac029987b4c767df08ebb260b3420873cc7780d2c6b",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        2284,
+        4,
+        2833,
+        179
+      ],
+      "normalized_source_box": [
+        0.595,
+        0.002,
+        0.738,
+        0.083
+      ],
+      "sha256": "a5acfc7415dfc58e588828ac1317d2ee7a78b8e9c8f80ee9a87f509d0b14a54f"
+    },
+    {
+      "file": "city_level_plain.png",
+      "source_image": 7,
+      "source_sha256": "9c5c21c2fd8e8cd30d8532b29f94346f3f8a4e475842719074a24851195fd15d",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        2284,
+        4,
+        2745,
+        179
+      ],
+      "normalized_source_box": [
+        0.595,
+        0.002,
+        0.715,
+        0.083
+      ],
+      "sha256": "f5ba10fd829d137c83d47aecbbfe7d878704f6f1b27b5b798919a2e7174ee347"
+    },
+    {
+      "file": "city_claim_all_enabled.png",
+      "source_image": 7,
+      "source_sha256": "9c5c21c2fd8e8cd30d8532b29f94346f3f8a4e475842719074a24851195fd15d",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3167,
+        1993,
+        3732,
+        2112
+      ],
+      "normalized_source_box": [
+        0.825,
+        0.923,
+        0.972,
+        0.978
+      ],
+      "sha256": "83b66e39a0cfcc6ccd93cca5a200ed05778f549298d1899d8eb6ce907d399ce4"
+    },
+    {
+      "file": "city_level_claim_all_enabled.png",
+      "source_image": 8,
+      "source_sha256": "1bda68e2258562ae3606bac029987b4c767df08ebb260b3420873cc7780d2c6b",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        2468,
+        1993,
+        3017,
+        2112
+      ],
+      "normalized_source_box": [
+        0.643,
+        0.923,
+        0.786,
+        0.978
+      ],
+      "sha256": "d65564188d108e31a6a020ebc5fecbd410c8cabfd46cf646cc1855ad0e194e6b"
+    },
+    {
+      "file": "city_level_unlock.png",
+      "source_image": 6,
+      "source_sha256": "410f4aadc0be68d33c60cba69c31c80fe24ede28d2f64401d7e4186181d4b8c1",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3052,
+        1993,
+        3728,
+        2112
+      ],
+      "normalized_source_box": [
+        0.795,
+        0.923,
+        0.971,
+        0.978
+      ],
+      "sha256": "fff5cfef95e37557d4d986fdf333a0853fbf26c8d205ff5f27f2908546d296fb"
+    },
+    {
+      "file": "city_new_marker.png",
+      "source_image": 6,
+      "source_sha256": "410f4aadc0be68d33c60cba69c31c80fe24ede28d2f64401d7e4186181d4b8c1",
+      "source_dimensions": [
+        3839,
+        2159
+      ],
+      "source_box": [
+        3236,
+        4,
+        3463,
+        69
+      ],
+      "normalized_source_box": [
+        0.843,
+        0.002,
+        0.902,
+        0.032
+      ],
+      "sha256": "a8d50ca58e616f831f3611df7b425af7d8e1e2a32043291eb6d0ed68f54c3063"
+    }
+  ],
+  "sources": [
+    {
+      "source_image": 1,
+      "sha256": "134bcf3bd2758407348b4da2da1223f83559e12ca2de0c7a459b3ef948e118d7",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 2,
+      "sha256": "a2747f5103cabb971403ba07a7f26b1c0ee72e5052c179b92e0f694f4409c238",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 3,
+      "sha256": "b9eff58f6f0d8b20ccb518ef4ad3a1a430fceefab542c7f1d1db7b52e0338903",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 4,
+      "sha256": "fa2b4e731e651d89db9a026cf442d5a791e1a171c4fb75bc96103cbce789b186",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 5,
+      "sha256": "14e082e298c678e7ccce91b630654030f2ac16cb87d53ceb8b7e3578a41d3f47",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 6,
+      "sha256": "410f4aadc0be68d33c60cba69c31c80fe24ede28d2f64401d7e4186181d4b8c1",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 7,
+      "sha256": "9c5c21c2fd8e8cd30d8532b29f94346f3f8a4e475842719074a24851195fd15d",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    },
+    {
+      "source_image": 8,
+      "sha256": "1bda68e2258562ae3606bac029987b4c767df08ebb260b3420873cc7780d2c6b",
+      "dimensions": [
+        3839,
+        2159
+      ]
+    }
+  ]
+}

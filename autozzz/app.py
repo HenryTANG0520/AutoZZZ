@@ -285,7 +285,7 @@ class Runner:
         if not self._daily_completed():
             raise AutomationError("每日完成状态缺少 400 活跃度和已领取奖励的验证。")
         self.report.status = "success"
-        detail = "每日任务已完成：400 活跃度及四档奖励已领取，无需继续执行。"
+        detail = "每日任务已完成：400 活跃度及四档奖励已领取，无需继续执行日常动作。"
         previous = {result.task: result for result in self.report.results}
         results = []
         for name in self._selected_tasks():
@@ -295,12 +295,53 @@ class Runner:
                     self.log(f"{name} 原步骤结果：{result.status}；{result.detail}", "warning")
                 result = TaskResult(name, "ok", detail)
             results.append(result)
+        results.extend(result for result in self.report.results if result.task not in self._selected_tasks())
         self.report.results = results
         # Publish after the entire report is terminal so a UI callback cannot
         # turn the user's already completed daily goal into a failed run.
         for result in results:
             self.emit(dict(type="task", **result.__dict__))
         self.log(detail)
+
+    def _reward_workflow(self, name, context):
+        if name == "weekly":
+            from .weekly import WeeklyRewardsWorkflow
+            return WeeklyRewardsWorkflow(context)
+        from .city_fund import CityFundRewardsWorkflow
+        return CityFundRewardsWorkflow(context)
+
+    def _run_finish_rewards(self, context):
+        selected = [name for name in ("weekly", "city_fund") if getattr(self.settings, name)]
+        for index, name in enumerate(selected):
+            try:
+                self.checkpoint()
+                self.emit(dict(type="task", task=name, status="running", detail="正在领取收尾奖励"))
+                workflow = self._reward_workflow(name, context)
+                result = self._resume_step(getattr(workflow, name))
+            except Stopped as error:
+                self.report.results.append(TaskResult(name, "stopped", str(error)))
+                for remaining in selected[index + 1:]:
+                    self.report.results.append(TaskResult(remaining, "skipped", "用户已停止，未执行后续收尾奖励。"))
+                raise
+            except Exception as error:
+                result = TaskResult(name, "partial", f"收尾奖励未核实完成：{error}")
+                if context.last_scene is not None:
+                    try:
+                        context.evidence(context.last_scene, name + "_cleanup_failure")
+                    except Exception as evidence_error:
+                        self.log(f"{name} 收尾截图保存失败：{evidence_error}", "warning")
+            self.report.results.append(result)
+            self.emit(dict(type="task", **result.__dict__))
+            self.log(f"{name}：{result.detail}", "info" if result.status == "ok" else "warning")
+            if result.status != "ok":
+                for remaining in selected[index + 1:]:
+                    skipped = TaskResult(remaining, "skipped", "前一收尾页面未核实，未继续发送输入。")
+                    self.report.results.append(skipped)
+                    self.emit(dict(type="task", **skipped.__dict__))
+                break
+        if not self._daily_completed() and any(result.status not in ("ok", "skipped")
+                                               for result in self.report.results):
+            self.report.status = "partial"
 
     def log(self, message: str, level="info"):
         if self._logger:
@@ -537,6 +578,7 @@ class Runner:
                     if self.settings.daily and not self._daily_completed():
                         self.report.status = "partial"
                     self.log("任务已结束；请查看各项结果与每日活跃、奖励验证。")
+            self._run_finish_rewards(context)
         except Stopped as error:
             if self._daily_completed():
                 self.log(f"每日任务已验证完成；后续停止不影响完成结果：{error}", "warning")

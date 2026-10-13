@@ -96,7 +96,7 @@ class ConfigurationTests(unittest.TestCase):
                 Settings(server=server).validate()
 
     def test_task_and_launch_flags_require_real_booleans(self):
-        for field in ("scratch", "coffee", "video", "daily", "auto_launch"):
+        for field in ("scratch", "coffee", "video", "daily", "weekly", "city_fund", "auto_launch"):
             for value in (1, "false", None):
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                     Settings(**{field: value}).validate()

@@ -41,3 +41,5 @@ The OCR geometry in `tests/fixtures/promoter_picker.json` and `promoter_business
 `tests/test_video_opening_result.py` preserves only the two text anchors and normalized geometry of the 2026-10-12 opening-success popup. It excludes screenshot pixels, account identifiers and unrelated screen content.
 
 The desktop build includes the template assets, this notice and the GPL license text. Keep the full output folder and its dependency license files when redistributing.
+
+The fifteen small control crops in `tests/fixtures/rewards/` derive from the eight reward-workflow screenshots supplied by the user on 2026-10-13. `provenance.json` records source and crop hashes, dimensions and crop boxes. Only reward controls are retained; full screenshots, character portraits and account identifiers are excluded. Rights in the underlying game artwork and UI remain with their respective rights holders. These fixtures are offline tests, not proof of live claims.

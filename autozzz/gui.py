@@ -14,7 +14,9 @@ from typing import Any
 
 from .config import CONFIG_PATH, GAME_PATHS, ROOT, Settings
 
-TASK_NAMES = {"scratch": "每日签到（刮卡/盲盒）", "coffee": "咖啡店喝咖啡", "video": "录像店营业", "daily": "验证活跃度并领取奖励"}
+DAILY_TASK_NAMES = {"scratch": "每日签到（刮卡/盲盒）", "coffee": "咖啡店喝咖啡", "video": "录像店营业", "daily": "验证活跃度并领取奖励"}
+FINISH_TASK_NAMES = {"weekly": "丽都周纪奖励", "city_fund": "丽都城募奖励"}
+TASK_NAMES = {**DAILY_TASK_NAMES, **FINISH_TASK_NAMES}
 SERVER_NAMES = {"cn": "国服", "global": "国际服"}
 STATUS_NAMES = {
     "pending": "等待", "running": "进行中", "ok": "完成", "success": "全部完成",
@@ -88,8 +90,8 @@ class AutoZZZWindow:
         # Tk fonts follow Windows DPI. Scale the initial client area as well so
         # 150% / 200% displays do not clip the notebook or footer controls.
         self.ui_scale = max(1.0, float(self.root.tk.call("tk", "scaling")) / (96 / 72))
-        self.root.geometry(f"{round(1060 * self.ui_scale)}x{round(830 * self.ui_scale)}")
-        self.root.minsize(round(960 * self.ui_scale), round(780 * self.ui_scale))
+        self.root.geometry(f"{round(1060 * self.ui_scale)}x{round(920 * self.ui_scale)}")
+        self.root.minsize(round(960 * self.ui_scale), round(870 * self.ui_scale))
         self.root.configure(bg="#eef2f3")
         style = ttk.Style(self.root)
         style.theme_use("clam")
@@ -134,14 +136,14 @@ class AutoZZZWindow:
                   style="Hint.TLabel", wraplength=870).grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
         self.setting_controls.extend((self.server_combo, path_entry, browse, launch_setting))
 
-        settings = ttk.LabelFrame(outer, text="每日任务", padding=12)
+        settings = ttk.LabelFrame(outer, text="每日任务与收尾奖励", padding=12)
         settings.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         for index, (name, label) in enumerate(TASK_NAMES.items()):
             control = ttk.Checkbutton(settings, text=label, variable=self.tasks[name])
-            control.grid(row=0, column=index, sticky="w", padx=(0, 20))
+            control.grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 20))
             self.setting_controls.append(control)
         promoter_row = ttk.Frame(settings)
-        promoter_row.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(7, 0))
+        promoter_row.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(7, 0))
         ttk.Label(promoter_row, text="宣传员（选填）").pack(side="left", padx=(0, 8))
         self.promoter_entry = ttk.Entry(promoter_row, textvariable=self.promoter, width=24)
         self.promoter_entry.pack(side="left", padx=(0, 12))
@@ -149,7 +151,7 @@ class AutoZZZWindow:
         self.promoter_hint_label.pack(side="left")
         self.setting_controls.append(self.promoter_entry)
         timing = ttk.Frame(settings)
-        timing.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        timing.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         for text, variable, width in (("操作间隔（秒）", self.action_delay, 5), ("界面超时（秒）", self.transition_timeout, 5),
                                       ("OCR 阈值", self.ocr_confidence, 5)):
             ttk.Label(timing, text=text, style="Hint.TLabel").pack(side="left", padx=(0, 6))
@@ -178,7 +180,7 @@ class AutoZZZWindow:
 
         results = ttk.Frame(outer)
         results.grid(row=4, column=0, sticky="ew", pady=(0, 10))
-        self.table = ttk.Treeview(results, columns=("task", "status", "detail"), show="headings", height=4, selectmode="browse")
+        self.table = ttk.Treeview(results, columns=("task", "status", "detail"), show="headings", height=6, selectmode="browse")
         for name, label, width in (("task", "任务", 235), ("status", "状态", 90), ("detail", "结果说明", 550)):
             self.table.heading(name, text=label)
             self.table.column(name, width=width, minwidth=60, stretch=name == "detail")
@@ -489,7 +491,7 @@ class AutoZZZWindow:
         self._daily_goal_complete = verified
         if verified:
             status = "success"
-            for name in TASK_NAMES:
+            for name in DAILY_TASK_NAMES:
                 if self.tasks[name].get():
                     self._task({"task": name, "status": "ok", "detail": "每日任务已完成：400 活跃度已满且四档奖励已领取。"})
         for name in TASK_NAMES:
@@ -499,6 +501,10 @@ class AutoZZZWindow:
                 self._task({"task": name, "status": result_status, "detail": "未确认完成；请查看日志与截图。"})
         self.engagement.set((f"活跃度 {engagement} · " if engagement is not None else "") + ("每日已验证" if verified else "每日未验证"))
         completion = "每日任务已完成" if verified else STATUS_NAMES.get(status, status)
+        unfinished_cleanup = [name for name in FINISH_TASK_NAMES if self.tasks[name].get()
+                              and self.table.item(name, "values")[1] != "完成"]
+        if verified and unfinished_cleanup:
+            completion += " · 收尾奖励有未完成项"
         self.status.set(completion)
         self.summary.set(f"{completion} · {self.engagement.get()} · 体力消耗 0")
         self._replace_text(self.report_text, json.dumps(report, ensure_ascii=False, indent=2, default=str))

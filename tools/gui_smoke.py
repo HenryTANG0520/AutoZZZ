@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 from autozzz import windows  # noqa: E402,F401 - DPI awareness before Tk
 from autozzz.config import GAME_PATHS, Settings  # noqa: E402
-from autozzz.gui import AutoZZZWindow  # noqa: E402
+from autozzz.gui import AutoZZZWindow, TASK_NAMES  # noqa: E402
 from PIL import ImageGrab  # noqa: E402
 
 OUTPUT = PROJECT_ROOT / "runs" / "gui-smoke"
@@ -82,7 +82,7 @@ class FakeRunner:
             "status": "stopped" if stopped else "success", "engagement": None if stopped else 400,
             "stamina_spent": 0, "daily_verified": not stopped, "run_dir": str(RUN_DIR),
             "results": [{"task": name, "status": "stopped" if stopped else "ok", "detail": "模拟结果"}
-                        for name in ("scratch", "coffee", "video", "daily") if getattr(self.settings, name)],
+                        for name in TASK_NAMES if getattr(self.settings, name)],
         }
         (RUN_DIR / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
         self.emit({"type": "finished", "report": report})
@@ -114,15 +114,15 @@ def main() -> int:
         root = tk.Tk()
         ui = AutoZZZWindow(root, CONFIG)
         try:
-            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(830 * ui.ui_scale)}")
+            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(920 * ui.ui_scale)}")
             pump(root)
             layout_check(root)
             screenshot(root, "initial.png")
-            root.geometry(f"{round(960 * ui.ui_scale)}x{round(780 * ui.ui_scale)}")
+            root.geometry(f"{round(960 * ui.ui_scale)}x{round(870 * ui.ui_scale)}")
             pump(root)
             layout_check(root)
             screenshot(root, "minimum.png")
-            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(830 * ui.ui_scale)}")
+            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(920 * ui.ui_scale)}")
             pump(root)
 
             ui.server.set("国际服")

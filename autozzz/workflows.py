@@ -62,6 +62,7 @@ class DailyWorkflow:
         self.c = context
         self._task_before = {}
         self._startup_checked = False
+        self._entry_transition_pending = False
         self._daily_evidence_recorded = False
         self._coffee_ordered = False
         self._coffee_reward_claimed = False
@@ -529,10 +530,17 @@ class DailyWorkflow:
         return self.c.wait(checked, timeout=self.c.settings.transition_timeout,
                            description=description)
 
+    def _resume_entry_transition(self, scene):
+        if self._entry_transition_pending and not self._startup_ready(scene):
+            scene = self._wait(self._startup_ready, "进入游戏后的已校准界面")
+        if self._main(scene):
+            self._entry_transition_pending = False
+        return scene
+
     def ensure_main(self):
         first_call = not self._startup_checked
         try:
-            scene = self._resume_video_transition(self._snapshot())
+            scene = self._resume_entry_transition(self._resume_video_transition(self._snapshot()))
             if first_call and self.c.settings.auto_launch and not self._startup_ready(scene):
                 scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口")
         except InputInterrupted:
@@ -545,7 +553,7 @@ class DailyWorkflow:
         self._startup_checked = True
         for attempt in range(5):
             if attempt:
-                scene = self._snapshot()
+                scene = self._resume_entry_transition(self._snapshot())
             if scene.has(START_BLOCKERS):
                 self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
             scene = self._dismiss_monthly_card(scene)
@@ -566,12 +574,14 @@ class DailyWorkflow:
             if login:
                 self.c.evidence(scene, "cached_account_login")
                 self.c.click(scene, login)
+                self._entry_transition_pending = True
                 self.c.sleep(3)
                 self._wait(self._entry_ready, "已保存账号登录后的启动页")
                 continue
             enter = self._start_button(scene)
             if enter:
                 self.c.click(scene, enter)
+                self._entry_transition_pending = True
                 self.c.sleep(3)
                 self._wait(self._entry_ready, "进入游戏或可重试的启动页")
                 continue
@@ -580,7 +590,7 @@ class DailyWorkflow:
             # Escape is only issued on a recognized non-combat page.
             self.c.key("esc", scene)
             self.c.sleep(0.5)
-        scene = self._snapshot()
+        scene = self._resume_entry_transition(self._snapshot())
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
         scene = self._dismiss_monthly_card(scene)

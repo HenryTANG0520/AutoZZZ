@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 import sys
 import tempfile
@@ -33,7 +34,9 @@ class CompletionTests(unittest.TestCase):
 
     def run_mock(self, configure=None, settings=None, emit=None, *, report_write_error=None,
                  close_error=None, close_result=1, expected_error=None):
-        runner = Runner(settings or Settings(), emit)
+        # These legacy terminal tests isolate ordinary daily work; reward
+        # cleanup has its own integration suite with both flags enabled.
+        runner = Runner(replace(settings or Settings(), weekly=False, city_fund=False), emit)
         workflow = Mock()
         workflow.daily_already_complete.return_value = False
         for task in ("scratch", "coffee", "video", "daily"):
