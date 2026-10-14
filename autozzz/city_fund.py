@@ -7,7 +7,6 @@ from .workflows import DailyWorkflow
 
 
 FUND_TABS = (0.59, 0.0, 0.98, 0.09)
-FUND_LEVEL_INFO = (0.015, 0.43, 0.19, 0.88)
 GROWTH_PERIODS = (0.60, 0.10, 0.98, 0.185)
 GROWTH_ROWS = (0.77, 0.19, 0.98, 0.90)
 CLAIM_ALL = (0.62, 0.915, 0.975, 0.985)
@@ -42,11 +41,10 @@ class CityFundRewardsWorkflow(DailyWorkflow):
         return targets[0] if len(targets) == 1 else None
 
     def _city_page(self, scene):
-        # Purchase text is a page identity anchor, never permission to click it.
-        return (all(self._city_unique(scene, label, FUND_TABS) for label in
-                    ("等级回馈", "成长任务", "城募赠礼"))
-                and scene.has("本周经验上限", FUND_LEVEL_INFO)
-                and scene.has("购买等级", FUND_LEVEL_INFO, exact=True))
+        # The three local tabs identify the fund page. Its changing level/XP
+        # panel is irrelevant: level rewards are gated by the tab's red dot.
+        return all(self._city_unique(scene, label, FUND_TABS) for label in
+                   ("等级回馈", "成长任务", "城募赠礼"))
 
     def _city_tab_selected(self, scene, label, area):
         target = self._city_unique(scene, label, area)

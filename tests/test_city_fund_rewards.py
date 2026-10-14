@@ -37,11 +37,12 @@ def paste(image, name):
 
 
 def fund_page(tab="等级回馈", period=0, claim=False, level_dot=False,
-              duplicate_all=False, individual=False, grey_all=False):
+              duplicate_all=False, individual=False, grey_all=False, max_level=False):
     image = np.zeros((1080, 1920, 3), dtype=np.uint8)
     tabs = [token("等级回馈", .665, .048), token("成长任务", .789, .048),
             token("城募赠礼", .904, .048)]
-    tokens = tabs + [token("丽都城募", .102, .49), token("本周经验上限", .115, .76),
+    tokens = tabs + [token("丽都城募", .102, .49),
+                     token("本期城募经验已满" if max_level else "本周经验上限", .095, .76),
                      token("购买等级", .11, .84), token("解锁丽都城募", .88, .952, .145)]
     for t in tabs:
         if t.text == tab:
@@ -137,19 +138,25 @@ class FundReplay:
         self.response_delay = 0
         self.delayed_frame = None
         self.delay_steps = 0
+        self.max_level = False
+        self.max_after_growth = False
+        self.growth_popup = True
+        self.hide_level_info = False
 
     def snapshot(self):
         self.last = Scene([Token(t.text, t.score, t.box) for t in self.frame.tokens],
                           self.frame.image.copy() if self.frame.image is not None else None)
+        if self.hide_level_info:
+            self.last.tokens = [t for t in self.last.tokens if not t.within((.015, .43, .19, .88))]
         return self.last
 
     def growth(self):
         return fund_page("成长任务", self.period, self.earned[self.period], self.level_earned,
                          duplicate_all=self.duplicate_all, individual=self.individual_only,
-                         grey_all=self.grey_all)
+                         grey_all=self.grey_all, max_level=self.max_level)
 
     def level(self):
-        return fund_page(claim=self.level_earned, level_dot=self.level_earned)
+        return fund_page(claim=self.level_earned, level_dot=self.level_earned, max_level=self.max_level)
 
     def _fresh(self, scene):
         if scene is not self.last:
@@ -182,11 +189,14 @@ class FundReplay:
             if scene.has("今日任务"):
                 self.earned[self.period] = False
                 self.level_earned = self.level_after
+                self.max_level = self.max_level or self.max_after_growth
                 self.return_tab = "成长任务"
             else:
                 self.level_earned = False
                 self.return_tab = "等级回馈"
             next_frame = popup(self.duplicate_confirm, self.selection)
+            if self.return_tab == "成长任务" and not self.growth_popup:
+                next_frame = self.growth()
             if self.response_delay:
                 self.delayed_frame = next_frame
                 self.frame = scene
@@ -243,6 +253,64 @@ class FundReplay:
 
 
 class CityFundRewardTests(unittest.TestCase):
+    def test_reaching_max_level_during_growth_claim_still_claims_level_reward(self):
+        # 2026-10-14 capture: growth's All Claim changed Lv.59 to MAX/Lv.60,
+        # replaced the weekly-cap label, and added the level-tab notification.
+        for has_popup in (False, True):
+            with self.subTest(growth_popup=has_popup):
+                context = FundReplay()
+                context.max_after_growth = True
+                context.growth_popup = has_popup
+                result = CityFundRewardsWorkflow(context).city_fund()
+                self.assertEqual(result.status, "ok", result.detail)
+                self.assertTrue(context.max_level)
+                self.assertEqual(context.inputs.count(("click", "全部领取")), 2)
+                self.assertIn(("click", "本周任务"), context.inputs)
+                self.assertIn(("click", "本期任务"), context.inputs)
+                self.assertIn(("click", "等级回馈"), context.inputs)
+                self.assertFalse(context.level_earned)
+                self.assertTrue(CityFundRewardsWorkflow(context)._world(context.snapshot()))
+
+    def test_restart_from_max_level_growth_page_claims_existing_level_reward(self):
+        context = FundReplay(fund_page("成长任务", max_level=True, level_dot=True),
+                             earned=(False, False, False))
+        context.max_level = context.level_earned = True
+        result = CityFundRewardsWorkflow(context).city_fund()
+        self.assertEqual(result.status, "ok", result.detail)
+        self.assertEqual(context.inputs.count(("click", "全部领取")), 1)
+        self.assertIn(("click", "等级回馈"), context.inputs)
+
+    def test_max_level_without_rewards_returns_to_world(self):
+        context = FundReplay(fund_page(max_level=True), earned=(False, False, False))
+        context.max_level = True
+        result = CityFundRewardsWorkflow(context).city_fund()
+        self.assertEqual(result.status, "ok", result.detail)
+        self.assertNotIn(("click", "全部领取"), context.inputs)
+        self.assertNotIn(("click", "等级回馈"), context.inputs)
+
+    def test_level_rewards_depend_on_red_dot_without_any_left_level_info(self):
+        context = FundReplay(fund_page("成长任务", level_dot=True), earned=(False, False, False))
+        context.level_earned = True
+        context.hide_level_info = True
+        result = CityFundRewardsWorkflow(context).city_fund()
+        self.assertEqual(result.status, "ok", result.detail)
+        self.assertIn(("click", "等级回馈"), context.inputs)
+        self.assertEqual(context.inputs.count(("click", "全部领取")), 1)
+        self.assertFalse(context.level_earned)
+
+    def test_city_identity_requires_unique_local_tabs_before_checking_their_red_dot(self):
+        for invalid in ("missing_tab", "duplicate_tab", "wrong_tab_position"):
+            with self.subTest(invalid=invalid):
+                frame = fund_page(max_level=True)
+                if invalid == "missing_tab":
+                    frame.tokens = [t for t in frame.tokens if t.text != "成长任务"]
+                elif invalid == "duplicate_tab":
+                    frame.tokens.append(token("成长任务", .81, .06))
+                else:
+                    frame.tokens = [token(t.text, .5, .5) if t.text == "成长任务"
+                                    else t for t in frame.tokens]
+                self.assertFalse(CityFundRewardsWorkflow(FundReplay(frame))._city_page(frame))
+
     def test_growth_then_new_level_rewards_claimed_and_return_to_world(self):
         context = FundReplay()
         result = CityFundRewardsWorkflow(context).city_fund()
