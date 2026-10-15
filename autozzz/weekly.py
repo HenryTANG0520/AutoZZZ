@@ -45,6 +45,8 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
         self._weekly_claims = 0
         self._weekly_milestone_chosen = None
         self._weekly_reward_pending = False
+        self._weekly_crop_scene = None
+        self._weekly_crop_progress = {}
 
     def _trusted(self, scene):
         confidence = getattr(self.c.settings, "ocr_confidence", .60)
@@ -57,9 +59,7 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
 
     def _weekly_page(self, scene):
         scene = self._trusted(scene)
-        return (scene.has("积分特赏", roi(1480, 130, 1835, 220), exact=True)
-                and scene.has("累计获取积分", roi(1490, 865, 1835, 940))
-                and scene.has("三格连线额外奖励", roi(105, 120, 1080, 225))
+        return (self._weekly_screen(scene)
                 and scene.has("任务目标", WEEKLY_DETAIL))
 
     def _weekly_reward(self, scene):
@@ -88,8 +88,7 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
             return {}
         cells = {}
         for token in self._trusted_tokens(scene):
-            progress = _progress(token.text)
-            if progress is None or not token.within(WEEKLY_GRID):
+            if not token.within(WEEKLY_GRID):
                 continue
             x, y = token.center
             column = next((index for index, bounds in enumerate(WEEKLY_COLUMNS)
@@ -98,13 +97,57 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
                         if bounds[0] < y < bounds[1]), None)
             if row is None or column is None:
                 continue
+            progress = _progress(token.text)
+            left, right = WEEKLY_COLUMNS[column]
+            top, bottom = WEEKLY_ROWS[row]
+            if (progress is None and re.fullmatch(r"\d{2,12}", normalize(token.text))
+                    and token.within((left + .008, top + .075, right - .008, top + .15))
+                    and green_claim(scene, (left + .008, bottom - .042, right - .008, bottom - .009))):
+                # A lost slash (e.g. 4/4 -> 414) is re-read from current pixels,
+                # never inferred from the digits. Keep the original fresh target.
+                progress = self._cropped_card_progress(scene, token)
+            if progress is None:
+                continue
             cells.setdefault((row, column), []).append((token, progress))
         # Repeated OCR values within one card are ambiguous, even if they agree.
         return {cell: values[0] for cell, values in cells.items() if len(values) == 1}
 
+    def _cropped_card_progress(self, scene, token):
+        vision = getattr(self.c, "vision", None)
+        image = scene.image
+        if vision is None or image is None or len(getattr(image, "shape", ())) != 3:
+            return None
+        if self._weekly_crop_scene is not scene:
+            self._weekly_crop_scene, self._weekly_crop_progress = scene, {}
+        if token not in self._weekly_crop_progress:
+            height, width = image.shape[:2]
+            x1, y1, x2, y2 = token.box
+            margin = max(2, round(4 * width / 1920))
+            crop = image[max(0, round(y1*height)-margin):min(height, round(y2*height)+margin),
+                         max(0, round(x1*width)-margin):min(width, round(x2*width)+margin)]
+            progresses = ([_progress(t.text) for t in vision.read(crop).tokens
+                           if t.score >= self.c.settings.ocr_confidence and _progress(t.text) is not None]
+                          if crop.size else [])
+            self._weekly_crop_progress[token] = progresses[0] if len(progresses) == 1 else None
+        return self._weekly_crop_progress[token]
+
+    def _bingo_cells(self, scene):
+        # A completed line replaces card titles/progress with BINGO stamps.
+        # These cells only establish coverage; they never authorize a claim.
+        tokens = [t for t in self._trusted_tokens(scene) if normalize(t.text) == "bingo"]
+        cells = set()
+        for row, (top, bottom) in enumerate(WEEKLY_ROWS):
+            for column, (left, right) in enumerate(WEEKLY_COLUMNS):
+                body = (left + .008, top + .035, right - .008, bottom - .06)
+                footer = (left + .008, bottom - .042, right - .008, bottom - .009)
+                if (sum(t.within(body) for t in tokens) == 1
+                        and sum(t.within(footer) for t in tokens) == 1):
+                    cells.add((row, column))
+        return cells
+
     def _card_coverage(self, scene):
         """OCR may confuse an uncompleted 2/4 with 214; card titles still bind all cells."""
-        covered = set(self._card_progresses(scene))
+        covered = set(self._card_progresses(scene)) | self._bingo_cells(scene)
         for row, (top, _) in enumerate(WEEKLY_ROWS):
             for column, (left, right) in enumerate(WEEKLY_COLUMNS):
                 title_area = (left + .008, top + .035, right - .008, top + .09)
@@ -114,7 +157,7 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
         return covered
 
     def _unverified_green_cells(self, scene):
-        accepted = {candidate[:2] for candidate, _ in self._claimable_cards(scene)}
+        accepted = {candidate[:2] for candidate, _ in self._claimable_cards(scene)} | self._bingo_cells(scene)
         uncertain = []
         for row, (_, bottom) in enumerate(WEEKLY_ROWS):
             for column, (left, right) in enumerate(WEEKLY_COLUMNS):
@@ -125,8 +168,9 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
 
     def _claimable_cards(self, scene):
         candidates = []
+        bingo = self._bingo_cells(scene)
         for (row, column), (token, (value, maximum)) in self._card_progresses(scene).items():
-            if maximum <= 0 or value != maximum:
+            if (row, column) in bingo or maximum <= 0 or value != maximum:
                 continue
             left, right = WEEKLY_COLUMNS[column]
             _, bottom = WEEKLY_ROWS[row]
@@ -210,11 +254,14 @@ class WeeklyRewardsWorkflow(DailyWorkflow):
                 return False
             if kind == "card":
                 return (self._detail_claim(scene) is not None
-                        or not any(cell == chosen for cell, _ in self._claimable_cards(scene)))
+                        or (not any(cell == chosen for cell, _ in self._claimable_cards(scene))
+                            and len(self._card_coverage(scene)) == 9))
             if kind == "claim":
-                return not any(cell == chosen for cell, _ in self._claimable_cards(scene))
+                return (not any(cell == chosen for cell, _ in self._claimable_cards(scene))
+                        and len(self._card_coverage(scene)) == 9)
             if kind == "confirm" and chosen is not None:
-                return not any(cell == chosen for cell, _ in self._claimable_cards(scene))
+                return (not any(cell == chosen for cell, _ in self._claimable_cards(scene))
+                        and len(self._card_coverage(scene)) == 9)
             if kind == "milestone" or (kind == "confirm" and self._weekly_milestone_chosen is not None):
                 return not any(value == self._weekly_milestone_chosen
                                for value, _ in self._milestones(scene))

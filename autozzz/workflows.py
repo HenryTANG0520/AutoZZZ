@@ -97,6 +97,11 @@ class DailyWorkflow:
         return scene.has("丽都城募") and sum(scene.has(label, exact=True) for label in
             ("等级回馈", "成长任务", "城募赠礼")) >= 2
 
+    def _weekly_screen(self, scene):
+        return (scene.has("积分特赏", roi(1480, 130, 1835, 220), exact=True)
+                and scene.has("累计获取积分", roi(1490, 865, 1835, 940))
+                and scene.has("三格连线额外奖励", roi(105, 120, 1080, 225)))
+
     def _main(self, scene):
         # The monthly ticket overlays the world; its background HUD is not ready for input.
         return not self._monthly_card_visible(scene) and (self._world(scene) or self._menu(scene))
@@ -376,7 +381,7 @@ class DailyWorkflow:
 
     def _result_screen(self, scene):
         return (scene.has(("获得奖励", "奖励获得", "电量恢复", "不可贪杯"), DIALOG)
-                or (scene.has("获得", DIALOG, exact=True) and scene.has(("丁尼", "电量"), DIALOG, exact=True))) and scene.has(
+                or (scene.has("获得", DIALOG, exact=True) and scene.has(("丁尼", "电量", "菲林"), DIALOG, exact=True))) and scene.has(
             "确认", DIALOG, exact=True)
 
     def _coffee_reward(self, scene):
@@ -396,7 +401,7 @@ class DailyWorkflow:
                 or self._scratch_screen(scene) or self._coffee_screen(scene)
                 or self._video_screen(scene) or self._result_screen(scene)
                 or self._bakery_screen(scene) or self._coffee_dialog(scene) or self._video_dialog(scene)
-                or self._battlepass(scene))
+                or self._battlepass(scene) or self._weekly_screen(scene))
 
     def _cached_login(self, scene):
         if self.c.settings.server != "global" or scene.has(START_BLOCKERS):

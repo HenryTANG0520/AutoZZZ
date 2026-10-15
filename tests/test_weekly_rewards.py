@@ -4,13 +4,14 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
 from autozzz.models import AutomationError, InputInterrupted, RunReport, Scene, Token
 from autozzz.weekly import (WEEKLY_COLUMNS, WEEKLY_GRID, WEEKLY_MILESTONE_X,
                             WEEKLY_ROWS, WeeklyRewardsWorkflow)
+from autozzz.workflows import DailyWorkflow
 
 
 def token(text, x, y, score=.98):
@@ -428,6 +429,83 @@ class WeeklyRewardsTests(unittest.TestCase):
         frame = context.snapshot()
         frame.tokens[1] = replace(frame.tokens[1], box=(.05, .05, .10, .10))
         self.assertFalse(workflow._weekly_page(frame))
+
+    def test_bingo_stamp_cells_cover_finished_cards_without_authorizing_claims(self):
+        context = WeeklyContext(ready=(), stars=())
+        context.omit = {0, 4, 8}
+        original_frame = context.frame
+        def frame():
+            result = original_frame()
+            for index in context.omit:
+                row, column = divmod(index, 3)
+                left, right = WEEKLY_COLUMNS[column]
+                top, bottom = WEEKLY_ROWS[row]
+                x = (left+right)/2
+                result.tokens += [token("BINGO", x, top+.1), token("BINGO!!", x, bottom-.025)]
+                # The game's orange footer can also pass the broad lime check.
+                paint(result.image, (left+.008, bottom-.042, right-.008, bottom-.009), (0, 220, 50))
+            return result
+        context.frame = frame
+        workflow = WeeklyRewardsWorkflow(context)
+        observed = context.snapshot()
+        self.assertEqual(len(workflow._card_coverage(observed)), 9)
+        self.assertEqual(workflow._unverified_green_cells(observed), [])
+        self.assertEqual(workflow._claimable_cards(observed), [])
+        self.assertEqual(workflow.weekly().status, "ok")
+        self.assertFalse(any(action == "click" for action, _ in context.actions))
+
+    def test_bingo_requires_body_and_footer_in_same_cell(self):
+        context = WeeklyContext(ready=(), stars=())
+        context.omit = {0}
+        context.extra = [token("BINGO", .1425, .32), token("BINGO!!", .3075, .410)]
+        workflow = WeeklyRewardsWorkflow(context)
+        self.assertNotIn((0, 0), workflow._card_coverage(context.snapshot()))
+        self.assertEqual(workflow.weekly().status, "partial")
+
+    def test_lost_slash_is_re_read_from_crop_and_detail_verified_before_claim(self):
+        context = WeeklyContext(stars=())
+        context.progress[7] = "414"
+        context.vision = SimpleNamespace(read=Mock(return_value=Scene([token("4/4", .5, .5)])))
+        original_frame = context.frame
+        def frame():
+            result = original_frame()
+            result.tokens = [replace(t, text="任务目标4/4") if t.text == "任务目标414" else t
+                             for t in result.tokens]
+            return result
+        context.frame = frame
+        workflow = WeeklyRewardsWorkflow(context)
+        self.assertEqual(workflow.weekly().status, "ok")
+        self.assertEqual(context.actions.count(("click", "414")), 1)
+        self.assertEqual(context.actions.count(("click", "领取")), 1)
+        self.assertEqual(context.ready, set())
+        self.assertGreater(context.vision.read.call_count, 0)
+
+    def test_crop_ambiguity_or_incomplete_fraction_never_enables_a_claim(self):
+        for labels in (("414",), ("4/8",), ("4/4", "4/4")):
+            with self.subTest(labels=labels):
+                context = WeeklyContext(stars=())
+                context.progress[7] = "414"
+                context.vision = SimpleNamespace(read=Mock(return_value=Scene(
+                    [token(label, .5, .5) for label in labels])))
+                self.assertEqual(WeeklyRewardsWorkflow(context).weekly().status, "partial")
+                self.assertEqual(context.actions, [])
+
+    def test_crop_result_is_cached_only_for_the_same_observed_scene(self):
+        context = WeeklyContext(stars=())
+        context.progress[7] = "414"
+        context.vision = SimpleNamespace(read=Mock(return_value=Scene([token("4/4", .5, .5)])))
+        workflow = WeeklyRewardsWorkflow(context)
+        observed = context.snapshot()
+        workflow._claimable_cards(observed)
+        workflow._claimable_cards(observed)
+        self.assertEqual(context.vision.read.call_count, 1)
+        workflow._claimable_cards(context.snapshot())
+        self.assertEqual(context.vision.read.call_count, 2)
+
+    def test_restart_from_identified_weekly_page_returns_to_main(self):
+        context = WeeklyContext(ready=(), stars=())
+        self.assertEqual(DailyWorkflow(context).ensure_main().status, "ok")
+        self.assertEqual(context.actions, [("key", "esc"), ("key", "esc")])
 
 
 if __name__ == "__main__":
