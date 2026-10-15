@@ -122,9 +122,17 @@ class DailyWorkflow:
         return scene.has(("每日可领取一次", "查看今天", "今日已领取同类型奖励")) or self._bakery_card(scene)
 
     def _bakery_card(self, scene):
-        return (scene.has("Roarin", roi(800, 580, 1200, 800))
-                and scene.has("确定", roi(820, 800, 1100, 950), exact=True)
-                and scene.has("分享", roi(1680, 880, 1920, 1020), exact=True))
+        return self._bakery_card_confirm(scene) is not None
+
+    def _bakery_card_confirm(self, scene):
+        # The card's footer closes the bakery sequence, regardless of its prize.
+        if (self._result_screen(scene) or not scene.has("Roarin", roi(800, 580, 1200, 800))
+                or not scene.has("分享", roi(1680, 880, 1920, 1020), exact=True)):
+            return None
+        confirms = [t for t in scene.tokens if t.within(roi(820, 800, 1100, 950))
+                    and t.score >= getattr(self.c.settings, "ocr_confidence", .60)
+                    and normalize(t.text) == "确定"]
+        return confirms[0] if len(confirms) == 1 else None
 
     def _handbook(self, scene):
         tabs = sum(scene.has(label, TABS, exact=True) for label in HANDBOOK_TABS)
@@ -380,9 +388,17 @@ class DailyWorkflow:
             token.within(roi(500, 800, 1500, 1040)) for token in scene.tokens)
 
     def _result_screen(self, scene):
-        return (scene.has(("获得奖励", "奖励获得", "电量恢复", "不可贪杯"), DIALOG)
-                or (scene.has("获得", DIALOG, exact=True) and scene.has(("丁尼", "电量", "菲林"), DIALOG, exact=True))) and scene.has(
-            "确认", DIALOG, exact=True)
+        return self._result_confirm(scene) is not None
+
+    def _result_confirm(self, scene):
+        # Prize names/amounts are variable; identify the popup and its button.
+        if not (scene.has(("获得奖励", "奖励获得", "电量恢复", "不可贪杯"), DIALOG)
+                or scene.has("获得", DIALOG, exact=True)):
+            return None
+        confirms = [t for t in scene.tokens if t.within(DIALOG)
+                    and t.score >= getattr(self.c.settings, "ocr_confidence", .60)
+                    and normalize(t.text) == "确认"]
+        return confirms[0] if len(confirms) == 1 else None
 
     def _coffee_reward(self, scene):
         return (scene.has("获得", DIALOG, exact=True) and scene.has("电量", DIALOG, exact=True)
@@ -570,8 +586,11 @@ class DailyWorkflow:
                     raise AutomationError(after.detail)
                 continue
             if self._result_screen(scene):
-                confirm = scene.find("确认", DIALOG, exact=True)
-                self.c.click(scene, confirm)
+                self.c.click(scene, self._result_confirm(scene))
+                continue
+            if self._bakery_card(scene):
+                self.c.evidence(scene, "bakery_card")
+                self.c.click(scene, self._bakery_card_confirm(scene))
                 continue
             if self._main(scene):
                 return TaskResult("main", "ok", "已识别大世界或游戏菜单。")
@@ -602,7 +621,7 @@ class DailyWorkflow:
         if self._monthly_card_visible(scene):
             self._unknown(scene, "月卡领取特征不完整或出现购买选项")
         if self._monthly_claim_clicks and self._result_screen(scene):
-            self.c.click(scene, scene.find("确认", DIALOG, exact=True))
+            self.c.click(scene, self._result_confirm(scene))
             scene = self._wait(lambda after: self._entry_ready(after) and self._main(after)
                                and not self._result_screen(after), "月卡奖励确认后的大世界或游戏菜单")
         if self._main(scene):
@@ -819,12 +838,12 @@ class DailyWorkflow:
         for _ in range(6):
             if self._result_screen(scene):
                 self.c.evidence(scene, "bakery_reward")
-                self.c.click(scene, scene.find("确认", DIALOG, exact=True))
+                self.c.click(scene, self._result_confirm(scene))
                 scene = self._snapshot()
                 continue
             if self._bakery_card(scene):
                 self.c.evidence(scene, "bakery_card")
-                self.c.click(scene, scene.find("确定", roi(820, 800, 1100, 950), exact=True))
+                self.c.click(scene, self._bakery_card_confirm(scene))
                 scene = self._snapshot()
                 return self._verify_task_card("scratch", scene, "已领取饼铺奖励，仍需共享签到任务同列 1/1。")
             if scene.has(("今日已领取同类型奖励", "已领取同类型奖励")):

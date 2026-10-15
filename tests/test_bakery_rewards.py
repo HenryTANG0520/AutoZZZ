@@ -1,4 +1,4 @@
-"""Replay the bakery's Polychrome outcome using account-free observed geometry."""
+"""Bakery closure is bound to the card footer, independent of the prize."""
 import unittest
 from unittest.mock import patch
 
@@ -51,18 +51,20 @@ class BakeryPolychromeRewardTests(unittest.TestCase):
         context = WorkflowContext([polychrome_reward(), bakery_card(), world_with_npc()])
         workflow = DailyWorkflow(context)
         self.assertEqual(workflow.ensure_main().status, "ok")
-        self.assertEqual(context.actions, [("click", "确认"), ("key", "esc")])
+        self.assertEqual(context.actions, [("click", "确认"), ("click", "确定")])
 
-    def test_polychrome_label_alone_or_outside_reward_dialog_cannot_authorize_confirm(self):
-        for invalid in ("no_title", "no_confirm", "wrong_item_position", "payment"):
+    def test_missing_or_ambiguous_popup_controls_cannot_authorize_confirm(self):
+        for invalid in ("no_title", "no_confirm", "duplicate_confirm", "wrong_button_position", "payment"):
             with self.subTest(invalid=invalid):
                 reward = polychrome_reward()
                 if invalid == "no_title":
                     reward.tokens = [t for t in reward.tokens if t.text != "获得"]
                 elif invalid == "no_confirm":
                     reward.tokens = [t for t in reward.tokens if t.text != "确认"]
-                elif invalid == "wrong_item_position":
-                    reward.tokens = [token(t.text, .1, .1) if t.text == "菲林" else t for t in reward.tokens]
+                elif invalid == "duplicate_confirm":
+                    reward.tokens.append(token("确认", .52, .66))
+                elif invalid == "wrong_button_position":
+                    reward.tokens = [token(t.text, .1, .1) if t.text == "确认" else t for t in reward.tokens]
                 else:
                     reward.tokens = [t for t in reward.tokens if t.text != "获得"]
                     reward.tokens.append(token("是否消耗菲林", .5, .45))
@@ -71,6 +73,55 @@ class BakeryPolychromeRewardTests(unittest.TestCase):
                 with self.assertRaises(AutomationError):
                     DailyWorkflow(context).ensure_main()
                 self.assertEqual(context.actions, [])
+
+    def test_any_or_unreadable_prize_still_closes_popup_then_card_footer(self):
+        for prize in ("丁尼", "菲林", "邦布券", "其他奖品", None):
+            with self.subTest(prize=prize):
+                reward = polychrome_reward()
+                reward.tokens = [Token(prize, t.score, t.box) if t.text == "菲林" else t
+                                 for t in reward.tokens if t.text != "菲林" or prize is not None]
+                context = WorkflowContext([reward, bakery_card(), world_with_npc()])
+                workflow = DailyWorkflow(context)
+                with patch.object(workflow, "_verify_task_card", return_value="verified") as verify:
+                    self.assertEqual(workflow.scratch(), "verified")
+                verify.assert_called_once()
+                self.assertEqual(context.actions, [("click", "确认"), ("click", "确定")])
+
+    def test_starting_on_card_only_clicks_its_footer_without_prize_evidence(self):
+        for action in ("scratch", "ensure_main"):
+            with self.subTest(action=action):
+                context = WorkflowContext([bakery_card(), world_with_npc()])
+                workflow = DailyWorkflow(context)
+                with patch.object(workflow, "_verify_task_card", return_value="verified"):
+                    result = getattr(workflow, action)()
+                self.assertEqual(result if action == "scratch" else result.status,
+                                 "verified" if action == "scratch" else "ok")
+                self.assertEqual(context.actions, [("click", "确定")])
+
+    def test_card_footer_must_be_unique_and_bound_to_the_card(self):
+        for invalid in ("duplicate", "wrong_position", "no_card"):
+            with self.subTest(invalid=invalid):
+                card = bakery_card()
+                if invalid == "duplicate":
+                    card.tokens.append(token("确定", .52, .82))
+                elif invalid == "wrong_position":
+                    card.tokens = [token(t.text, .1, .1) if t.text == "确定" else t for t in card.tokens]
+                else:
+                    card.tokens = [t for t in card.tokens if t.text == "确定"]
+                context = WorkflowContext([card])
+                workflow = DailyWorkflow(context)
+                self.assertFalse(workflow._bakery_card(card))
+                self.assertEqual(workflow._bakery_daily(card).status, "partial")
+                self.assertEqual(context.actions, [])
+
+    def test_reward_popup_is_handled_before_the_card_behind_it(self):
+        reward = polychrome_reward()
+        reward.tokens += bakery_card().tokens
+        context = WorkflowContext([reward, bakery_card(), world_with_npc()])
+        workflow = DailyWorkflow(context)
+        with patch.object(workflow, "_verify_task_card", return_value="verified"):
+            self.assertEqual(workflow.scratch(), "verified")
+        self.assertEqual(context.actions, [("click", "确认"), ("click", "确定")])
 
 
 if __name__ == "__main__":
