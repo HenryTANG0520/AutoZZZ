@@ -100,6 +100,7 @@ class RunReport:
     finished_at: str = ""
     reset_day: str = ""
     evidence: list[str] = field(default_factory=list)
+    operation: str = "daily"
 
     def to_dict(self) -> dict:
         from dataclasses import asdict

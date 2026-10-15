@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .models import AutomationError, InputInterrupted, Scene, Stopped, TaskResult, normalize
+from .models import AutomationError, InputInterrupted, Scene, ScreenshotNotReady, Stopped, TaskResult, normalize
 from .policy import coffee_is_free, guard_scene
 
 
@@ -507,7 +507,7 @@ class DailyWorkflow:
                 if self._monthly_claim_pending:
                     self._monthly_claim_pending = False
                     self.c.evidence(scene, "monthly_card_dismissed")
-                    self.c.log("月卡领取画面已关闭，继续每日流程。")
+                    self.c.log("月卡领取画面已关闭，继续进入游戏。")
                 return scene
             if self._monthly_claim_clicks >= MONTHLY_CLAIM_LIMIT:
                 self._unknown(scene, "月卡领取画面在有限点击后仍未关闭")
@@ -544,26 +544,41 @@ class DailyWorkflow:
         self.c.evidence(scene, task + "_verified")
         return TaskResult(task, "ok", detail)
 
-    def _wait(self, predicate, description):
+    def _wait(self, predicate, description, *, allow_blank=False):
         def checked(scene):
             guard_scene(scene)
             return predicate(scene)
+        options = {"allow_blank": True} if allow_blank else {}
         return self.c.wait(checked, timeout=self.c.settings.transition_timeout,
-                           description=description)
+                           description=description, **options)
 
     def _resume_entry_transition(self, scene):
         if self._entry_transition_pending and not self._startup_ready(scene):
-            scene = self._wait(self._startup_ready, "进入游戏后的已校准界面")
+            scene = self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True)
         if self._main(scene):
             self._entry_transition_pending = False
         return scene
 
+    def _entry_snapshot(self):
+        try:
+            return self._snapshot()
+        except ScreenshotNotReady:
+            if not self._entry_transition_pending:
+                raise
+            return self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True)
+
     def ensure_main(self):
         first_call = not self._startup_checked
         try:
-            scene = self._resume_entry_transition(self._resume_video_transition(self._snapshot()))
+            try:
+                scene = self._entry_snapshot()
+            except ScreenshotNotReady:
+                if not ((first_call and self.c.settings.auto_launch) or self._entry_transition_pending):
+                    raise
+                scene = self._wait(self._startup_ready, "游戏加载后的已校准界面", allow_blank=True)
+            scene = self._resume_entry_transition(self._resume_video_transition(scene))
             if first_call and self.c.settings.auto_launch and not self._startup_ready(scene):
-                scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口")
+                scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口", allow_blank=True)
         except InputInterrupted:
             raise  # Resume with the initial read-only loading wait still available.
         except AutomationError:
@@ -574,7 +589,7 @@ class DailyWorkflow:
         self._startup_checked = True
         for attempt in range(5):
             if attempt:
-                scene = self._resume_entry_transition(self._snapshot())
+                scene = self._resume_entry_transition(self._entry_snapshot())
             if scene.has(START_BLOCKERS):
                 self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
             scene = self._dismiss_monthly_card(scene)
@@ -600,21 +615,21 @@ class DailyWorkflow:
                 self.c.click(scene, login)
                 self._entry_transition_pending = True
                 self.c.sleep(3)
-                self._wait(self._entry_ready, "已保存账号登录后的启动页")
+                self._wait(self._entry_ready, "已保存账号登录后的启动页", allow_blank=True)
                 continue
             enter = self._start_button(scene)
             if enter:
                 self.c.click(scene, enter)
                 self._entry_transition_pending = True
                 self.c.sleep(3)
-                self._wait(self._entry_ready, "进入游戏或可重试的启动页")
+                self._wait(self._entry_ready, "进入游戏或可重试的启动页", allow_blank=True)
                 continue
             if not self._known(scene):
                 self._unknown(scene, "无法确认游戏已进入非战斗主界面")
             # Escape is only issued on a recognized non-combat page.
             self.c.key("esc", scene)
             self.c.sleep(0.5)
-        scene = self._resume_entry_transition(self._snapshot())
+        scene = self._resume_entry_transition(self._entry_snapshot())
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
         scene = self._dismiss_monthly_card(scene)

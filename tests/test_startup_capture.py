@@ -159,6 +159,72 @@ class StartupCaptureTests(unittest.TestCase):
         self.assert_no_input(window)
 
 
+class EntryBlankFrameTests(unittest.TestCase):
+    def context(self, frames, *, auto_launch=True):
+        runner = Runner(Settings(auto_launch=auto_launch))
+        context = Context(runner, Mock(), Mock())
+        context.snapshot = Mock(side_effect=frames)
+        context.template = Mock(return_value=None)
+        context.evidence = Mock()
+        context.sleep = Mock()
+        return context, runner
+
+    def test_blank_wait_is_opt_in_and_keeps_real_capture_errors(self):
+        context, _ = self.context([ScreenshotNotReady("loading")])
+        with self.assertRaises(ScreenshotNotReady):
+            context.wait(lambda s: True)
+        context.sleep.assert_not_called()
+        context, _ = self.context([AutomationError("窗口已关闭")])
+        with self.assertRaisesRegex(AutomationError, "窗口已关闭"):
+            context.wait(lambda s: True, allow_blank=True)
+
+    def test_blank_wait_has_one_budget_and_no_input(self):
+        context, _ = self.context([ScreenshotNotReady("loading")]*10)
+        with self.assertRaisesRegex(AutomationError, "超时"):
+            context.wait(lambda s: True, timeout=1, allow_blank=True)
+        self.assertEqual(context.snapshot.call_count, 2)
+        self.assertIsNone(context.last_scene)
+        context.window.click.assert_not_called()
+
+    def test_first_launch_handles_black_after_initial_frame_before_main(self):
+        from autozzz.workflows import DailyWorkflow
+        from tests.test_core import world_with_npc
+        context, _ = self.context([ScreenshotNotReady("loading"), ScreenshotNotReady("loading"), world_with_npc()])
+        self.assertEqual(DailyWorkflow(context).ensure_main().status, "ok")
+        self.assertEqual(context.snapshot.call_count, 3)
+        context.window.click.assert_not_called()
+        context.window.key.assert_not_called()
+
+    def test_manual_or_finished_startup_does_not_get_new_blank_allowance(self):
+        from autozzz.workflows import DailyWorkflow
+        for manual in (False, True):
+            context, _ = self.context([ScreenshotNotReady("loading")], auto_launch=not manual)
+            workflow = DailyWorkflow(context)
+            workflow._startup_checked = not manual
+            with self.assertRaises(ScreenshotNotReady):
+                workflow.ensure_main()
+            context.sleep.assert_not_called()
+
+    def test_sent_entry_recovers_from_black_after_pause_without_reclick(self):
+        from autozzz.workflows import DailyWorkflow
+        from tests.test_core import world_with_npc
+        context, _ = self.context([ScreenshotNotReady("loading"), world_with_npc()])
+        workflow = DailyWorkflow(context)
+        workflow._startup_checked = True
+        workflow._entry_transition_pending = True
+        self.assertEqual(workflow.ensure_main().status, "ok")
+        self.assertFalse(workflow._entry_transition_pending)
+        context.window.click.assert_not_called()
+
+    def test_f10_stops_before_any_window_exists(self):
+        runner = Runner(Settings())
+        api = Mock()
+        api.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key == 0x79 else 0
+        with patch.object(runner._monitor_end, "wait", side_effect=[False, True]), patch.object(windows, "user32", api):
+            runner._hotkeys()
+        self.assertTrue(runner._stop.is_set())
+
+
 class ScreenshotClassificationTests(unittest.TestCase):
     def test_black_frame_has_typed_error_and_valid_frame_remains_usable(self):
         import mss

@@ -160,7 +160,7 @@ def launch(path: str) -> str:
         if error.winerror == 740:
             raise AutomationError("游戏需要管理员权限，请以管理员身份启动 AutoZZZ 后重试。") from error
         raise AutomationError(f"启动游戏失败：{error}") from error
-    return "启动请求已发送。窗口出现后，请完成登录并检测窗口，再开始每日任务。"
+    return "已启动游戏程序，正在等待游戏窗口。"
 
 
 class GameWindow:

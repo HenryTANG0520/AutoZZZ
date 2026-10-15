@@ -88,6 +88,12 @@ class FakeRunner:
         self.emit({"type": "finished", "report": report})
         return report
 
+    def enter_game(self):
+        report = {"operation": "enter_game", "status": "success", "daily_verified": False,
+                  "run_dir": str(RUN_DIR), "results": [{"task": "launch", "status": "ok", "detail": "模拟进入主界面"}]}
+        self.emit({"type": "finished", "report": report})
+        return report
+
     def stop(self):
         self.stop_calls += 1
         self.release.set()
@@ -114,15 +120,26 @@ def main() -> int:
         root = tk.Tk()
         ui = AutoZZZWindow(root, CONFIG)
         try:
-            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(920 * ui.ui_scale)}")
+            root.geometry(f"{round(1120 * ui.ui_scale)}x{round(820 * ui.ui_scale)}")
             pump(root)
             layout_check(root)
             screenshot(root, "initial.png")
-            root.geometry(f"{round(960 * ui.ui_scale)}x{round(870 * ui.ui_scale)}")
+            root.geometry(f"{round(1000 * ui.ui_scale)}x{round(760 * ui.ui_scale)}")
             pump(root)
             layout_check(root)
             screenshot(root, "minimum.png")
-            root.geometry(f"{round(1060 * ui.ui_scale)}x{round(920 * ui.ui_scale)}")
+            for page in ui.pages:
+                ui._show_page(page)
+                pump(root)
+                layout_check(root)
+                screenshot(root, f"page-{page}.png")
+            ui._show_page("home")
+            ui.overlay_logs.set(False)
+            assert not ui.overlay.enabled
+            ui._save_settings()
+            assert not Settings.load(CONFIG).overlay_logs
+            ui.overlay_logs.set(True)
+            root.geometry(f"{round(1120 * ui.ui_scale)}x{round(820 * ui.ui_scale)}")
             pump(root)
 
             ui.server.set("国际服")
@@ -164,7 +181,10 @@ def main() -> int:
 
             ui._launch()
             pump(root, lambda: not ui.busy)
-            assert ui.status.get() == "启动请求已发送"
+            assert ui.status.get() == "已进入游戏"
+            assert root.state() == "iconic", "Entry success must leave the game in front."
+            assert all(ui.table.item(name, "values")[1] == "等待" for name in ui.tasks)
+            ui._restore()
             ui._start()
             pump(root, lambda: ui.runner is not None)
             assert ui.running and all(not enabled(control) for control in ui.setting_controls)

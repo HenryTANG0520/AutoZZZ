@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from .config import GAME_PATHS, ROOT, RESOURCE_ROOT, Settings
@@ -165,15 +166,21 @@ class Context:
         self.last_scene = None
         self.sleep(self.settings.action_delay)
 
-    def wait(self, predicate, timeout=30, description="界面") -> Scene:
+    def wait(self, predicate, timeout=30, description="界面", *, allow_blank=False) -> Scene:
         elapsed = 0.0
         while elapsed < timeout:
             # Paused time is excluded from transition deadlines.
             self.checkpoint()
             start = time.monotonic()
             inactive_before = self.runner.inactive_duration
-            scene = self.snapshot()
-            if predicate(scene):
+            try:
+                scene = self.snapshot()
+            except ScreenshotNotReady:
+                if not allow_blank:
+                    raise
+                self.last_scene = None
+                scene = None
+            if scene is not None and predicate(scene):
                 return scene
             elapsed += max(0, time.monotonic() - start -
                            (self.runner.inactive_duration - inactive_before))
@@ -466,10 +473,12 @@ class Runner:
         from .windows import user32
         previous = False
         while not self._monitor_end.wait(0.05):
-            if self._window.emergency_pressed():
+            emergency = (self._window.emergency_pressed() if self._window is not None
+                         else bool(user32.GetAsyncKeyState(0x79) & 0x8000))
+            if emergency:
                 self.stop()
             current = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
-            if current and not previous and user32.GetForegroundWindow() == self._window.hwnd:
+            if current and not previous and self._window is not None and user32.GetForegroundWindow() == self._window.hwnd:
                 self.toggle_pause()
             previous = current
 
@@ -506,9 +515,16 @@ class Runner:
             if delay:
                 context.sleep(delay)
 
-    def run(self) -> RunReport:
+    def enter_game(self) -> RunReport:
+        """Launch and verify the game main screen, without running daily tasks."""
+        return self.run(entry_only=True)
+
+    def run(self, *, entry_only: bool = False) -> RunReport:
         from .workflows import DailyWorkflow
         from .windows import kernel32
+        if entry_only:
+            self.settings = replace(self.settings, auto_launch=True)
+            self.report.operation = "enter_game"
         directory = ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         directory.mkdir(parents=True)
         self.report.run_dir = str(directory)
@@ -532,6 +548,7 @@ class Runner:
             self.report.started_at = now.isoformat()
             self.report.reset_day = (now-timedelta(hours=4)).date().isoformat() if self.settings.server == "cn" else "unverified-global-reset"
             self.checkpoint()
+            threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True).start()
             if self.settings.auto_launch:
                 self.log(launch_game(self.settings))
                 self.log("等待游戏窗口；首次登录/更新请手动完成。")
@@ -547,14 +564,22 @@ class Runner:
             if is_elevated(self._window.hwnd) and not is_admin():
                 raise AutomationError("绝区零以管理员权限运行；请使用 Start-AutoZZZ-Admin.cmd 或以管理员身份运行 AutoZZZ.exe。")
             self._prepare_window()
-            threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True).start()
             self.log("正在加载中文 OCR 模型。F9 暂停/继续，F10 紧急停止。")
             vision = Vision(self.settings.ocr_confidence)
             context = Context(self, self._window, vision)
             workflow = DailyWorkflow(context)
             initial = self._initial_snapshot(context)
             context.evidence(initial, "start")
-            self._resume_step(workflow.ensure_main)
+            main_result = self._resume_step(workflow.ensure_main)
+            if entry_only:
+                if not isinstance(main_result, TaskResult) or main_result.task != "main" or main_result.status != "ok":
+                    raise AutomationError("尚未确认进入游戏主界面。")
+                self.checkpoint()
+                context.evidence(context.last_scene, "entered_game")
+                self.report.status = "success"
+                self.report.results.append(TaskResult("launch", "ok", "已进入游戏主界面，可以开始每日。"))
+                self.log("已进入游戏主界面；启动游戏操作完成。")
+                return self.report
             if not self._daily_completed():
                 self._resume_step(workflow.daily_already_complete)
             if self._daily_completed():

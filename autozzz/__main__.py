@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="检测游戏窗口和 OCR，输出 JSON；不点击游戏")
-    mode.add_argument("--launch", action="store_true", help="仅启动所选区服的游戏程序")
+    mode.add_argument("--launch", action="store_true", help="启动所选区服并自动进入游戏主界面")
     mode.add_argument("--run", action="store_true", help="按配置执行每日；F9 暂停，F10 停止")
     mode.add_argument("--self-test", action="store_true", help="运行源码版离线测试，不访问游戏")
     parser.add_argument("--server", choices=("cn", "global"), help="cn 国服，global 国际服；自动选择默认路径")
@@ -59,15 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.game_path:
             settings.game_path = args.game_path
         settings.validate()
-        from .app import Runner, inspect_game, launch_game
+        from .app import Runner, inspect_game
 
         if args.check:
             print(_json(inspect_game(settings)))
             return 0
-        if args.launch:
-            print(_json({"message": launch_game(settings)}))
-            return 0
-
         def emit(event: dict[str, Any]) -> None:
             if event.get("type") != "finished":
                 print(json.dumps(event, ensure_ascii=False, default=str), file=sys.stderr, flush=True)
@@ -83,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             if signum is not None:
                 previous_handlers[signum] = signal.signal(signum, stop_on_signal)
         try:
-            report = runner.run()
+            report = runner.enter_game() if args.launch else runner.run()
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)

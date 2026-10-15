@@ -45,6 +45,8 @@ class AutoZZZWindow:
         self.focus_waiting = False
         self.worker_done = False
         self._daily_goal_complete = False
+        self.operation = "daily"
+        self.overlay_game_handle = None
         self.started_at: float | None = None
         self.last_output_dir: Path | None = None
         self.last_report_file: Path | None = None
@@ -53,6 +55,7 @@ class AutoZZZWindow:
         self.server = tk.StringVar(root, SERVER_NAMES[self.settings.server])
         self.game_path = tk.StringVar(root, self.settings.game_path)
         self.auto_launch = tk.BooleanVar(root, self.settings.auto_launch)
+        self.overlay_logs = tk.BooleanVar(root, self.settings.overlay_logs)
         self.tasks = {name: tk.BooleanVar(root, getattr(self.settings, name)) for name in TASK_NAMES}
         self.action_delay = tk.StringVar(root, str(self.settings.action_delay))
         self.transition_timeout = tk.StringVar(root, str(self.settings.transition_timeout))
@@ -60,14 +63,19 @@ class AutoZZZWindow:
         self.promoter = tk.StringVar(root, self.settings.promoter)
         self.promoter_hint = tk.StringVar(root, "留空选择第一位；账号未拥有时回退第一位。")
         self.status = tk.StringVar(root, "准备就绪")
-        self.summary = tk.StringVar(root, "先进入游戏自由行动界面，再检测窗口或开始每日。")
+        self.summary = tk.StringVar(root, "点击启动游戏进入主界面，或直接开始每日。")
         self.elapsed = tk.StringVar(root, "00:00")
         self.engagement = tk.StringVar(root, "未验证")
         self.saved = tk.StringVar(root, "配置按“保存设置”或开始任务时保存。")
         self.setting_controls: list[ttk.Widget] = []
         self._build()
+        from .overlay import GameLogOverlay
+        self.overlay = GameLogOverlay(root, lambda: self.overlay_game_handle, self._log)
+        self.overlay.set_enabled(self.overlay_logs.get())
+        self.overlay_logs.trace_add("write", self._overlay_enabled)
+        self.status.trace_add("write", self._overlay_status)
         self._saved_form = self._form_signature()
-        for variable in (self.server, self.game_path, self.auto_launch, self.action_delay,
+        for variable in (self.server, self.game_path, self.auto_launch, self.overlay_logs, self.action_delay,
                          self.transition_timeout, self.ocr_confidence, self.promoter, *self.tasks.values()):
             variable.trace_add("write", self._form_changed)
         self.promoter.trace_add("write", self._promoter_changed)
@@ -86,132 +94,27 @@ class AutoZZZWindow:
             self.root.after(150, lambda: messagebox.showerror("配置无法读取", load_error, parent=root))
 
     def _build(self) -> None:
-        self.root.title("AutoZZZ · 绝区零每日助手")
-        # Tk fonts follow Windows DPI. Scale the initial client area as well so
-        # 150% / 200% displays do not clip the notebook or footer controls.
-        self.ui_scale = max(1.0, float(self.root.tk.call("tk", "scaling")) / (96 / 72))
-        self.root.geometry(f"{round(1060 * self.ui_scale)}x{round(920 * self.ui_scale)}")
-        self.root.minsize(round(960 * self.ui_scale), round(870 * self.ui_scale))
-        self.root.configure(bg="#eef2f3")
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(".", font=("Microsoft YaHei UI", 10), background="#eef2f3", foreground="#20313b")
-        style.configure("TButton", padding=(12, 7))
-        style.configure("TCheckbutton", padding=(0, 3))
-        style.configure("TLabelframe", background="#eef2f3")
-        style.configure("TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 23, "bold"), foreground="#122e38")
-        style.configure("Hint.TLabel", foreground="#58707a")
-        style.configure("Accent.TButton", background="#13796b", foreground="white", padding=(22, 9))
-        style.map("Accent.TButton", background=[("active", "#096254"), ("disabled", "#cbd5d6")])
-        style.configure("Treeview", rowheight=29, background="white", fieldbackground="white")
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+        from .interface import build_window
+        build_window(self, TASK_NAMES, SERVER_NAMES)
 
-        outer = ttk.Frame(self.root, padding=22)
-        outer.pack(fill="both", expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(5, weight=1)
-        header = ttk.Frame(outer)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(header, text="AutoZZZ", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="绝区零每日助手  ·  非战斗每日", style="Hint.TLabel").pack(side="left", padx=18, pady=(8, 0))
-        ttk.Label(header, textvariable=self.status, foreground="#13796b", font=("Microsoft YaHei UI", 11, "bold")).pack(side="right")
+    def _show_page(self, name: str) -> None:
+        for key, page in self.pages.items():
+            if key == name:
+                page.grid()
+            else:
+                page.grid_remove()
+            self.nav_buttons[key].configure(style="Selected.Nav.TButton" if key == name else "Nav.TButton")
 
-        game = ttk.LabelFrame(outer, text="游戏与区服", padding=12)
-        game.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        game.columnconfigure(3, weight=1)
-        ttk.Label(game, text="区服").grid(row=0, column=0, padx=(0, 8))
-        self.server_combo = ttk.Combobox(game, textvariable=self.server, values=list(SERVER_NAMES.values()), state="readonly", width=8)
-        self.server_combo.grid(row=0, column=1, padx=(0, 18))
-        self.server_combo.bind("<<ComboboxSelected>>", self._select_server)
-        ttk.Label(game, text="游戏路径").grid(row=0, column=2, padx=(0, 8))
-        path_entry = ttk.Entry(game, textvariable=self.game_path)
-        path_entry.grid(row=0, column=3, sticky="ew")
-        browse = ttk.Button(game, text="浏览…", command=self._choose_game)
-        browse.grid(row=0, column=4, padx=(8, 0))
-        launch_setting = ttk.Checkbutton(game, text="开始时自动启动游戏", variable=self.auto_launch)
-        launch_setting.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(game, text="首次登录、更新和验证码请手动完成。国际服请使用简体中文界面。", style="Hint.TLabel").grid(row=1, column=3, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(game, text="游戏以管理员运行时，请用 Start-AutoZZZ-Admin.cmd 启动助手，并同意 Windows 管理员提示。",
-                  style="Hint.TLabel", wraplength=870).grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
-        self.setting_controls.extend((self.server_combo, path_entry, browse, launch_setting))
+    def _overlay_status(self, *_args: Any) -> None:
+        if getattr(self, "overlay", None):
+            self.overlay.set_status(self.status.get())
 
-        settings = ttk.LabelFrame(outer, text="每日任务与收尾奖励", padding=12)
-        settings.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        for index, (name, label) in enumerate(TASK_NAMES.items()):
-            control = ttk.Checkbutton(settings, text=label, variable=self.tasks[name])
-            control.grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 20))
-            self.setting_controls.append(control)
-        promoter_row = ttk.Frame(settings)
-        promoter_row.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(7, 0))
-        ttk.Label(promoter_row, text="宣传员（选填）").pack(side="left", padx=(0, 8))
-        self.promoter_entry = ttk.Entry(promoter_row, textvariable=self.promoter, width=24)
-        self.promoter_entry.pack(side="left", padx=(0, 12))
-        self.promoter_hint_label = ttk.Label(promoter_row, textvariable=self.promoter_hint, style="Hint.TLabel", wraplength=480)
-        self.promoter_hint_label.pack(side="left")
-        self.setting_controls.append(self.promoter_entry)
-        timing = ttk.Frame(settings)
-        timing.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
-        for text, variable, width in (("操作间隔（秒）", self.action_delay, 5), ("界面超时（秒）", self.transition_timeout, 5),
-                                      ("OCR 阈值", self.ocr_confidence, 5)):
-            ttk.Label(timing, text=text, style="Hint.TLabel").pack(side="left", padx=(0, 6))
-            control = ttk.Entry(timing, textvariable=variable, width=width)
-            control.pack(side="left", padx=(0, 18))
-            self.setting_controls.append(control)
-        save = ttk.Button(timing, text="保存设置", command=self._save_settings)
-        save.pack(side="right")
-        self.setting_controls.append(save)
+    def _overlay_enabled(self, *_args: Any) -> None:
+        self.overlay.set_enabled(self.overlay_logs.get())
 
-        actions = ttk.Frame(outer)
-        actions.grid(row=3, column=0, sticky="ew", pady=(2, 10))
-        self.start_button = ttk.Button(actions, text="开始每日", style="Accent.TButton", command=self._start)
-        self.start_button.pack(side="left")
-        self.check_button = ttk.Button(actions, text="检测窗口", command=self._check)
-        self.check_button.pack(side="left", padx=8)
-        self.launch_button = ttk.Button(actions, text="启动游戏", command=self._launch)
-        self.launch_button.pack(side="left")
-        self.pause_button = ttk.Button(actions, text="暂停", command=self._pause)
-        self.pause_button.pack(side="left", padx=8)
-        self.stop_button = ttk.Button(actions, text="停止", command=self._stop)
-        self.stop_button.pack(side="left")
-        ttk.Label(actions, text="体力消耗  0", style="Hint.TLabel").pack(side="right")
-        ttk.Label(actions, textvariable=self.elapsed, style="Hint.TLabel").pack(side="right", padx=18)
-        ttk.Label(actions, textvariable=self.engagement, foreground="#13796b").pack(side="right")
-
-        results = ttk.Frame(outer)
-        results.grid(row=4, column=0, sticky="ew", pady=(0, 10))
-        self.table = ttk.Treeview(results, columns=("task", "status", "detail"), show="headings", height=6, selectmode="browse")
-        for name, label, width in (("task", "任务", 235), ("status", "状态", 90), ("detail", "结果说明", 550)):
-            self.table.heading(name, text=label)
-            self.table.column(name, width=width, minwidth=60, stretch=name == "detail")
-        self.table.pack(fill="x")
-        for name, label in TASK_NAMES.items():
-            self.table.insert("", "end", iid=name, values=(label, "等待", ""))
-        for tag, color in (("ok", "#14735d"), ("failed", "#b33c40"), ("partial", "#a5701c"), ("skipped", "#6a7b83")):
-            self.table.tag_configure(tag, foreground=color)
-        self.table.bind("<<TreeviewSelect>>", self._task_detail)
-
-        self.output_tabs = ttk.Notebook(outer)
-        self.output_tabs.grid(row=5, column=0, sticky="nsew")
-        self.log = self._text_tab("运行日志")
-        self.inspection_text = self._text_tab("窗口检测")
-        self.report_text = self._text_tab("运行报告")
-        self.log.tag_configure("error", foreground="#b33c40")
-        self.log.tag_configure("warning", foreground="#986219")
-        self.log.tag_configure("info", foreground="#263e49")
-        footer = ttk.Frame(outer)
-        footer.grid(row=6, column=0, sticky="ew", pady=(10, 0))
-        footer.columnconfigure(0, weight=1)
-        ttk.Label(footer, textvariable=self.summary, style="Hint.TLabel", wraplength=625).grid(row=0, column=0, sticky="w")
-        buttons = ttk.Frame(footer)
-        buttons.grid(row=0, column=1, sticky="e")
-        self.screenshot_button = ttk.Button(buttons, text="打开截图", command=lambda: self._open_path(self.last_screenshot))
-        self.screenshot_button.pack(side="left")
-        self.report_button = ttk.Button(buttons, text="打开报告", command=lambda: self._open_path(self.last_report_file))
-        self.report_button.pack(side="left", padx=6)
-        self.directory_button = ttk.Button(buttons, text="运行目录", command=lambda: self._open_path(self.last_output_dir))
-        self.directory_button.pack(side="left")
-        ttk.Label(outer, textvariable=self.saved, style="Hint.TLabel").grid(row=7, column=0, sticky="w", pady=(7, 0))
+    def _finish_overlay(self) -> None:
+        if getattr(self, "overlay", None):
+            self.overlay.finish(self.status.get())
 
     def _text_tab(self, title: str) -> tk.Text:
         frame = ttk.Frame(self.output_tabs)
@@ -230,7 +133,7 @@ class AutoZZZWindow:
         self.saved.set("区服与游戏路径已修改，开始任务或保存设置后生效。")
 
     def _form_signature(self) -> tuple:
-        return (self.server.get(), self.game_path.get(), self.auto_launch.get(), self.action_delay.get(),
+        return (self.server.get(), self.game_path.get(), self.auto_launch.get(), self.overlay_logs.get(), self.action_delay.get(),
                 self.transition_timeout.get(), self.ocr_confidence.get(), self.promoter.get(),
                 *(variable.get() for variable in self.tasks.values()))
 
@@ -264,7 +167,7 @@ class AutoZZZWindow:
         try:
             server = next(key for key, label in SERVER_NAMES.items() if label == self.server.get())
             settings = replace(self.settings, server=server, game_path=self.game_path.get().strip(),
-                               auto_launch=self.auto_launch.get(), action_delay=float(self.action_delay.get()),
+                               auto_launch=self.auto_launch.get(), overlay_logs=self.overlay_logs.get(), action_delay=float(self.action_delay.get()),
                                transition_timeout=int(self.transition_timeout.get()), ocr_confidence=float(self.ocr_confidence.get()),
                                promoter=self.promoter.get(),
                                **{name: variable.get() for name, variable in self.tasks.items()})
@@ -304,7 +207,7 @@ class AutoZZZWindow:
         self._operation("check")
 
     def _launch(self) -> None:
-        self._operation("launch")
+        self._start("enter_game")
 
     def _operation(self, action: str) -> None:
         if self.busy or self.closing:
@@ -313,18 +216,15 @@ class AutoZZZWindow:
         if settings is None:
             return
         self.busy, self.worker_done = True, False
-        self.status.set("正在检测窗口" if action == "check" else "正在启动游戏")
+        self.status.set("正在检测窗口")
         self._refresh_controls()
         if action == "check":
             self.root.iconify()
 
         def work() -> None:
             try:
-                from .app import inspect_game, launch_game
-                if action == "check":
-                    self.emit({"type": "checked", "data": inspect_game(settings)})
-                else:
-                    self.emit({"type": "launched", "message": launch_game(settings)})
+                from .app import inspect_game
+                self.emit({"type": "checked", "data": inspect_game(settings)})
             except Exception as exc:
                 self.emit({"type": "error", "message": str(exc)})
             finally:
@@ -333,29 +233,37 @@ class AutoZZZWindow:
         self.worker = threading.Thread(target=work, name=f"AutoZZZ-{action}", daemon=False)
         self.worker.start()
 
-    def _start(self) -> None:
+    def _start(self, operation: str = "daily") -> None:
         if self.busy or self.closing:
             return
         settings = self._read_settings()
         if settings is None:
             return
         self.runner = None
+        self.operation = operation
+        self.overlay_game_handle = None
         self._daily_goal_complete = False
         self.stop_requested.clear()
         self.busy = self.running = True
         self.paused = self.stopping = self.worker_done = False
         self.focus_waiting = False
         self.started_at = time.monotonic()
-        self.engagement.set("活跃度未验证")
-        self.status.set("正在运行")
-        self.summary.set("F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
-        for name, label in TASK_NAMES.items():
-            enabled = getattr(settings, name)
-            self.table.item(name, values=(label, "等待" if enabled else "跳过", "" if enabled else "未勾选"),
-                            tags=() if enabled else ("skipped",))
+        entering = operation == "enter_game"
+        self.status.set("正在进入游戏" if entering else "正在运行")
+        self.summary.set("正在登录并进入已保存账号；F9 暂停 / 继续，F10 停止。" if entering else
+                         "F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
+        if not entering:
+            self.engagement.set("活跃度未验证")
+            for name, label in TASK_NAMES.items():
+                enabled = getattr(settings, name)
+                self.table.item(name, values=(label, "等待" if enabled else "跳过", "" if enabled else "未勾选"),
+                                tags=() if enabled else ("skipped",))
         self.output_tabs.select(0)
+        self._show_page("home")
         self._refresh_controls()
-        self._log(f"开始{SERVER_NAMES[settings.server]}每日任务；助手将最小化。")
+        self.overlay.begin(self.status.get())
+        action = "进入游戏" if entering else "每日任务"
+        self._log(f"开始{SERVER_NAMES[settings.server]}{action}；助手将最小化。")
         self.root.iconify()
 
         def work() -> None:
@@ -373,7 +281,7 @@ class AutoZZZWindow:
                 if stop_applied:
                     runner.stop()
                 self.emit({"type": "runner_ready", "runner": runner, "stop_applied": stop_applied})
-                report = runner.run()
+                report = runner.enter_game() if entering else runner.run()
                 if not finished.is_set():
                     self.emit({"type": "finished", "report": report.to_dict() if hasattr(report, "to_dict") else report})
             except Exception as exc:
@@ -381,7 +289,7 @@ class AutoZZZWindow:
             finally:
                 self.emit({"type": "worker_done"})
 
-        self.worker = threading.Thread(target=work, name="AutoZZZ-daily", daemon=False)
+        self.worker = threading.Thread(target=work, name=f"AutoZZZ-{operation}", daemon=False)
         self.worker.start()
 
     def _pause(self) -> None:
@@ -412,7 +320,7 @@ class AutoZZZWindow:
             self.status.set("等待游戏回到前台")
             self.summary.set("游戏窗口失去焦点，操作已暂停；切回绝区零后自动继续，F10 可停止。")
         else:
-            self.status.set("正在运行")
+            self.status.set("正在进入游戏" if getattr(self, "operation", "daily") == "enter_game" else "正在运行")
             self.summary.set("F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
 
     def _focus_wait_state(self, waiting: bool) -> None:
@@ -467,6 +375,8 @@ class AutoZZZWindow:
             self.log.delete("1.0", "501.0")
         self.log.see("end")
         self.log.configure(state="disabled")
+        if getattr(self, "overlay", None):
+            self.overlay.append(str(message), level)
 
     @staticmethod
     def _replace_text(widget: tk.Text, value: str) -> None:
@@ -479,6 +389,9 @@ class AutoZZZWindow:
         if hasattr(report, "to_dict"):
             report = report.to_dict()
         report = report if isinstance(report, dict) else {}
+        if report.get("operation") == "enter_game" or getattr(self, "operation", "daily") == "enter_game":
+            self._entered(report)
+            return
         self.running, self.paused = False, False
         self.focus_waiting = False
         self._freeze_clock()
@@ -513,7 +426,27 @@ class AutoZZZWindow:
             self.last_report_file = self.last_output_dir / "report.json"
             self._find_screenshot(self.last_output_dir)
         self._log(self.summary.get(), "info" if status == "success" else "warning")
+        self._finish_overlay()
         self._restore()
+
+    def _entered(self, report: dict) -> None:
+        self.running = self.paused = self.focus_waiting = False
+        self._freeze_clock()
+        success = report.get("status") == "success" and any(
+            isinstance(result, dict) and result.get("task") == "launch" and result.get("status") == "ok"
+            for result in report.get("results", []))
+        self.status.set("已进入游戏" if success else ("已停止" if report.get("status") == "stopped" else "进入游戏未完成"))
+        self.summary.set("已进入游戏主界面，可以开始每日。" if success else
+                         "进入游戏未完成；请查看日志和截图，处理登录或更新提示后重试。")
+        self._replace_text(self.report_text, json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        if report.get("run_dir"):
+            self.last_output_dir = Path(report["run_dir"])
+            self.last_report_file = self.last_output_dir / "report.json"
+            self._find_screenshot(self.last_output_dir)
+        self._log(self.summary.get(), "info" if success else "warning")
+        self._finish_overlay()
+        if not success:
+            self._restore()
 
     def _checked(self, data: dict[str, Any]) -> None:
         if data.get("screenshot"):
@@ -528,6 +461,7 @@ class AutoZZZWindow:
         self._log(f"窗口检测完成：{data.get('title', '未知')}；详见“窗口检测”。")
         if not data.get("administrator"):
             self._log("助手当前没有管理员权限；游戏以管理员运行时，请使用管理员启动器重开助手。", "warning")
+        self._show_page("logs")
         self.output_tabs.select(1)
         self._restore()
 
@@ -597,9 +531,6 @@ class AutoZZZWindow:
                     self._finished(event.get("report"))
                 elif kind == "checked":
                     self._checked(event.get("data", {}))
-                elif kind == "launched":
-                    self.status.set("启动请求已发送")
-                    self._log(event.get("message") or "请完成登录并进入游戏。")
                 elif kind == "error":
                     if self._daily_goal_complete:
                         self._log(f"每日任务已完成；后续通知错误不影响完成结果：{event.get('message', '')}", "warning")
@@ -607,17 +538,20 @@ class AutoZZZWindow:
                     self.running, self.paused = False, False
                     self.focus_waiting = False
                     self._freeze_clock()
-                    for name in TASK_NAMES:
+                    for name in (() if getattr(self, "operation", "daily") == "enter_game" else TASK_NAMES):
                         if self.table.item(name, "values")[1] in ("等待", "进行中"):
                             self._task({"task": name, "status": "failed", "detail": "流程中断，未确认完成。"})
                     self.status.set("执行失败")
                     self.summary.set(str(event.get("message", "未知错误")))
                     self._log(self.summary.get(), "error")
+                    self._finish_overlay()
                     self._restore()
                 elif kind == "worker_done":
                     self.worker_done = True
         except queue.Empty:
             pass
+        if self.runner is not None:
+            self.overlay_game_handle = getattr(getattr(self.runner, "_window", None), "hwnd", None)
         self._clock()
         worker_alive = self.worker is not None and self.worker.is_alive()
         if self.worker_done and not worker_alive:
@@ -634,6 +568,8 @@ class AutoZZZWindow:
         if self.closing:
             return
         self.closing = True
+        if getattr(self, "overlay", None):
+            self.overlay.close()
         if self.running:
             self._stop()
         self.root.withdraw()
