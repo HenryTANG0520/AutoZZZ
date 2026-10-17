@@ -115,6 +115,7 @@ class DailyWorkflow:
             and scene.has("区域信息", exact=True) and scene.has("区域切换", exact=True))
 
     def _interaction(self, scene):
+        # This is a visible key hint, not proof of NPC range or an opened dialog.
         return scene.has("F", exact=True) or bool(self._template(
             scene, "interact_f", roi(1400, 990, 1500, 1070)))
 
@@ -765,20 +766,54 @@ class DailyWorkflow:
         scene = self._wait(lambda s: not self._handbook(s) and (
             self._main(s) or s.has(destination_labels)), "对应日常任务的目标页面")
         if self._world(scene):
-            if not scene.has(destination_labels):
-                return self._partial(task, scene, "已通过日常前往到达大世界，尚未识别目标交互提示。")
-            if not self._interaction(scene):
-                # The selected daily destination and visible NPC bound this short approach.
-                self.c.key("w", scene, duration=0.65)
-                self.c.sleep(1)
-                scene = self._snapshot()
-            if self._world(scene) and scene.has(destination_labels) and self._interaction(scene):
-                self.c.key("f", scene, duration=0.2)
-                self.c.sleep(1)
-                scene = self._snapshot()
-            elif self._world(scene):
-                return self._partial(task, scene, "目标已在画面中，但没有明确 F 交互提示。")
+            return self._open_daily_target(task, scene, destination_labels)
         return scene
+
+    def _daily_target_npc(self, task, scene):
+        names = {"scratch": ("嗷呜", "吼吼先生"), "coffee": ("汀曼", "汀曼大师"),
+                 "video": ("阿玖", "18号")}[task]
+        # Only a unique name ahead of the avatar authorizes forward movement.
+        # Background shop signs and unrelated NPCs must never be approached.
+        candidates = [t for t in scene.tokens if t.within(roi(650, 15, 1300, 700))
+                      and t.score >= self.c.settings.ocr_confidence
+                      and normalize(t.text).strip("><＜＞《》〈〉「」『』‹›❮❯") in names]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def _daily_target_open(self, task, scene):
+        return {"scratch": lambda: self._bakery_screen(scene) or self._scratch_screen(scene),
+                "coffee": lambda: self._coffee_dialog(scene) or self._coffee_screen(scene),
+                "video": lambda: self._video_dialog(scene) or self._video_screen(scene)}[task]()
+
+    def _open_daily_target(self, task, scene, destination_labels):
+        if not scene.has(destination_labels):
+            return self._partial(task, scene, "已通过日常前往到达大世界，尚未识别目标交互提示。")
+        self.c.evidence(scene, task + "_arrival")
+        for attempt in range(4):
+            if self._daily_target_open(task, scene) or not self._world(scene):
+                return scene
+            npc = self._daily_target_npc(task, scene)
+            if npc is None:
+                return self._partial(task, scene, "目标 NPC 名字不在正前方或不唯一，未继续移动或交互。")
+            if attempt or not self._interaction(scene):
+                self.c.log(f"{task}：重新核实正前方目标 {npc.text}，短距离靠近（0.25 秒）。")
+                self.c.key("w", scene, duration=.25)
+                self.c.sleep(.5)
+                scene = self._snapshot()
+                if self._daily_target_open(task, scene) or not self._world(scene):
+                    return scene
+                npc = self._daily_target_npc(task, scene)
+                if npc is None:
+                    return self._partial(task, scene, "靠近后目标 NPC 未重新核实，未发送交互。")
+            if not self._interaction(scene):
+                return self._partial(task, scene, "目标已在画面中，但没有明确 F 交互提示。")
+            self.c.log(f"{task}：按 F 与 {npc.text} 交互（{attempt+1}/4），核实目标页面是否打开。")
+            self.c.key("f", scene, duration=.2)
+            self.c.sleep(1)
+            scene = self._snapshot()
+            if self._daily_target_open(task, scene) or not self._world(scene):
+                return scene
+            self.c.log(f"{task}：按 F 后仍在大世界，尚未进入目标交互页面。", "warning")
+        return self._partial(task, scene, "有限靠近与交互后仍未打开目标页面；F 图标不表示交互已经成功。")
 
     def _verify_task_card(self, task, scene, detail):
         """An action alone is insufficient: revisit the specific daily card if possible."""

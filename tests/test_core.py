@@ -651,6 +651,7 @@ class WorkflowContext:
         self.targets = []
         self.evidence_frames = []
         self.template = Mock(return_value=None)
+        self.log = Mock()
 
     def snapshot(self):
         if len(self.frames) > 1:
