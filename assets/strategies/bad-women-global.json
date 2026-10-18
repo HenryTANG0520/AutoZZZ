@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "国际服坏女人三人队",
+  "description": "按既定顺序配队；A为鼠标左键普攻，h默认1.5秒。",
+  "team": "坏女人",
+  "expected_roster": "蕾米埃尔,维琳娜,爱芮",
+  "script": "Ah, Eh, Space - Ehh, Space - E, Ahhh |",
+  "hold_unit": 1.5,
+  "intro_wait": 6,
+  "cycles": 1,
+  "timeout": 180
+}

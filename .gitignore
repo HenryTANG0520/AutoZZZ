@@ -9,3 +9,6 @@ config.json
 .env
 .env.*
 *.log
+
+battle.json
+training_catalog.json

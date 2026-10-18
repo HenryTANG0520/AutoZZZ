@@ -20,12 +20,18 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
-        description="AutoZZZ：通过屏幕识别完成绝区零非战斗每日任务。无模式参数时打开中文图形界面。"
+        description="AutoZZZ：通过屏幕识别完成绝区零每日任务及独立的预输入战斗。无模式参数时打开中文图形界面。"
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="检测游戏窗口和 OCR，输出 JSON；不点击游戏")
     mode.add_argument("--launch", action="store_true", help="启动所选区服并自动进入游戏主界面")
     mode.add_argument("--run", action="store_true", help="按配置执行每日；F9 暂停，F10 停止")
+    mode.add_argument("--battle-catalog", action="store_true", help="读取训练目录，不出战")
+    mode.add_argument("--battle", action="store_true", help="按独立方案及电量预算执行战斗批次")
+    mode.add_argument("--battle-resume", type=Path, help="仅续接报告对应的未完成战斗；不重新出战")
+    mode.add_argument("--battle-prepare", action="store_true", help="核实副本与预编队伍；不出战")
+    parser.add_argument("--battle-plan", type=Path, default=ROOT / "battle.json", help="独立战斗配置路径")
+    parser.add_argument("--battle-strategy", help="覆盖方案中的策略JSON路径，或builtin:策略名")
     mode.add_argument("--self-test", action="store_true", help="运行源码版离线测试，不访问游戏")
     parser.add_argument("--server", choices=("cn", "global"), help="cn 国服，global 国际服；自动选择默认路径")
     parser.add_argument("--game-path", help="覆盖所选区服的 ZenlessZoneZero.exe 路径")
@@ -46,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         result = unittest.TextTestRunner(verbosity=2).run(tests)
         return 0 if result.wasSuccessful() else 1
 
-    if not any((args.check, args.launch, args.run)):
+    if not any((args.check,args.launch,args.run,args.battle,args.battle_prepare,args.battle_resume,args.battle_catalog)):
         from .gui import main as gui_main
 
         gui_main(args.config, server=args.server, game_path=args.game_path)
@@ -58,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.select_server(args.server)
         if args.game_path:
             settings.game_path = args.game_path
-        settings.validate()
+        settings.validate("battle" if (args.battle or args.battle_prepare or args.battle_resume or args.battle_catalog) else "daily")
         from .app import Runner, inspect_game
 
         if args.check:
@@ -79,7 +85,13 @@ def main(argv: list[str] | None = None) -> int:
             if signum is not None:
                 previous_handlers[signum] = signal.signal(signum, stop_on_signal)
         try:
-            report = runner.enter_game() if args.launch else runner.run()
+            if args.battle or args.battle_prepare or args.battle_resume or args.battle_catalog:
+                from .battle import BattlePlan
+                plan = BattlePlan.load(args.battle_plan)
+                if args.battle_strategy:plan.strategy_file = args.battle_strategy
+                report = runner.run(battle_plan=plan, prepare_only=args.battle_prepare, resume_report=args.battle_resume, catalog_only=args.battle_catalog)
+            else:
+                report = runner.enter_game() if args.launch else runner.run()
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)

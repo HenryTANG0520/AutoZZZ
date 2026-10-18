@@ -40,8 +40,9 @@ class Settings:
             raise ValueError("区服必须为 cn 或 global。")
         self.server, self.game_path = server, GAME_PATHS[server]
 
-    def validate(self) -> None:
-        self.promoter = canonical_promoter_name(self.promoter)
+    def validate(self, operation: str = "daily") -> None:
+        if operation == "save" or (operation == "daily" and self.video):
+            self.promoter = canonical_promoter_name(self.promoter)
         if self.server not in GAME_PATHS:
             raise ValueError("请选择国服或国际服。")
         if not isinstance(self.game_path, str) or Path(self.game_path).name.casefold() != "zenlesszonezero.exe":
@@ -58,11 +59,11 @@ class Settings:
                 raise ValueError(f"{name} 必须是有限数值。")
         if not 0.3 <= self.action_delay <= 5 or not 10 <= self.transition_timeout <= 180 or not 0.4 <= self.ocr_confidence <= 0.99:
             raise ValueError("操作间隔、界面超时或 OCR 阈值超出允许范围。")
-        if not any((self.scratch, self.coffee, self.video, self.daily)):
+        if operation == "daily" and not any((self.scratch, self.coffee, self.video, self.daily)):
             raise ValueError("至少选择一项每日任务。")
 
     def save(self, path: Path = CONFIG_PATH) -> None:
-        self.validate()
+        self.validate("save")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".tmp")
@@ -81,5 +82,5 @@ class Settings:
         if unknown:
             raise ValueError(f"配置中存在未知字段：{', '.join(sorted(unknown))}")
         result = cls(**data)
-        result.validate()
+        result.validate("save")
         return result

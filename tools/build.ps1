@@ -63,7 +63,7 @@ try {
         Copy-Item -LiteralPath $taskPackageFile.FullName -Destination $taskTargetPath -Force
     }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination (Join-Path $taskOutputDirectory 'LICENSE') -Force
-    foreach ($taskDocument in @('README.md', 'DAILY_FLOW.md', 'VALIDATION.md', 'LICENSE_NOTICE.md')) {
+    foreach ($taskDocument in @('README.md', 'DAILY_FLOW.md', 'BATTLE.md', 'VALIDATION.md', 'LICENSE_NOTICE.md')) {
         $taskDocumentPath = Join-Path $projectRoot $taskDocument
         if (Test-Path -LiteralPath $taskDocumentPath -PathType Leaf) {
             $taskDocumentText = (Get-Content -LiteralPath $taskDocumentPath -Raw -Encoding UTF8).Replace('](assets/', '](_internal/assets/').Replace('](runs/', '](../../runs/').Replace('](dist/AutoZZZ/runs/', '](runs/')

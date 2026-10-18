@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "国服编队1验证",
+  "description": "移除维琳娜的操作段；编队1中蕾米埃尔换至爱芮，派派无需操作。",
+  "team": "编队1",
+  "expected_roster": "蕾米埃尔,爱芮,派派",
+  "script": "Ah, Eh, Space - E, Ahhh, E, Ahhh, E, Ahhh, E, Ahhh, E, Ahhh, E, Ahhh |",
+  "hold_unit": 1.5,
+  "intro_wait": 6,
+  "cycles": 1,
+  "timeout": 180
+}

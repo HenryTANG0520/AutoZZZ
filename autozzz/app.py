@@ -519,12 +519,14 @@ class Runner:
         """Launch and verify the game main screen, without running daily tasks."""
         return self.run(entry_only=True)
 
-    def run(self, *, entry_only: bool = False) -> RunReport:
+    def run(self, *, entry_only: bool = False, battle_plan=None, prepare_only=False, resume_report=None, catalog_only=False) -> RunReport:
         from .workflows import DailyWorkflow
         from .windows import kernel32
         if entry_only:
             self.settings = replace(self.settings, auto_launch=True)
             self.report.operation = "enter_game"
+        if battle_plan is not None:
+            self.report.operation = "battle_catalog" if catalog_only else "battle_prepare" if prepare_only else "battle"
         directory = ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         directory.mkdir(parents=True)
         self.report.run_dir = str(directory)
@@ -541,7 +543,12 @@ class Runner:
         try:
             if not mutex or already_running:
                 raise AutomationError("另一个 AutoZZZ 任务正在运行，请先停止后重试。")
-            self.settings.validate()
+            self.settings.validate("battle" if battle_plan is not None else "daily")
+            if battle_plan is not None:
+                from .battle_strategy import resolve_strategy
+                battle_plan, strategy = resolve_strategy(battle_plan,root=ROOT,resource_root=RESOURCE_ROOT)
+                if strategy:self.report.battle["strategy"]=strategy
+            self.report.source = str(ROOT)
             now = datetime.now(timezone(timedelta(hours=8)))
             self.report.server = self.settings.server
             self.report.game_path = self.settings.game_path
@@ -570,6 +577,17 @@ class Runner:
             workflow = DailyWorkflow(context)
             initial = self._initial_snapshot(context)
             context.evidence(initial, "start")
+            if battle_plan is not None:
+                from .battle import BattleWorkflow
+                combat = BattleWorkflow(context, battle_plan)
+                self.report.failure_task = "battle"
+                # Combat owns cursor/submission recovery. Do not restart its workflow.
+                result = combat.catalog() if catalog_only else combat.resume(resume_report) if resume_report else combat.run(prepare_only=prepare_only)
+                self.report.results.append(result)
+                self.report.status = "success" if result.status == "ok" else "partial"
+                if result.status == "ok":self.report.failure_task = ""
+                self.log(result.detail)
+                return self.report
             main_result = self._resume_step(workflow.ensure_main)
             if entry_only:
                 if not isinstance(main_result, TaskResult) or main_result.task != "main" or main_result.status != "ok":
@@ -605,6 +623,7 @@ class Runner:
                     self.log("任务已结束；请查看各项结果与每日活跃、奖励验证。")
             self._run_finish_rewards(context)
         except Stopped as error:
+            self.report.error = str(error)
             if self._daily_completed():
                 self.log(f"每日任务已验证完成；后续停止不影响完成结果：{error}", "warning")
                 self._complete_daily()
@@ -612,6 +631,7 @@ class Runner:
                 self.report.status = "stopped"
                 self.log(str(error), "warning")
         except Exception as error:
+            self.report.error = str(error)
             if self._daily_completed():
                 self.log(f"每日任务已验证完成；后续异常不影响完成结果：{error}", "warning")
                 self._complete_daily()

@@ -69,6 +69,8 @@ class AutoZZZWindow:
         self.saved = tk.StringVar(root, "配置按“保存设置”或开始任务时保存。")
         self.setting_controls: list[ttk.Widget] = []
         self._build()
+        from .battle_ui import BattlePanel
+        self.combat_panel = BattlePanel(self)
         from .overlay import GameLogOverlay
         self.overlay = GameLogOverlay(root, lambda: self.overlay_game_handle, self._log)
         self.overlay.set_enabled(self.overlay_logs.get())
@@ -87,7 +89,7 @@ class AutoZZZWindow:
         self.root.bind("<KeyRelease-F9>", self._f9_release)
         self.root.bind("<F10>", lambda _: self._stop())
         self.root.after(80, self._drain)
-        self._log("当前版本执行非战斗每日，体力消耗为 0。F9 暂停 / 继续，F10 紧急停止。")
+        self._log("每日不消耗电量；自动战斗在独立页面启动。F9 暂停 / 继续，F10 紧急停止。")
         if load_error:
             self.saved.set("原配置无法读取；已临时使用默认值。")
             self._log(f"配置加载失败：{load_error}", "error")
@@ -234,6 +236,10 @@ class AutoZZZWindow:
         self.worker.start()
 
     def _start(self, operation: str = "daily") -> None:
+        if operation in ("battle", "battle_prepare", "battle_catalog"):
+            from .battle_ui import start
+            start(self, operation)
+            return
         if self.busy or self.closing:
             return
         settings = self._read_settings()
@@ -321,7 +327,7 @@ class AutoZZZWindow:
             self.summary.set("游戏窗口失去焦点，操作已暂停；切回绝区零后自动继续，F10 可停止。")
         else:
             self.status.set("正在进入游戏" if getattr(self, "operation", "daily") == "enter_game" else "正在运行")
-            self.summary.set("F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
+            self.summary.set("F9 暂停 / 继续 · F10 紧急停止 · 按独立预算运行，结算时释放按键" if getattr(self,"operation","") in ("battle","battle_prepare") else "F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
 
     def _focus_wait_state(self, waiting: bool) -> None:
         if not self.running or self.stopping or self.closing:
@@ -389,6 +395,10 @@ class AutoZZZWindow:
         if hasattr(report, "to_dict"):
             report = report.to_dict()
         report = report if isinstance(report, dict) else {}
+        if report.get("operation") in ("battle", "battle_prepare", "battle_catalog"):
+            from .battle_ui import finished
+            finished(self,report)
+            return
         if report.get("operation") == "enter_game" or getattr(self, "operation", "daily") == "enter_game":
             self._entered(report)
             return

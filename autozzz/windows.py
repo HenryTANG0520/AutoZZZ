@@ -300,6 +300,33 @@ class GameWindow:
             release = INPUT(type=1, ki=KEYBDINPUT(vk, scan, 0x2, 0, 0))
             user32.SendInput(1, C.byref(release), C.sizeof(INPUT))
 
+    def combat_press(self, action: str, duration: float, checkpoint):
+        if action not in ("a", "e", "q", "space") or not .05 <= duration <= 15:
+            raise ValueError("Unsupported combat action/duration")
+        if action == "a":
+            down = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, 0x0002, 0, 0))
+            up = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, 0x0004, 0, 0))
+        else:
+            vk = {"e": 0x45, "q": 0x51, "space": 0x20}[action]
+            scan = user32.MapVirtualKeyW(vk, 0)
+            down = INPUT(type=1, ki=KEYBDINPUT(vk, scan, 0, 0, 0))
+            up = INPUT(type=1, ki=KEYBDINPUT(vk, scan, 0x2, 0, 0))
+        try:
+            checkpoint()
+            self.send([down])
+            deadline = time.monotonic() + duration
+            while time.monotonic() < deadline:
+                self.guard()
+                if self.emergency_pressed():
+                    from .models import Stopped
+                    raise Stopped("F10 紧急停止。")
+                checkpoint()
+                time.sleep(min(.02, max(0, deadline-time.monotonic())))
+        except FocusLost as error:
+            raise InputInterrupted(str(error)) from error
+        finally:
+            user32.SendInput(1, C.byref(up), C.sizeof(INPUT))
+
     def scroll(self, amount: int) -> None:
         # Cursor is first placed inside the game by the caller's guarded click.
         self.send([INPUT(type=0, mi=MOUSEINPUT(0, 0, amount & 0xFFFFFFFF, 0x0800, 0, 0))])

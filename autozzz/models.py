@@ -90,7 +90,7 @@ class TaskResult:
 class RunReport:
     status: str = "partial"
     results: list[TaskResult] = field(default_factory=list)
-    stamina_spent: int = 0
+    stamina_spent: int | None = 0
     daily_verified: bool = False
     run_dir: str = ""
     engagement: int | None = None
@@ -101,6 +101,11 @@ class RunReport:
     reset_day: str = ""
     evidence: list[str] = field(default_factory=list)
     operation: str = "daily"
+
+    battle: dict = field(default_factory=dict)
+    error: str = ""
+    source: str = ""
+    failure_task: str = ""
 
     def to_dict(self) -> dict:
         from dataclasses import asdict
