@@ -63,6 +63,7 @@ class DailyWorkflow:
         self._task_before = {}
         self._startup_checked = False
         self._entry_transition_pending = False
+        self._entry_network_retries = 0
         self._daily_evidence_recorded = False
         self._coffee_ordered = False
         self._coffee_reward_claimed = False
@@ -104,7 +105,8 @@ class DailyWorkflow:
 
     def _main(self, scene):
         # The monthly ticket overlays the world; its background HUD is not ready for input.
-        return not self._monthly_card_visible(scene) and (self._world(scene) or self._menu(scene))
+        return (not self._monthly_card_visible(scene) and not self._entry_network_error_visible(scene)
+                and (self._world(scene) or self._menu(scene)))
 
     def _map(self, scene):
         names = sum(scene.has(label, MAP_AREAS, exact=True) for label in REGIONS)
@@ -525,9 +527,22 @@ class DailyWorkflow:
     def _entry_ready(self, scene):
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
+        if self._entry_network_error_visible(scene):
+            return self._entry_network_retry_button(scene) is not None
         if self._monthly_card_visible(scene):
             return self._monthly_card(scene) is not None
         return bool(self._main(scene) or self._start_button(scene) or self._cached_login(scene))
+
+    def _entry_network_error_visible(self, scene):
+        return scene.has("网络请求错误请稍后尝试", DIALOG, exact=True)
+
+    def _entry_network_retry_button(self, scene):
+        if (not self._entry_network_error_visible(scene) or scene.has(START_BLOCKERS)
+                or scene.has(MONTHLY_PURCHASE)):
+            return None
+        buttons = [t for t in scene.tokens if t.within(roi(800, 580, 1120, 720))
+                   and t.score >= self.c.settings.ocr_confidence and normalize(t.text) == "重试"]
+        return buttons[0] if len(buttons) == 1 else None
 
     def _startup_ready(self, scene):
         # Unknown launch frames are observed only; blockers take priority over background UI.
@@ -593,6 +608,21 @@ class DailyWorkflow:
                 scene = self._resume_entry_transition(self._entry_snapshot())
             if scene.has(START_BLOCKERS):
                 self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
+            if self._entry_network_error_visible(scene):
+                target = self._entry_network_retry_button(scene)
+                if target is None:
+                    self._unknown(scene, "登录网络错误页面缺少唯一可核实的重试按钮")
+                if self._entry_network_retries >= 3:
+                    self.c.evidence(scene, "entry_network_exhausted")
+                    raise AutomationError("登录网络请求持续失败，已有限重试 3 次；请检查游戏网络后重新开始。")
+                self.c.evidence(scene, "entry_network_error")
+                self.c.log(f"登录遇到网络请求错误，点击重试（{self._entry_network_retries+1}/3）。", "warning")
+                self.c.click(scene, target)
+                self._entry_network_retries += 1
+                self._entry_transition_pending = True
+                self.c.sleep(3)
+                self._wait(self._entry_ready, "网络重试后的启动页或主界面", allow_blank=True)
+                continue
             scene = self._dismiss_monthly_card(scene)
             if self._monthly_card_visible(scene):
                 self._unknown(scene, "月卡领取特征不完整或出现购买选项")
