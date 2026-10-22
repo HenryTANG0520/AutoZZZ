@@ -16,7 +16,7 @@ from .windows import find_game, is_admin, is_elevated, launch
 
 
 def launch_game(settings: Settings) -> str:
-    settings.validate()
+    settings.validate("launch")
     try:
         find_game(settings.game_path)
     except AutomationError:
@@ -34,7 +34,7 @@ def launch_game(settings: Settings) -> str:
 
 
 def inspect_game(settings: Settings) -> dict:
-    settings.validate()
+    settings.validate("check")
     window = find_game(settings.game_path)
     window.focus()
     vision = Vision(settings.ocr_confidence)
@@ -44,9 +44,12 @@ def inspect_game(settings: Settings) -> dict:
     screenshot = save_scene(scene, output, "screen")
     result = dict(window=window.hwnd, title=window.title, width=geometry.width, height=geometry.height,
                   administrator=is_admin(), game_elevated=is_elevated(window.hwnd), ocr_text=scene.text, screenshot=str(screenshot))
-    result["input_ready"] = not (result["game_elevated"] and not result["administrator"])
-    if not result["input_ready"]:
+    from .ux import input_readiness
+    result["input_ready"] = input_readiness(result["administrator"], result["game_elevated"])
+    if result["input_ready"] is False:
         result["input_hint"] = "绝区零以管理员权限运行，请用 Start-AutoZZZ-Admin.cmd 或管理员版 EXE 启动助手。"
+    elif result["input_ready"] is None:
+        result["input_hint"] = "游戏进程权限未能读取；截图成功不代表输入条件已核实。"
     (output / "check.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
 
@@ -268,6 +271,7 @@ class Runner:
         self.input_epoch = 0
         self.focus_epoch = 0
         self.inactive_duration = 0.0
+        self._run_had_problem = False
 
     def _daily_completed(self) -> bool:
         # Only the workflow's verified reward claim may publish this terminal state.
@@ -349,6 +353,34 @@ class Runner:
         if not self._daily_completed() and any(result.status not in ("ok", "skipped")
                                                for result in self.report.results):
             self.report.status = "partial"
+
+    def _close_game_after_success(self, context):
+        if not self.settings.close_game_on_success:
+            return
+        selected = self._selected_tasks() + [name for name in ("weekly", "city_fund") if getattr(self.settings, name)]
+        ready = (self.report.operation == "daily" and self.report.status == "success"
+                 and self._daily_completed() and not self._run_had_problem and not self._stop.is_set())
+        ready = ready and all(any(r.task == name and r.status == "ok" for r in self.report.results)
+                              and all(r.status == "ok" for r in self.report.results if r.task == name)
+                              for name in selected)
+        if not ready:
+            result = TaskResult("close_game", "skipped", "本轮任务或领奖未全部核实成功，保留游戏。")
+            self.report.results.append(result)
+            self.emit(dict(type="task", **result.__dict__))
+            self.log(result.detail, "warning")
+            return
+        self._control_checkpoint()
+        from .closing import close_verified_game
+        self.log("本轮每日及已选领奖均已核实，正在正常退出游戏。")
+        try:
+            result = close_verified_game(context)
+        except Stopped:
+            raise
+        except Exception as error:
+            result = TaskResult("close_game", "partial", f"游戏退出未确认：{error}；未强制结束。")
+        self.report.results.append(result)
+        self.emit(dict(type="task", **result.__dict__))
+        self.log(result.detail, "info" if result.status == "ok" else "warning")
 
     def log(self, message: str, level="info"):
         if self._logger:
@@ -543,7 +575,7 @@ class Runner:
         try:
             if not mutex or already_running:
                 raise AutomationError("另一个 AutoZZZ 任务正在运行，请先停止后重试。")
-            self.settings.validate("battle" if battle_plan is not None else "daily")
+            self.settings.validate("battle" if battle_plan is not None else "enter_game" if entry_only else "daily")
             if battle_plan is not None:
                 from .battle_strategy import resolve_strategy
                 battle_plan, strategy = resolve_strategy(battle_plan,root=ROOT,resource_root=RESOURCE_ROOT)
@@ -605,9 +637,12 @@ class Runner:
             else:
                 for name in self._selected_tasks():
                     self.checkpoint()
+                    self.report.failure_task = name
                     self.emit(dict(type="task", task=name, status="running", detail="正在执行"))
                     result = self._resume_step(getattr(workflow, name))
                     self.report.results.append(result)
+                    if result.status != "ok":
+                        self._run_had_problem = True
                     self.emit(dict(type="task", **result.__dict__))
                     self.log(f"{result.task}：{result.detail}")
                     if self._daily_completed():
@@ -622,6 +657,7 @@ class Runner:
                         self.report.status = "partial"
                     self.log("任务已结束；请查看各项结果与每日活跃、奖励验证。")
             self._run_finish_rewards(context)
+            self._close_game_after_success(context)
         except Stopped as error:
             self.report.error = str(error)
             if self._daily_completed():
@@ -643,6 +679,8 @@ class Runner:
                 self.report.results.append(TaskResult("run", "failed", str(error)))
         finally:
             self._monitor_end.set()
+            if self.settings.close_game_on_success and not entry_only and battle_plan is None and not any(r.task == "close_game" for r in self.report.results):
+                self.report.results.append(TaskResult("close_game", "skipped", "本轮已停止或未完整核实；未发送退出请求。"))
             self.report.finished_at = datetime.now(timezone(timedelta(hours=8))).isoformat()
             finalization_error = None
 

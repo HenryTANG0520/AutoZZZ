@@ -40,9 +40,7 @@ try {
     }
     & $taskVenvPython -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(''PyInstaller'') else 1)'
     if ($LASTEXITCODE -ne 0) {
-        Write-Host 'Installing PyInstaller into the AutoZZZ virtual environment...'
-        & $taskVenvPython -m pip install --disable-pip-version-check 'PyInstaller>=6,<7'
-        if ($LASTEXITCODE -ne 0) { throw 'PyInstaller installation failed.' }
+        throw 'PyInstaller is not installed in the existing project environment. Build stopped; no dependencies installed.'
     }
     # Build elsewhere: Explorer or a process can keep the output directory itself open.
     & $taskVenvPython -m PyInstaller --noconfirm --onedir --windowed --uac-admin --name AutoZZZ --distpath $taskStagingRoot `
@@ -69,6 +67,12 @@ try {
             $taskDocumentText = (Get-Content -LiteralPath $taskDocumentPath -Raw -Encoding UTF8).Replace('](assets/', '](_internal/assets/').Replace('](runs/', '](../../runs/').Replace('](dist/AutoZZZ/runs/', '](runs/')
             Set-Content -LiteralPath (Join-Path $taskOutputDirectory $taskDocument) -Value $taskDocumentText -Encoding UTF8
         }
+    }
+    $taskPreviewSource = Join-Path $projectRoot 'docs\images'
+    if (Test-Path -LiteralPath $taskPreviewSource -PathType Container) {
+        $taskPreviewTarget = Join-Path $taskOutputDirectory 'docs'
+        New-Item -ItemType Directory -Path $taskPreviewTarget -Force | Out-Null
+        Copy-Item -LiteralPath $taskPreviewSource -Destination $taskPreviewTarget -Recurse -Force
     }
     Write-Host "Build complete: $(Join-Path $taskOutputDirectory 'AutoZZZ.exe')"
 } finally {

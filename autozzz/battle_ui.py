@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from .battle import BattlePlan, CATEGORIES
 from .config import ROOT, RESOURCE_ROOT
+from . import theme
 
 class BattlePanel:
     def __init__(self, ui):
@@ -26,38 +27,54 @@ class BattlePanel:
             try:
                 if widget.cget("text")=="非战斗每日 · 电量消耗 0":widget.configure(text="每日不耗电量 · 战斗按独立预算")
             except tk.TclError:pass
-        ttk.Label(page,text="自动战斗（试验）",style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
-        ttk.Label(page,text="只使用现有电量，不补充、不用电池；先在游戏预编队伍中配好队、命名，再填写同一个队名。",style="Hint.TLabel",wraplength=600).grid(row=1,column=0,sticky="w",pady=(5,12))
-        form=ttk.Frame(page,style="Card.TFrame",padding=14);form.grid(row=2,column=0,sticky="ew")
-        form.columnconfigure(1,weight=1)
+        s = ui.ui_scale
+        d = lambda n: round(n * s)
+        theme.page_heading(page, "自动战斗", "TRAINING / EXPERIMENTAL",
+                           "先配置并命名预编队伍。按独立预算使用现有电量；无法核实副本或队伍时停止。", s)
+        forms = ttk.Frame(page)
+        forms.grid(row=1, column=0, sticky="ew")
+        for col in (0, 1):
+            forms.columnconfigure(col, weight=1, uniform="combat-forms")
         self.controls={}
         self.catalog={}
         path=ROOT/"training_catalog.json"
         if not path.exists():path=RESOURCE_ROOT/"assets"/"training_catalog.json"
         if path.exists():self.catalog=json.loads(path.read_text(encoding="utf-8"))
-        fields=(("category","训练分类"),("subcategory","子菜单"),("stage","目标副本"),("team","预编队伍名"),
-                ("strategy_file","策略JSON（可选，留空用下方配置）"),
-                ("expected_roster","核对角色顺序（可选，逗号分隔）"),("script","预输入脚本"),("hold_unit","每个 h 的秒数"),("intro_wait","HUD出现后转场等待（秒）"),
-                ("cycles","每场脚本轮数"),("battles","挑战场次（最多15）"),("energy_budget","批次电量上限（最多300）"),("timeout","战斗及结算超时（秒）"),("max_energy","本次电量上限"))
-        for row,(name,label) in enumerate(fields):
-            ttk.Label(form,text=label,style="Card.TLabel").grid(row=row,column=0,sticky="w",padx=(0,14),pady=5)
-            control=ttk.Combobox(form,textvariable=self.vars[name],width=28) if name in ("category","subcategory","stage","strategy_file") else ttk.Entry(form,textvariable=self.vars[name],width=28)
-            control.grid(row=row,column=1,sticky="ew",pady=5)
-            self.controls[name]=control;ui.setting_controls.append(control)
-            if name=="strategy_file":
-                from .battle_strategy import BUILTINS
-                control.configure(values=("",)+BUILTINS)
-                button=ttk.Button(form,text="浏览…",command=self.browse_strategy)
-                button.grid(row=row,column=2,padx=(8,0));ui.setting_controls.append(button)
+        groups = (
+            ("01  /  副本与队伍", (("category", "训练分类"), ("subcategory", "子菜单"),
+                ("stage", "目标副本"), ("team", "预编队伍名"), ("expected_roster", "角色顺序（选填）"),
+                ("battles", "场次 · 最多 15"), ("energy_budget", "批次电量 · 最多 300"), ("max_energy", "本次电量上限"))),
+            ("02  /  预输入策略", (("strategy_file", "策略 JSON（选填）"), ("script", "预输入脚本"),
+                ("hold_unit", "长按单位（秒）"), ("intro_wait", "转场等待（秒）"),
+                ("cycles", "每场脚本轮数"), ("timeout", "结算超时（秒）"))))
+        for col, (title, fields) in enumerate(groups):
+            from .game_widgets import InsetPanel
+            panel = InsetPanel(forms, s, height=d(316))
+            panel.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else d(12), 0))
+            form = panel.content
+            form.columnconfigure(1, weight=1)
+            ttk.Label(form, text=title, style="CardKicker.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, d(5)))
+            for row, (name, label) in enumerate(fields, 1):
+                ttk.Label(form, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, d(10)), pady=d(2))
+                control = ttk.Combobox(form, textvariable=self.vars[name], width=12, font=("Microsoft YaHei UI", 9), style="Compact.TCombobox") if name in ("category", "subcategory", "stage", "strategy_file") else ttk.Entry(form, textvariable=self.vars[name], width=12, font=("Microsoft YaHei UI", 9), style="Compact.TEntry")
+                control.grid(row=row, column=1, sticky="ew", pady=d(2))
+                self.controls[name] = control
+                ui.setting_controls.append(control)
+                if name == "strategy_file":
+                    from .battle_strategy import BUILTINS
+                    control.configure(values=("",) + BUILTINS)
+            if col == 1:
+                button = ttk.Button(form, text="浏览策略文件  ↗", command=self.browse_strategy)
+                button.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="w", pady=(d(9), 0))
+                ui.setting_controls.append(button)
         self.controls["category"].configure(values=CATEGORIES,state="readonly")
         self.controls["category"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("category"))
         self.controls["subcategory"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("subcategory"))
         self.refresh_choices()
-        ttk.Label(page,text="A = 鼠标左键普攻；E / Q = 技能；Space = 换人。h = 长按单位，- 只标记换人，| 为一轮结束。\n轮数默认1；多轮不会自动复位角色。结算即释放按键；按场次及电量预算决定是否继续。",style="Hint.TLabel",wraplength=600).grid(row=3,column=0,sticky="w",pady=10)
-        buttons=ttk.Frame(page);buttons.grid(row=4,column=0,sticky="w")
+        theme.wrapped_label(page, text="A 普攻 · E / Q 技能 · Space 换人 · h 长按 · | 轮末。结算即释放按键。", style="Hint.TLabel").grid(row=2, column=0, sticky="ew", pady=d(6))
+        buttons=ttk.Frame(page);buttons.grid(row=3,column=0,sticky="w")
         for label,command in (("保存战斗方案",self.save),("读取训练目录",lambda:ui._start("battle_catalog")),("仅准备（不出战）",lambda:ui._start("battle_prepare")),("开始战斗批次",lambda:ui._start("battle"))):
-            button=ttk.Button(buttons,text=label,command=command);button.pack(side="left",padx=(0,10));ui.setting_controls.append(button)
-        ttk.Label(page,text="选择模拟室时优先最小电量配置；超过上限、没有指定队伍、无法核实副本均不会出战。",style="Hint.TLabel",wraplength=600).grid(row=5,column=0,sticky="w",pady=10)
+            button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗批次" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
 
     def refresh_choices(self, changed=None):
         group=self.catalog.get(self.vars["category"].get(),{})

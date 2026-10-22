@@ -30,6 +30,7 @@ class Settings:
     weekly: bool = True
     city_fund: bool = True
     auto_launch: bool = False
+    close_game_on_success: bool = False
     overlay_logs: bool = True
     action_delay: float = 1.2
     transition_timeout: int = 45
@@ -50,7 +51,7 @@ class Settings:
         for server, official in GAME_PATHS.items():
             if ntpath.normpath(self.game_path).casefold() == ntpath.normpath(official).casefold() and server != self.server:
                 raise ValueError("区服与游戏路径不一致，请切换到对应区服。")
-        for name in ("scratch", "coffee", "video", "daily", "weekly", "city_fund", "auto_launch", "overlay_logs"):
+        for name in ("scratch", "coffee", "video", "daily", "weekly", "city_fund", "auto_launch", "overlay_logs", "close_game_on_success"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} 必须是布尔值。")
         for name in ("action_delay", "transition_timeout", "ocr_confidence"):

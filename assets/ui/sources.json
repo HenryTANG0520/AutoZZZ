@@ -1,0 +1,23 @@
+{
+  "inpin.ttf": {
+    "url": "https://zzz.mihoyo.com/_nuxt/fonts/hongmengti.4285934.woff",
+    "source_sha256": "d68b18eb48a45ed4296fe129a2721be8837a8cfe4048e07fe0313c20b593545c",
+    "sha256": "c2c5e7cb82573067c24b6c45ae4e557df2ec3c34d4bce9eb78a5a42ec7cf0b68",
+    "modification": "WOFF decompressed to sfnt; outlines and names preserved",
+    "retrieved": "2026-10-22"
+  },
+  "mont-heavy.ttf": {
+    "url": "https://zzz.mihoyo.com/_nuxt/fonts/Mont-Heavy.88bdd4a.woff",
+    "source_sha256": "3b90525e0f6939374067d2efd6e96f5c1cfdc86e777eb8c696e845c4e9a0ccf3",
+    "sha256": "8296f3e09b4f7205fa998d3b3ed471e06e8503c7594813e1a2f5a911defd4875",
+    "modification": "WOFF decompressed to sfnt; outlines and names preserved",
+    "retrieved": "2026-10-22"
+  },
+  "zzz-logo.png": {
+    "url": "https://zzz.mihoyo.com/_nuxt/img/logo.1e072ee.png",
+    "source_sha256": "1d26b38b6c5c82b10bbccb8ce73be12aceb0389cdcd8b8754cac72b5b43af447",
+    "sha256": "1d26b38b6c5c82b10bbccb8ce73be12aceb0389cdcd8b8754cac72b5b43af447",
+    "modification": "Unmodified",
+    "retrieved": "2026-10-22"
+  }
+}

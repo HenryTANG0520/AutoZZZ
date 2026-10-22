@@ -30,6 +30,21 @@ The pinned repository's [LICENSE](https://github.com/OneDragon-Anything/ZenlessZ
 
 The capture provenance does not transfer ownership of the underlying game UI; those rights remain with their respective rights holders.
 
+## Desktop typefaces and game mark
+
+The compendium desktop bundles the actual typefaces and mark served by the
+[official ZZZ website](https://zzz.mihoyo.com/main/). The two WOFF fonts are
+decompressed to TTF containers with outlines, naming and copyright records
+preserved; the logo is unchanged. Exact URLs, transformations and SHA-256 hashes
+are in [assets/ui/README.md](assets/ui/README.md) and
+[assets/ui/sources.json](assets/ui/sources.json). These assets retain their
+original rights and are not relicensed under the source-code GPL. The UI also
+reuses the previously attributed `daily_completed.png` template above. Public
+availability does not imply an additional license grant or official endorsement.
+Full online reference screenshots are not distributed. The two documentation
+previews show only AutoZZZ with a temporary generic configuration and no user
+history or account data.
+
 ## Sanitized test fixtures
 
 The OCR geometry in `tests/fixtures/promoter_picker.json` and `promoter_business.json`, and the narrow card-name strip in `promoter_name_pixels.png`, derive from game screenshots provided by the user for promoter selection calibration. Account identifiers, portraits and unrelated screen content are excluded. These are test materials; rights in the underlying game text and UI remain with their respective rights holders.

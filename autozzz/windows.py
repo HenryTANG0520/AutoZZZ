@@ -42,6 +42,29 @@ kernel32.CloseHandle.argtypes = [W.HANDLE]
 kernel32.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, C.POINTER(W.DWORD)]
 
 
+user32.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+user32.PostMessageW.restype = W.BOOL
+kernel32.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
+kernel32.WaitForSingleObject.restype = W.DWORD
+
+
+class GameExitWatch:
+    """Retain the exact process identity while its window closes."""
+    def __init__(self, handle):
+        self.handle = handle
+
+    def exited(self):
+        result = kernel32.WaitForSingleObject(self.handle, 0)
+        if result not in (0, 258):
+            raise AutomationError("无法核实游戏进程退出状态。")
+        return result == 0
+
+    def close(self):
+        if self.handle:
+            kernel32.CloseHandle(self.handle)
+            self.handle = None
+
+
 @dataclass(frozen=True)
 class Geometry:
     left: int
@@ -224,6 +247,32 @@ class GameWindow:
         if g.left < left or g.top < top or g.left + g.width > left + user32.GetSystemMetrics(78) or g.top + g.height > top + user32.GetSystemMetrics(79):
             raise AutomationError("游戏客户区有部分位于屏幕外，请移动窗口后重试。")
         return g
+
+    def request_close(self, checkpoint):
+        self.guard()
+        if (Path(self.path).name.casefold() != "zenlesszonezero.exe"
+                or process_path(self.hwnd).casefold() != self.path.casefold()):
+            raise AutomationError("当前窗口与本次绝区零进程不匹配，拒绝关闭。")
+        pid = W.DWORD()
+        user32.GetWindowThreadProcessId(self.hwnd, C.byref(pid))
+        handle = kernel32.OpenProcess(0x101000, False, pid.value)  # synchronize + query only
+        if not handle:
+            raise AutomationError("无法监测游戏进程退出；未发送关闭请求。")
+        try:
+            # Bind the retained handle to the same executable before WM_CLOSE.
+            length = W.DWORD(32768)
+            buffer = C.create_unicode_buffer(length.value)
+            if (not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, C.byref(length))
+                    or buffer.value.casefold() != self.path.casefold()):
+                raise AutomationError("游戏进程身份已变化，拒绝关闭。")
+            checkpoint()
+            self.guard()
+            if not user32.PostMessageW(self.hwnd, 0x0010, 0, 0):  # WM_CLOSE, no process termination
+                raise AutomationError("Windows 未接受正常关闭请求；未强制结束。")
+        except BaseException:
+            kernel32.CloseHandle(handle)
+            raise
+        return GameExitWatch(handle)
 
     def capture(self):
         import mss

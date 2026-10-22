@@ -13,6 +13,8 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from .config import CONFIG_PATH, GAME_PATHS, ROOT, Settings
+from .ux import report_context, recovery_text, exit_text
+from . import theme
 
 DAILY_TASK_NAMES = {"scratch": "每日签到（刮卡/盲盒）", "coffee": "咖啡店喝咖啡", "video": "录像店营业", "daily": "验证活跃度并领取奖励"}
 FINISH_TASK_NAMES = {"weekly": "丽都周纪奖励", "city_fund": "丽都城募奖励"}
@@ -55,6 +57,7 @@ class AutoZZZWindow:
         self.server = tk.StringVar(root, SERVER_NAMES[self.settings.server])
         self.game_path = tk.StringVar(root, self.settings.game_path)
         self.auto_launch = tk.BooleanVar(root, self.settings.auto_launch)
+        self.close_game_on_success = tk.BooleanVar(root, self.settings.close_game_on_success)
         self.overlay_logs = tk.BooleanVar(root, self.settings.overlay_logs)
         self.tasks = {name: tk.BooleanVar(root, getattr(self.settings, name)) for name in TASK_NAMES}
         self.action_delay = tk.StringVar(root, str(self.settings.action_delay))
@@ -66,7 +69,10 @@ class AutoZZZWindow:
         self.summary = tk.StringVar(root, "点击启动游戏进入主界面，或直接开始每日。")
         self.elapsed = tk.StringVar(root, "00:00")
         self.engagement = tk.StringVar(root, "未验证")
-        self.saved = tk.StringVar(root, "配置按“保存设置”或开始任务时保存。")
+        self.saved = tk.StringVar(root, "仅“保存设置”写入配置；检测、启动、开始均不保存。")
+        self.plan = tk.StringVar(root)
+        self.readiness = tk.StringVar(root, "游戏窗口与输入条件：尚未检测")
+        self.history_context = tk.StringVar(root, "暂无历史运行记录")
         self.setting_controls: list[ttk.Widget] = []
         self._build()
         from .battle_ui import BattlePanel
@@ -77,12 +83,13 @@ class AutoZZZWindow:
         self.overlay_logs.trace_add("write", self._overlay_enabled)
         self.status.trace_add("write", self._overlay_status)
         self._saved_form = self._form_signature()
-        for variable in (self.server, self.game_path, self.auto_launch, self.overlay_logs, self.action_delay,
+        for variable in (self.server, self.game_path, self.auto_launch, self.close_game_on_success, self.overlay_logs, self.action_delay,
                          self.transition_timeout, self.ocr_confidence, self.promoter, *self.tasks.values()):
             variable.trace_add("write", self._form_changed)
         self.promoter.trace_add("write", self._promoter_changed)
         self._promoter_changed()
         self._discover_report()
+        self._update_plan()
         self._refresh_controls()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<KeyPress-F9>", self._f9_press)
@@ -100,6 +107,9 @@ class AutoZZZWindow:
         build_window(self, TASK_NAMES, SERVER_NAMES)
 
     def _show_page(self, name: str) -> None:
+        self.current_page = name
+        if hasattr(self, "compendium"):
+            self.compendium.show_section(name)
         for key, page in self.pages.items():
             if key == name:
                 page.grid()
@@ -121,8 +131,9 @@ class AutoZZZWindow:
     def _text_tab(self, title: str) -> tk.Text:
         frame = ttk.Frame(self.output_tabs)
         self.output_tabs.add(frame, text=title)
-        text = tk.Text(frame, height=7, wrap="word", font=("Microsoft YaHei UI", 10), bg="white", fg="#263e49",
-                       borderwidth=0, padx=10, pady=8, state="disabled")
+        text = tk.Text(frame, height=7, wrap="word", font=("Microsoft YaHei UI", 10), bg=theme.FIELD, fg=theme.TEXT,
+                       insertbackground=theme.ACCENT, selectbackground="#3c4525", selectforeground=theme.TEXT,
+                       borderwidth=0, highlightthickness=0, padx=16, pady=14, spacing1=3, state="disabled")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -132,10 +143,10 @@ class AutoZZZWindow:
     def _select_server(self, _event: Any = None) -> None:
         server = next(key for key, label in SERVER_NAMES.items() if label == self.server.get())
         self.game_path.set(GAME_PATHS[server])
-        self.saved.set("区服与游戏路径已修改，开始任务或保存设置后生效。")
+        self.saved.set("区服与游戏路径已修改；本次可用草稿，只有保存设置会写入配置。")
 
     def _form_signature(self) -> tuple:
-        return (self.server.get(), self.game_path.get(), self.auto_launch.get(), self.overlay_logs.get(), self.action_delay.get(),
+        return (self.server.get(), self.game_path.get(), self.auto_launch.get(), self.close_game_on_success.get(), self.overlay_logs.get(), self.action_delay.get(),
                 self.transition_timeout.get(), self.ocr_confidence.get(), self.promoter.get(),
                 *(variable.get() for variable in self.tasks.values()))
 
@@ -145,17 +156,26 @@ class AutoZZZWindow:
             name = canonical_promoter_name(self.promoter.get())
             text = f"优先选择 {name}；未拥有时选择第一位。" if name else "留空选择第一位；账号未拥有时回退第一位。"
             self.promoter_hint.set(text)
-            self.promoter_hint_label.configure(foreground="#58707a")
+            self.promoter_hint_label.configure(foreground=theme.MUTED)
         except (TypeError, ValueError) as exc:
             detail = str(exc)
             self.promoter_hint.set(detail if len(detail) <= 45 else "角色名不在内置名单，请检查输入后再保存。")
-            self.promoter_hint_label.configure(foreground="#b33c40")
+            self.promoter_hint_label.configure(foreground=theme.ERROR)
+
+    @property
+    def dirty(self):
+        return self._form_signature() != self._saved_form
+
+    def _update_plan(self):
+        selected = [label for name, label in TASK_NAMES.items() if self.tasks[name].get()]
+        self.plan.set(("自动进入游戏" if self.auto_launch.get() else "使用已打开的游戏") + " · 电量消耗 0 · " + "、".join(selected))
 
     def _form_changed(self, *_args: Any) -> None:
         if self._form_signature() != self._saved_form:
-            self.saved.set("设置已修改，点击保存设置或开始任务后生效。")
+            self.saved.set("有未保存修改 · 本次操作使用草稿；仅保存设置会写入配置。")
         else:
-            self.saved.set("设置与当前保存值一致。")
+            self.saved.set("设置与保存值一致 · 检测、启动和开始不会写入配置。")
+        self._update_plan()
 
     def _choose_game(self) -> None:
         path = filedialog.askopenfilename(parent=self.root, title="选择 ZenlessZoneZero.exe",
@@ -165,29 +185,37 @@ class AutoZZZWindow:
             self.game_path.set(path)
             self.saved.set("游戏路径已修改。")
 
-    def _read_settings(self) -> Settings | None:
+    def _read_settings(self, save=False, operation="daily") -> Settings | None:
         try:
             server = next(key for key, label in SERVER_NAMES.items() if label == self.server.get())
-            settings = replace(self.settings, server=server, game_path=self.game_path.get().strip(),
-                               auto_launch=self.auto_launch.get(), overlay_logs=self.overlay_logs.get(), action_delay=float(self.action_delay.get()),
-                               transition_timeout=int(self.transition_timeout.get()), ocr_confidence=float(self.ocr_confidence.get()),
-                               promoter=self.promoter.get(),
-                               **{name: variable.get() for name, variable in self.tasks.items()})
-            settings.validate()
-            settings.save(self.config_path)
-            self.settings = settings
-            self.promoter.set(settings.promoter)
-            self._saved_form = self._form_signature()
-            self.saved.set(f"配置已保存：{self.config_path}")
+            values = dict(server=server, game_path=self.game_path.get().strip())
+            if operation not in ("check", "enter_game", "launch") or save:
+                values.update(auto_launch=self.auto_launch.get(), close_game_on_success=self.close_game_on_success.get(),
+                              overlay_logs=self.overlay_logs.get(), action_delay=float(self.action_delay.get()),
+                              transition_timeout=int(self.transition_timeout.get()), ocr_confidence=float(self.ocr_confidence.get()),
+                              promoter=self.promoter.get() if self.tasks["video"].get() else self.settings.promoter,
+                              **{name: variable.get() for name, variable in self.tasks.items()})
+            elif operation == "check":
+                values["ocr_confidence"] = float(self.ocr_confidence.get())
+            settings = replace(self.settings, **values)
+            settings.validate("save" if save else operation)
+            if save:
+                settings.save(self.config_path)
+                self.settings = settings
+                self.promoter.set(settings.promoter)
+                self._saved_form = self._form_signature()
+                self.saved.set(f"配置已保存：{self.config_path}")
+            else:
+                self.saved.set("本次使用当前表单；未写入配置。")
             return settings
         except (ValueError, TypeError, OSError, StopIteration) as exc:
-            self.saved.set("设置未保存，请检查输入。")
-            self._log(f"设置未保存：{exc}", "error")
-            messagebox.showerror("设置未保存", str(exc), parent=self.root)
+            self.saved.set("输入未通过检查；配置未改变。")
+            self._log(f"输入未通过检查：{exc}", "error")
+            messagebox.showerror("请检查输入", str(exc), parent=self.root)
             return None
 
     def _save_settings(self) -> None:
-        if not self.busy and self._read_settings() is not None:
+        if not self.busy and self._read_settings(save=True, operation="save") is not None:
             self._log("配置已保存。")
 
     def emit(self, event: dict[str, Any]) -> None:
@@ -200,7 +228,9 @@ class AutoZZZWindow:
             button.configure(state="disabled" if self.busy else "normal")
         self.pause_button.configure(text="继续" if self.paused else "暂停",
                                     state="normal" if self.running and self.runner is not None and not self.stopping else "disabled")
-        self.stop_button.configure(state="normal" if self.running and not self.stopping else "disabled")
+        self.stop_button.configure(state="normal" if self.busy and not self.stopping else "disabled")
+        if hasattr(self, "reward_button"):
+            self.reward_button.configure(state="disabled" if self.busy else "normal")
         for button, path in ((self.screenshot_button, self.last_screenshot), (self.report_button, self.last_report_file),
                              (self.directory_button, self.last_output_dir)):
             button.configure(state="normal" if path and (not self.busy or self.paused) else "disabled")
@@ -214,9 +244,10 @@ class AutoZZZWindow:
     def _operation(self, action: str) -> None:
         if self.busy or self.closing:
             return
-        settings = self._read_settings()
+        settings = self._read_settings(operation="check")
         if settings is None:
             return
+        self.stop_requested.clear()
         self.busy, self.worker_done = True, False
         self.status.set("正在检测窗口")
         self._refresh_controls()
@@ -226,7 +257,11 @@ class AutoZZZWindow:
         def work() -> None:
             try:
                 from .app import inspect_game
-                self.emit({"type": "checked", "data": inspect_game(settings)})
+                if not self.stop_requested.is_set():
+                    data = inspect_game(settings)
+                    self.emit({"type": "cancelled"} if self.stop_requested.is_set() else {"type": "checked", "data": data})
+                else:
+                    self.emit({"type": "cancelled"})
             except Exception as exc:
                 self.emit({"type": "error", "message": str(exc)})
             finally:
@@ -235,6 +270,9 @@ class AutoZZZWindow:
         self.worker = threading.Thread(target=work, name=f"AutoZZZ-{action}", daemon=False)
         self.worker.start()
 
+    def _reward_only(self):
+        self._start("reward_only")
+
     def _start(self, operation: str = "daily") -> None:
         if operation in ("battle", "battle_prepare", "battle_catalog"):
             from .battle_ui import start
@@ -242,9 +280,16 @@ class AutoZZZWindow:
             return
         if self.busy or self.closing:
             return
-        settings = self._read_settings()
+        settings = self._read_settings(operation=operation)
         if settings is None:
             return
+        if operation == "reward_only":
+            settings = replace(settings, scratch=False, coffee=False, video=False, daily=True, weekly=False, city_fund=False)
+        if hasattr(self, "plan"):
+            self.plan.set("仅补领奖 · 不执行签到、饮品或营业 · 电量消耗 0 · 本次不保存" if operation == "reward_only" else
+                          ("仅进入游戏，不执行每日" if operation == "enter_game" else
+                           ("自动进入游戏" if settings.auto_launch else "使用已打开的游戏") + " · 电量消耗 0 · " +
+                           "、".join(label for name, label in TASK_NAMES.items() if getattr(settings, name))))
         self.runner = None
         self.operation = operation
         self.overlay_game_handle = None
@@ -283,6 +328,8 @@ class AutoZZZWindow:
             try:
                 from .app import Runner
                 runner = Runner(settings, send)
+                if operation == "reward_only":
+                    runner.report.operation = operation
                 stop_applied = self.stop_requested.is_set()
                 if stop_applied:
                     runner.stop()
@@ -348,7 +395,7 @@ class AutoZZZWindow:
         return "break"
 
     def _stop(self) -> None:
-        if not self.running or self.stopping:
+        if not self.busy or self.stopping:
             return
         self.stopping, self.paused = True, False
         self.focus_waiting = False
@@ -372,7 +419,8 @@ class AutoZZZWindow:
     def _task_detail(self, _event: Any) -> None:
         if self.table.selection() and (not self.busy or self.paused):
             task, status, detail = self.table.item(self.table.selection()[0], "values")
-            self.summary.set(f"{task} · {status}：{detail or '暂无详细说明'}")
+            from .game_widgets import show_task_detail
+            show_task_detail(self, task, status, detail or "暂无详细说明")
 
     def _log(self, message: Any, level: str = "info") -> None:
         self.log.configure(state="normal")
@@ -429,7 +477,9 @@ class AutoZZZWindow:
         if verified and unfinished_cleanup:
             completion += " · 收尾奖励有未完成项"
         self.status.set(completion)
-        self.summary.set(f"{completion} · {self.engagement.get()} · 体力消耗 0")
+        self.summary.set(f"{completion} · {self.engagement.get()} · 体力消耗 0 · {exit_text(report)}" + ("\n" + recovery_text(report) if recovery_text(report) else ""))
+        if hasattr(self, "history_context"):
+            self.history_context.set(report_context(report, Path(report["run_dir"]) / "report.json" if report.get("run_dir") else None))
         self._replace_text(self.report_text, json.dumps(report, ensure_ascii=False, indent=2, default=str))
         if report.get("run_dir"):
             self.last_output_dir = Path(report["run_dir"])
@@ -467,7 +517,10 @@ class AutoZZZWindow:
             f"助手管理员权限：{'是' if data.get('administrator') else '否'}\n截图：{self.last_screenshot or '未生成'}\n"
             "权限说明：游戏以管理员运行时，助手也需要管理员权限；请使用 Start-AutoZZZ-Admin.cmd。\n\n"
             f"OCR 识别文字\n{data.get('ocr_text') or '未识别到文字'}")
-        self.status.set("检测完成")
+        ready = data.get("input_ready")
+        if hasattr(self, "readiness"):
+            self.readiness.set("输入条件：" + ("已核对权限匹配（仍需已登录）" if ready is True else data.get("input_hint", "尚未核实输入权限")))
+        self.status.set("检测完成" if ready is not False else "检测完成 · 输入条件未满足")
         self._log(f"窗口检测完成：{data.get('title', '未知')}；详见“窗口检测”。")
         if not data.get("administrator"):
             self._log("助手当前没有管理员权限；游戏以管理员运行时，请使用管理员启动器重开助手。", "warning")
@@ -489,8 +542,10 @@ class AutoZZZWindow:
                 self.last_report_file = max(reports, key=lambda path: path.stat().st_mtime)
                 self.last_output_dir = self.last_report_file.parent
                 self._find_screenshot(self.last_output_dir)
-                self._replace_text(self.report_text, self.last_report_file.read_text(encoding="utf-8"))
-        except OSError:
+                content = self.last_report_file.read_text(encoding="utf-8")
+                self._replace_text(self.report_text, content)
+                self.history_context.set(report_context(json.loads(content), self.last_report_file))
+        except (OSError, ValueError):
             pass
 
     def _open_path(self, path: Path | None) -> None:
@@ -541,6 +596,10 @@ class AutoZZZWindow:
                     self._finished(event.get("report"))
                 elif kind == "checked":
                     self._checked(event.get("data", {}))
+                elif kind == "cancelled":
+                    self.status.set("已停止")
+                    self.summary.set("检测已停止；未执行任务，配置未改变。")
+                    self._restore()
                 elif kind == "error":
                     if self._daily_goal_complete:
                         self._log(f"每日任务已完成；后续通知错误不影响完成结果：{event.get('message', '')}", "warning")
@@ -577,6 +636,10 @@ class AutoZZZWindow:
     def _close(self) -> None:
         if self.closing:
             return
+        if not self.busy and self.dirty:
+            choice = messagebox.askyesnocancel("保存修改", "配置有未保存修改，关闭前保存吗？", parent=self.root)
+            if choice is None or (choice and self._read_settings(save=True, operation="save") is None):
+                return
         self.closing = True
         if getattr(self, "overlay", None):
             self.overlay.close()

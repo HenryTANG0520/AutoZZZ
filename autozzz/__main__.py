@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         result = unittest.TextTestRunner(verbosity=2).run(tests)
         return 0 if result.wasSuccessful() else 1
 
-    if not any((args.check,args.launch,args.run,args.battle,args.battle_prepare,args.battle_resume,args.battle_catalog)):
+    if not any((args.check, args.launch, args.run, args.battle, args.battle_prepare, args.battle_resume, args.battle_catalog)):
         from .gui import main as gui_main
 
         gui_main(args.config, server=args.server, game_path=args.game_path)
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             settings.select_server(args.server)
         if args.game_path:
             settings.game_path = args.game_path
-        settings.validate("battle" if (args.battle or args.battle_prepare or args.battle_resume or args.battle_catalog) else "daily")
+        settings.validate("check" if args.check else "enter_game" if args.launch else "battle" if (args.battle or args.battle_prepare or args.battle_resume or args.battle_catalog) else "daily")
         from .app import Runner, inspect_game
 
         if args.check:

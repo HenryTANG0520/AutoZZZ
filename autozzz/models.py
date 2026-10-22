@@ -101,11 +101,12 @@ class RunReport:
     reset_day: str = ""
     evidence: list[str] = field(default_factory=list)
     operation: str = "daily"
-
-    battle: dict = field(default_factory=dict)
-    error: str = ""
     source: str = ""
     failure_task: str = ""
+    error: str = ""
+    safe_next: str = ""
+
+    battle: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         from dataclasses import asdict

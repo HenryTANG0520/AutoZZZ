@@ -270,3 +270,31 @@ MapTransport 的顺序是 **选择主区域 → 选择底部传送点 → 点击
 3. 新日期国服的一次连续运行及国际服跨每日重置状态。
 4. 其他界面语言、窗口尺寸和不同镜头/起点。
 5. 不同账号宣传员设置与缺少推荐上架时的有限配置分支。
+
+## 2026-10-16：完成后正常退出参考
+
+核实 BetterGI 官方仓库 babalae/better-genshin-impact，固定提交 c9db8b8291fe4ac25a600aee1582298005919eb2。只阅读源码，未安装或运行 BetterGI。
+
+- [OneDragonFlowViewModel.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/ViewModel/Pages/OneDragonFlowViewModel.cs)：任务列表快照、取消时提前返回、最终 CheckRewardsTask 后执行 CompletionAction，配置 JSON 保存。
+- [OneDragonFlowConfig.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/Core/Config/OneDragonFlowConfig.cs) 与 [OneDragonFlowPage.xaml](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/View/Pages/OneDragonFlowPage.xaml)：结束动作独立配置，默认空动作，UI 双向绑定。
+- [SystemControl.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/GameTask/SystemControl.cs)：绑定当前游戏运行环境与会话，先 CloseMainWindow、等待退出；上游随后有 Kill 回退及独立关机能力。AutoZZZ 按用户要求不实现这些分支，只正常关闭并等待本轮对应进程。
+- [CancellationContext.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/Core/Script/CancellationContext.cs) 与 [TaskRunner.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/GameTask/TaskRunner.cs)：手动取消标记、取消令牌、任务锁和 finally 清理。
+- [App.xaml.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/App.xaml.cs)：启动入口调用 UseElevated；官方 README 说明管理员游戏需要对应权限才能输入。AutoZZZ 保留现有管理员启动器和 UAC 提示，不新增权限设置或持久提权。
+- [ConfigService.cs](https://github.com/babalae/better-genshin-impact/blob/c9db8b8291fe4ac25a600aee1582298005919eb2/BetterGenshinImpact/Service/ConfigService.cs)：配置快照、临时文件、同卷原子替换和写入失败反馈。AutoZZZ 沿用既有临时文件替换保存；本功能不引入后台自动保存。
+
+本次采用：单独且默认关闭的 close_game_on_success 布尔设置；结束动作放在本轮已选免费收尾之后；400 活跃及四档全领与每项已选结果均需为 ok；此前 partial、异常和停止不触发退出；正常 WM_CLOSE 只发给本轮已核实的同一路径、同一进程句柄；普通退出确认需明确退出提示及唯一确认；等待最多 15 秒，未退出则记录 partial，不强杀。只启动游戏的 enter_game 操作不触发该开关。用户原配置保持，仅点击“保存设置”时写入。
+
+## 2026-10-22 桌面 UI 实机对照
+
+本次以网上公开的实际游戏 UI 为布局基准，替换先前只借用黑灰 / 黄绿和磁带元素的方案。研究期间未打开绝区零。
+
+| 对照来源 | 实际采用的结构 |
+| --- | --- |
+| [Gfinity 的快捷手册实机图](https://www.gfinityesports.com/article/zenless-zone-zero-dailies) | 包边手册、缝线、橙色书脊、凸起标签、活跃度槽、竖向任务卡、底部胶囊按钮 |
+| [米游社中文日常界面](https://www.miyoushe.com/zzz/article/54960667) | 中文标题层级、日常标签、完成绿与黄色选中态、左侧挂件 |
+| [游戏设置实机图](https://note.com/sandriver/n/n10297bc10f44) | 黑色嵌套面板、左侧分类、灰色胶囊行、深色输入槽和黄色焦点环 |
+| [官网应用脚本](https://zzz.mihoyo.com/_nuxt/d6e69e2.js) | 确定实际使用的印品鸿蒙体、Mont Heavy 与 ZZZ 标志资源 URL |
+
+官网资源通过公开 URL 下载，字体只转换容器格式。来源、SHA-256 和变更记录见 [assets/ui/sources.json](assets/ui/sources.json)，权益说明见 [assets/ui/README.md](assets/ui/README.md)。完成图标复用本仓库已注明来源的 `daily_completed.png`；未复制新的上游程序代码。
+
+AutoZZZ 将这些控件接入自身的每日、独立战斗和日志：目标 / 日常 / 训练 / 记录 / 设置；六项卡片使用真实任务结果，活跃度槽读取当前报告变量，未验证时不点亮。按钮文案和页面内容对应助手现有操作，布局随窗口尺寸缩放。因此这是游戏 UI 的功能化重建，不是完整游戏截图或逐像素不变的贴图。原参考截图仅保存在忽略目录 `runs/ui-reference/`，不发布玩家账号和水印。
