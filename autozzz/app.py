@@ -169,7 +169,8 @@ class Context:
         self.last_scene = None
         self.sleep(self.settings.action_delay)
 
-    def wait(self, predicate, timeout=30, description="界面", *, allow_blank=False) -> Scene:
+    def wait(self, predicate, timeout=30, description="界面", *, allow_blank=False,
+             keep_waiting=None) -> Scene:
         elapsed = 0.0
         while elapsed < timeout:
             # Paused time is excluded from transition deadlines.
@@ -183,6 +184,12 @@ class Context:
                     raise
                 self.last_scene = None
                 scene = None
+            if scene is not None and keep_waiting is not None and keep_waiting(scene):
+                # A recognized automatic update has no fixed duration. Start a fresh
+                # transition budget when it leaves that page; sleep remains cancellable.
+                elapsed = 0.0
+                self.sleep(0.7)
+                continue
             if scene is not None and predicate(scene):
                 return scene
             elapsed += max(0, time.monotonic() - start -
@@ -590,7 +597,7 @@ class Runner:
             threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True).start()
             if self.settings.auto_launch:
                 self.log(launch_game(self.settings))
-                self.log("等待游戏窗口；首次登录/更新请手动完成。")
+                self.log("等待游戏窗口；自动校对和资源下载将持续等待，首次登录验证请手动完成。")
                 for _ in range(120):
                     self.checkpoint()
                     try:

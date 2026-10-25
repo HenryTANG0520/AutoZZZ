@@ -41,8 +41,10 @@ REGIONS = ("录像店", "六分街", "光映广场", "澄辉坪", "布亚斯特�
 PLACES = ("报刊亭", "咖啡店", "柜台", "房间", "HDD", "喵吉长官", "拉面店", "改装店")
 MENU_LABELS = ("快捷手册", "绳网", "邮件", "仓库", "代理人", "设置")
 HANDBOOK_TABS = ("训练", "目标", "日常", "作战", "战术")
-START_BLOCKERS = ("密码", "验证码", "扫码", "同意", "更新", "下载", "password",
-                  "verification code", "captcha", "scan QR", "update", "download", "agree to terms")
+LOGIN_BLOCKERS = ("密码", "验证码", "扫码", "同意", "password",
+                  "verification code", "captcha", "scan QR", "agree to terms")
+START_BLOCKERS = LOGIN_BLOCKERS + ("更新", "下载", "update", "download")
+ENTRY_UPDATE_STATUS = roi(640, 825, 1280, 1000)
 MONTHLY_TODAY = roi(650, 345, 1250, 540)
 MONTHLY_DAYS = roi(650, 515, 1250, 675)
 MONTHLY_AMOUNT = roi(650, 570, 1250, 735)
@@ -64,6 +66,7 @@ class DailyWorkflow:
         self._startup_checked = False
         self._entry_transition_pending = False
         self._entry_network_retries = 0
+        self._entry_update_status = ""
         self._daily_evidence_recorded = False
         self._coffee_ordered = False
         self._coffee_reward_claimed = False
@@ -524,7 +527,35 @@ class DailyWorkflow:
             self.c.sleep(1)
             scene = self._wait(self._monthly_transition_ready, "月卡领取后的已校准界面")
 
+    def _entry_update_label(self, scene):
+        # Only the observed automatic status in the title screen's bottom panel
+        # grants an unbounded read-only wait, never an update/download button.
+        if (scene.has(LOGIN_BLOCKERS) or scene.has(MONTHLY_PURCHASE)
+                or scene.has(("失败", "错误", "重试", "重新下载", "立即更新", "确认更新", "退出游戏"))):
+            return ""
+        labels = []
+        for token in scene.tokens:
+            if token.score < self.c.settings.ocr_confidence or not token.within(ENTRY_UPDATE_STATUS):
+                continue
+            label = re.sub(r"[.·•…。]", "", normalize(token.text))
+            if label in ("版本校对中", "资源下载中"):
+                labels.append(label)
+        return labels[0] if len(labels) == 1 else ""
+
+    def _keep_waiting_for_update(self, scene):
+        guard_scene(scene)
+        label = self._entry_update_label(scene)
+        if label and label != self._entry_update_status:
+            self.c.evidence(scene, "entry_update")
+            self.c.log(f"游戏{label}，等待自动完成；更新期间不计转换超时，不点击或退出游戏。F9 暂停，F10 停止。")
+        elif not label and self._entry_update_status:
+            self.c.log("游戏已离开更新状态，重新识别启动页或主界面。")
+        self._entry_update_status = label
+        return bool(label)
+
     def _entry_ready(self, scene):
+        if self._entry_update_label(scene):
+            return False
         if scene.has(START_BLOCKERS):
             self._unknown(scene, "需要手动完成登录验证、协议确认或更新")
         if self._entry_network_error_visible(scene):
@@ -546,6 +577,8 @@ class DailyWorkflow:
 
     def _startup_ready(self, scene):
         # Unknown launch frames are observed only; blockers take priority over background UI.
+        if self._entry_update_label(scene):
+            return False
         return self._entry_ready(scene) or self._known(scene)
 
     def _unknown(self, scene, detail):
@@ -560,28 +593,33 @@ class DailyWorkflow:
         self.c.evidence(scene, task + "_verified")
         return TaskResult(task, "ok", detail)
 
-    def _wait(self, predicate, description, *, allow_blank=False):
+    def _wait(self, predicate, description, *, allow_blank=False, allow_update=False):
         def checked(scene):
             guard_scene(scene)
             return predicate(scene)
         options = {"allow_blank": True} if allow_blank else {}
+        if allow_update:
+            options["keep_waiting"] = self._keep_waiting_for_update
         return self.c.wait(checked, timeout=self.c.settings.transition_timeout,
                            description=description, **options)
 
     def _resume_entry_transition(self, scene):
         if self._entry_transition_pending and not self._startup_ready(scene):
-            scene = self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True)
+            scene = self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True, allow_update=True)
         if self._main(scene):
             self._entry_transition_pending = False
         return scene
 
     def _entry_snapshot(self):
         try:
-            return self._snapshot()
+            scene = self._snapshot()
         except ScreenshotNotReady:
             if not self._entry_transition_pending:
                 raise
-            return self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True)
+            return self._wait(self._startup_ready, "进入游戏后的已校准界面", allow_blank=True, allow_update=True)
+        if self._keep_waiting_for_update(scene):
+            return self._wait(self._startup_ready, "游戏更新后的启动页或主界面", allow_blank=True, allow_update=True)
+        return scene
 
     def ensure_main(self):
         first_call = not self._startup_checked
@@ -591,10 +629,10 @@ class DailyWorkflow:
             except ScreenshotNotReady:
                 if not ((first_call and self.c.settings.auto_launch) or self._entry_transition_pending):
                     raise
-                scene = self._wait(self._startup_ready, "游戏加载后的已校准界面", allow_blank=True)
+                scene = self._wait(self._startup_ready, "游戏加载后的已校准界面", allow_blank=True, allow_update=True)
             scene = self._resume_entry_transition(self._resume_video_transition(scene))
             if first_call and self.c.settings.auto_launch and not self._startup_ready(scene):
-                scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口", allow_blank=True)
+                scene = self._wait(self._startup_ready, "游戏启动后的已校准界面或登录入口", allow_blank=True, allow_update=True)
         except InputInterrupted:
             raise  # Resume with the initial read-only loading wait still available.
         except AutomationError:
@@ -621,7 +659,7 @@ class DailyWorkflow:
                 self._entry_network_retries += 1
                 self._entry_transition_pending = True
                 self.c.sleep(3)
-                self._wait(self._entry_ready, "网络重试后的启动页或主界面", allow_blank=True)
+                self._wait(self._entry_ready, "网络重试后的启动页或主界面", allow_blank=True, allow_update=True)
                 continue
             scene = self._dismiss_monthly_card(scene)
             if self._monthly_card_visible(scene):
@@ -646,14 +684,14 @@ class DailyWorkflow:
                 self.c.click(scene, login)
                 self._entry_transition_pending = True
                 self.c.sleep(3)
-                self._wait(self._entry_ready, "已保存账号登录后的启动页", allow_blank=True)
+                self._wait(self._entry_ready, "已保存账号登录后的启动页", allow_blank=True, allow_update=True)
                 continue
             enter = self._start_button(scene)
             if enter:
                 self.c.click(scene, enter)
                 self._entry_transition_pending = True
                 self.c.sleep(3)
-                self._wait(self._entry_ready, "进入游戏或可重试的启动页", allow_blank=True)
+                self._wait(self._entry_ready, "进入游戏或可重试的启动页", allow_blank=True, allow_update=True)
                 continue
             if not self._known(scene):
                 self._unknown(scene, "无法确认游戏已进入非战斗主界面")
