@@ -1,4 +1,160 @@
-# 绝区零非战斗每日参考研究
+# AutoZZZ 与绝区零一条龙研究记录
+
+<a id="comparison-20261028"></a>
+
+## 2026-10-28：重启开发与项目差异研究报告
+
+### 结论与研究范围
+
+**AutoZZZ 当前仍是一套独立实现；绝区零一条龙已经提供更广的自动化框架。重启后最值得投入的方向，是复用一条龙的执行能力，完善面向用户的任务配置、策略管理与运行结果表达。** 本报告建议先验证上游现有接口能否满足需求，再决定哪些功能做成插件，哪些确实需要修改上游源码。
+
+研究日期为 2026-10-28，时区 Asia/Shanghai。比较基准：
+
+- AutoZZZ：已提交版本 [`cac67da`](https://github.com/HenryTANG0520/AutoZZZ/tree/cac67da9a6b9e7f307639ef468add74e25168e50)，包含此前每日、战斗、快捷手册风格界面及自动更新等待功能。比较时不把本机未提交的录像店祝语补充分支计入公开版本。
+- 绝区零一条龙：研究时拉取的官方 `main`，固定为 [`f80b68456306d2afb97be72436dcda27f2ed6b59`](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59)，该提交日期为 2026-10-27。下列上游源码链接均指向这个快照，避免 `main` 更新后结论失去依据。
+- 方法：阅读双方源码、配置、许可证和上游官方文档。本次没有安装或启动一条龙，没有操作游戏，没有执行对照跑分或成功率测试。AutoZZZ 过去的实机记录见 [VALIDATION.md](VALIDATION.md)，不视为当前游戏版本重新验收。
+
+“一条龙能力更广”有代码依据；“AutoZZZ 的交互一定更好”没有本次用户实验支持。交互改善部分均为待验证的设计建议。
+
+### 一、开发关系与历史边界
+
+项目所有者决定：2026-10-28 前的最初设计仅受 BetterGI 的 I/O 思路启发；发现绝区零一条龙后，曾认为独立重复实现不再有价值，于 2026-10-26 停止开发；实际试用一条龙后，希望改善交互，于 2026-10-28 恢复开发，将未来方向定位为基于一条龙的二次开发。这是开发动机与路线声明。
+
+源码来源另需按事实记录：AutoZZZ 的底座来自 AutoHSR；此前研究已参考一条龙的操作流程，5 张图标模板直接来自其固定版本，并已记录来源及哈希。因此不能将此前成果表述为“从未参考一条龙”或“没有使用任何一条龙素材”。本报告下半部分保留了 2026-10-11 起的历史研究，既有署名见 [LICENSE_NOTICE.md](LICENSE_NOTICE.md)。目前也不能称 AutoZZZ 已经完成一条龙框架集成：现有执行入口、识别器、流程和配置仍是本项目自身实现。
+
+### 二、核心差异
+
+| 维度 | AutoZZZ 当前实现 | 一条龙固定版本 | 对后续开发的意义 |
+| --- | --- | --- | --- |
+| 产品范围 | 共享签到、咖啡、录像店、每日领奖、周纪、城募；独立的试验战斗 | 除每日外，还包含体力计划、恶名狩猎、空洞、式舆防卫战、巡回等应用目录 [U1] | 自动化范围已有大量重叠；扩展玩法优先复用上游 |
+| 应用架构 | `Runner` 调用每日流程与独立战斗流程，专用模块组织周纪和城募 [A1] | `ZContext`、应用工厂、应用组、可发现插件、Operation 节点及流转 [U2] | 上游更适合作为多个玩法共享的执行底座 |
+| 文字与页面识别 | MSS 截屏、RapidOCR、模板/颜色、代码中的归一化区域；难认按钮局部再识别 [A2] | 独立 OCR、识别缓存、页面 YAML、页面路由、模板与模型能力 [U2][U3] | 继续维护第二套页面数据和识别逻辑会产生重复适配成本 |
+| 战斗决策 | JSON 加载有界按键序列，按顺序执行；监视 HUD 与结算，不识别角色技能时机 [A3] | 条件策略、优先级、状态与动作模板；识别角色、连携、支援等，闪避可结合视觉与声音 [U4] | 这是最大的能力差距，换文件格式不能消除差距 |
+| 策略可编辑性 | `A/E/Q/Space` 与 `h` 长按语法简单，易写短序列；策略带版本和 SHA-256 [A3] | YAML 的场景、触发器、条件表达式与可复用动作模板，表达力更强 [U4] | 可做简易编辑入口，但不能宣称现有 JSON 与上游 YAML 等价 |
+| 副本与配队 | 名称查找、有限翻页、精确队卡 SELECT/SELECTED、可选角色顺序核对；实测主要为异常演练 [A3] | 体力计划按分类、任务、编队、战斗配置组织，并有预编队识别与管理 [U5] | 用户可从简单名称输入升级为名称匹配、候选及队伍预览 |
+| 账号与区服 | 国服/国际服路径切换，共用一份主配置；不保管账号密码 [A4] | 独立账号实例和应用组记录，支持国服/B服/国际服的客户端与登录编排 [U2] | 不能把切换路径等同于上游多账号管理 |
+| 窗口与输入 | 前台 Win32 输入；失焦释放并等待，恢复后重新识别 [A1][A2] | 多种截图实现；另有依赖虚拟手柄的后台模式，官方仍标注测试版 [U6] | 上游多一种运行方式；后台模式并非所有环境都无条件可用 |
+| 桌面交互 | Tkinter 自绘游戏快捷手册风格，顶部目标/日常/训练/记录/设置，左侧日志覆盖层 [A5] | PySide6、Fluent 组件、仪表盘、账户与资源管理、任务配置、Overlay 和运行前检查 [U7] | 不能把上游描述成“没有界面或日志”；差异应落到具体任务的操作成本 |
+| 完成判定 | 核实满400且四档奖励已领取，达到终点后不再做每日动作；收尾奖励另记 [A1] | 活跃度奖励应用有确认/预览分支，再检查第4档奖励区域 [U8] | 可保留“目标已经达成”与“各步骤如何结束”的分开展示，但不能由实现差异推断谁必然误判 |
+| 电量控制 | 每批最多15场/300电量，出战前预留，结算登记；未结算项阻止重开，不补电 [A3] | 体力计划有目标次数、卡数和玩法消耗等配置 [U5] | 上游体力计划和本项目预算语义不同，迁移时需逐条映射、核实 |
+| 集成方式 | CLI、Python 内部类和 GUI，共同调用本项目 Runner [A1] | 插件之外已有 HTTP/MCP 后端，可列应用、读编队、启动任务、查询和停止 [U9] | 可先做执行适配层，不必第一步复制整套源码 |
+| 安装与维护 | 少量顶层依赖、PyInstaller 文件夹构建；更新程序主要靠重新构建/分发 [A6] | uv、Qt、识别/音频依赖、模型/代码更新与多种启动包 [U10] | 上游安装与版本管理需要纳入交互设计；不能仅按依赖数量推断运行快慢 |
+| 测试与证据 | 同仓库脱敏截图、单元回放、假后端 GUI、历史本机实测报告 [A7] | 独立测试仓和流程截图测试方法；该快照的 `test-check.yml` 明确跳过执行测试 [U11] | 不能因主仓没有 tests 就说上游没测试，也不能把 CI 工作流成功直接当成测试全部通过 |
+
+### 三、战斗能力不是同一层级
+
+AutoZZZ 的 `Ah, Eh, Space - Ehh, Space - E, Ahhh |` 表达“按什么、按多久、按什么顺序”。运行中能在失焦、停止、未知 HUD 和结算时释放按键，但不会根据红黄光、当前角色能量或连携状态重新决定下一招。此前国服删去维琳娜动作后伤害不足，需要人工调整为更长的爱芮序列，正说明固定序列对队伍与练度有依赖。[A3][A7]
+
+一条龙的 `AutoBattleOperator` 基于条件操作器，策略可以根据状态触发不同优先级的动作；其角色上下文、闪避上下文和样例策略包含状态识别与打断逻辑。因此，今后若目标是通用战斗，应优先接入它的策略体系。AutoZZZ 的简写可以保留为初学者编辑方式或转换工具，但第一版只应转换静态动作子集；条件、优先级、角色状态和模板引用必须明确标注为无法无损转换的内容。[U4]
+
+### 四、交互改进应解决什么
+
+一条龙已经有仪表盘、运行前检查、预编队页面、设置卡片和悬浮层，不能把“增加日志”“增加开始按钮”当作新的差异。以下建议来自本项目用户历次操作反馈与两边的配置结构，尚需用真实任务验证：
+
+| 用户要做的事 | 值得验证的设计 | 验收方式 |
+| --- | --- | --- |
+| 每天只领完日常 | 首页提供“每日零电量”目标，展开后才显示签到/饮品/营业/收尾细项 | 新用户能找到入口；实际计划不包含体力应用；400与领奖证据明确 |
+| 指定一支队 | 输入名称后展示精确匹配、候选角色、顺序和所用战斗策略 | 同名或未找到不能静默换队；出战前可见生效队伍 |
+| 修改一个策略 | 常用参数可视化，保留原始文件编辑、来源、版本和校验结果 | 用户能知道修改了什么、何时生效；不误覆盖高级 YAML |
+| 知道本次会消耗什么 | 开始前显示区服、客户端、任务、队伍、现有电量上限与是否补电 | 预览与执行使用同一份冻结方案；每场开始前仍由执行侧检查 |
+| 出错后继续 | 显示已完成目标、当前步骤、失败原因和可做的恢复动作 | 不因附加领奖失败抹去已确认每日完成；未结算战斗不能变成新出战 |
+| 理解日志 | 默认用任务阶段与结果说明，技术细节和截图可展开 | 能回答“卡在哪、为何等待、是否扣电、接下来怎么办” |
+
+这不是认定上游缺少所有这些能力，而是下一轮应测的任务清单。建议让同一批用户分别完成“首次配置每日”“选择队伍刷一场”“导入策略”“失败后恢复”，记录完成率、用时、误操作和求助次数，再决定具体改版。
+
+### 五、建议的二次开发方式
+
+**建议先验证“AutoZZZ 交互界面 + 一条龙执行服务”，确有执行语义差异时再增加上游插件或少量源码修改。** 这是工程建议，本轮尚未实现连接。
+
+一条龙当前已有本地后端，默认地址为 `127.0.0.1:23001`。已核实的接口包括 `/health`、`/game/applications`、`/game/predefined-teams`、`/game/run/standalone`、`/game/run/one-dragon`、`/game/status` 和 `/game/stop`。状态对象包含运行状态、当前节点、重试次数、结束原因和失败节点。这些能支撑配置向导和运行反馈的原型，但并非已经证明足以满足全部配置写入、暂停恢复、日志订阅和预算需求。[U9]
+
+| 路线 | 适合的内容 | 主要代价 | 本报告建议 |
+| --- | --- | --- | --- |
+| 独立界面调用本地 HTTP/MCP | 任务入口、读取账号/编队结果、启动应用、展示状态 | 需要版本协商、配置映射、部署与异常处理；现有接口不等于全部需求已覆盖 | 先验证，只接一个简单每日应用 |
+| 上游应用插件 | 自定义每日目标、执行侧预算检查、特殊报告 | 依赖上游 Application/Operation 机制及版本 | 在需要精确执行约束时采用 |
+| 在上游 Qt 界面增加简易模式 | 复用账户、资源、设置卡片和 Overlay，减少两套桌面框架 | 需将 Tkinter 交互逻辑改写为 Qt；自绘控件不能直接搬用 | 若长期统一分发，值得评估并向上游贡献 |
+| 大范围复制并长期分叉 | 大量执行逻辑都要改变 | 持续合并上游页面、角色、模型和框架更新 | 当前需求不足以证明有必要 |
+
+关键迁移约束：
+
+1. **预算必须由执行侧落实。** 在界面显示“最多20电量”或超时调用 stop，不能保证上游已开始的体力计划不超支。需要核对体力计划参数、补电开关和每次出战前后的登记；必要时做应用插件。不能把 AutoZZZ 的本地账本直接当成对另一个执行器的约束。
+2. **JSON 策略与 YAML 条件策略分别处理。** 自动识别格式、显示原始来源；不兼容内容应报错或交给高级编辑，不静默降级。
+3. **同一时刻只有一个执行器发送游戏输入。** 旧 Runner 与上游后端的互斥不能只靠各自内部锁；迁移期需明确执行来源与运行句柄。
+4. **先保留原程序和配置。** 数据迁移另存新配置并能回退，用户已有账户、队名和策略不应被首次连接覆盖。
+5. **固定并显示上游版本。** 适配器先检测功能与字段，不能假设未来上游 `main` 始终兼容。测试通过后再更新所支持的快照。
+
+### 六、应保留、复用和逐步替换的内容
+
+| 处理方式 | 内容 |
+| --- | --- |
+| 保留为产品要求与回归样例 | 每日完成的证据、区服和队伍误选防护、运行前计划预览、预算与未结算语义、失败原因和恢复提示、已有脱敏截图 |
+| 优先复用上游 | 页面与传送数据、角色/技能状态、自动战斗、复杂玩法、账号实例、模型资源和应用框架 |
+| 通过测试后逐步替换 | AutoZZZ 重复的截图/输入层、日常导航、怪物卡配置、固定序列执行器；不一次性删除可回退实现 |
+| 需要重新设计而非直接复制 | Tkinter 自绘界面与 Qt 组件的衔接、JSON 到 YAML 的编辑体验、上游结果到 AutoZZZ 目标完成状态的映射 |
+
+### 七、复用与署名
+
+AutoZZZ 现有许可为 `GPL-3.0-only`；研究快照的一条龙仓库包含 GPLv3 许可证文本。复用时按实际引入的文件记录上游版本、原作者、许可和修改，分发修改版时保留相应许可与对应源码。仓库名称、标志、模型、字体和游戏画面素材需分别核对权利说明，不能从代码许可证推定所有素材均归项目所有。既有 5 张模板的署名继续保留，不因本次重启而删除。[LICENSE_NOTICE.md](LICENSE_NOTICE.md)、[上游 LICENSE](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/LICENSE)
+
+README 的“基于一条龙二次开发”描述今后的定位；只有实际完成引入、适配和验证之后，才能逐项说明哪些执行能力已经来自上游。
+
+### 八、下一阶段最小验证范围
+
+1. 建立只读连接：显示后端是否就绪、上游版本、当前实例、应用和编队；连接失败不修改配置。
+2. 做一个完整的“零电量每日”方案预览与单应用执行，核对计划、实际任务、停止及报告是否一致。
+3. 将“每日目标已完成”和“任务组结束”分开映射，再接入周纪/城募收尾与异常恢复。
+4. 加入编队与策略预览，最后迁移战斗。先验证执行侧预算和禁止补电，再做消耗电量的实机试验。
+
+本次交付为 README 路线更新及源码对比报告；没有改动自动化执行代码，没有启动游戏，也没有把两项目集成状态标成已完成。
+
+### 可复核的源码与文档
+
+AutoZZZ 当前源码：
+
+- **[A1] 执行与完成判定**：[app.py](autozzz/app.py)、[workflows.py](autozzz/workflows.py)、[models.py](autozzz/models.py)。
+- **[A2] 识别与输入**：[vision.py](autozzz/vision.py)、[windows.py](autozzz/windows.py)、[policy.py](autozzz/policy.py)。
+- **[A3] 战斗与策略**：[battle.py](autozzz/battle.py)、[battle_engine.py](autozzz/battle_engine.py)、[battle_strategy.py](autozzz/battle_strategy.py)、[battle_budget.py](autozzz/battle_budget.py)、[BATTLE.md](BATTLE.md)。
+- **[A4] 区服与配置**：[config.py](autozzz/config.py)。
+- **[A5] 桌面与反馈**：[desktop.py](autozzz/desktop.py)、[battle_ui.py](autozzz/battle_ui.py)、[ux.py](autozzz/ux.py)、[overlay.py](autozzz/overlay.py)。
+- **[A6] 环境与构建**：[requirements.txt](requirements.txt)、[build.ps1](tools/build.ps1)。
+- **[A7] 验收与测试**：[VALIDATION.md](VALIDATION.md)、[tests](tests)、[battle_gui_smoke.py](tools/battle_gui_smoke.py)。
+
+一条龙固定快照：
+
+- **[U1] 玩法模块**：[application 目录](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application)。
+- **[U2] 框架、应用组与账号**：[架构说明](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/one_dragon/one_dragon_architecture.md)、[插件开发](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/guides/application_plugin_guide.md)。
+- **[U3] 页面与区域**：[screen_info 目录](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59/assets/game_data/screen_info)。
+- **[U4] 条件战斗**：[条件操作机制](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/one_dragon/modules/conditional_operation.md)、[AutoBattleOperator](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/auto_battle/auto_battle_operator.py)、[闪避上下文](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/auto_battle/auto_battle_dodge_context.py)。
+- **[U5] 副本计划**：[ChargePlanConfig](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application/charge_plan/charge_plan_config.py)、[预编队页面](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/gui/view/one_dragon/predefined_team_interface.py)。
+- **[U6] 窗口与后台模式**：[PcControllerBase](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/one_dragon/base/controller/pc_controller_base.py)、[官方游戏设置说明](https://one-dragon.com/zzz/zh/setting/setting_game.html)。
+- **[U7] 桌面与反馈**：[GUI 入口](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/gui/app.py)、[运行前检查](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/gui/dialog/pre_flight_check_dialog.py)、[DebugTraceBus](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/one_dragon/modules/debug_trace_bus.md)。
+- **[U8] 每日奖励**：[EngagementRewardApp](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application/engagement_reward/engagement_reward_app.py)。
+- **[U9] 现有集成接口**：[HTTP 应用接口](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/backend/http/service_routes.py)、[游戏接口](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/backend/http/routes.py)、[服务入口](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/backend/entry/server.py)、[状态结构](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/backend/schemas.py)。
+- **[U10] 环境与安装**：[pyproject.toml](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/pyproject.toml)、[官方快速开始](https://one-dragon.com/zzz/zh/quickstart.html)、[必要设置](https://one-dragon.com/zzz/zh/config.html)。
+- **[U11] 测试边界**：[测试方法](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/testing/README.md)、[该快照 CI 配置](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/.github/workflows/test-check.yml)。
+
+[A1]: autozzz/app.py
+[A2]: autozzz/vision.py
+[A3]: BATTLE.md
+[A4]: autozzz/config.py
+[A5]: autozzz/desktop.py
+[A6]: requirements.txt
+[A7]: VALIDATION.md
+[U1]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application
+[U2]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/one_dragon/one_dragon_architecture.md
+[U3]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59/assets/game_data/screen_info
+[U4]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/one_dragon/modules/conditional_operation.md
+[U5]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application/charge_plan/charge_plan_config.py
+[U6]: https://one-dragon.com/zzz/zh/setting/setting_game.html
+[U7]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/gui/app.py
+[U8]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/application/engagement_reward/engagement_reward_app.py
+[U9]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/src/zzz_od/backend/http/service_routes.py
+[U10]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/pyproject.toml
+[U11]: https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/blob/f80b68456306d2afb97be72436dcda27f2ed6b59/docs/develop/testing/README.md
+
+---
+
+## 历史记录：绝区零非战斗每日参考研究
 
 本文历史实机证据链接指向原校准机器的 `runs/`；这些截图 / 日志不随 Git 仓库分发。可共享的脱敏回放素材位于 `tests/fixtures/`。
 

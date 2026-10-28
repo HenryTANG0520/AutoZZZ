@@ -1,6 +1,16 @@
 # AutoZZZ
 
-> **本项目已停止开发（2026-10-26）。** 不再开发新功能、修复问题或适配后续游戏版本。现有源码与文档保留，供学习和参考。
+> **本项目于 2026-10-28 恢复开发。** 后续以完善交互设计为重点，开发方向转向基于[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)的二次开发。现有代码尚未完成向上游执行框架的迁移。
+
+## 开发缘起与方向
+
+2026-10-28 以前，AutoZZZ 最初的设计仅受 [BetterGI](https://github.com/babalae/better-genshin-impact) 启发，主要参考其“屏幕识别 → 判断 → 模拟键鼠输入”的 I/O 交互逻辑，希望独立实现绝区零每日自动化。实现底座来自 AutoHSR；此前研究过程中也参考了[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)的流程，并引用了已署名的少量模板，具体来源保留在 [LICENSE_NOTICE.md](LICENSE_NOTICE.md)。
+
+在知晓[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)已经提供完善的自动化能力后，我们一度认为继续重复实现这些能力，已使 AutoZZZ 作为独立项目失去存在价值，因此于 2026-10-26 宣布停止开发。
+
+实际尝试绝区零一条龙后，我们希望进一步完善交互设计，于今日重新启动项目。**自 2026-10-28 起，AutoZZZ 的开发将更多地定位为基于[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)的二次开发**，重点探索更易理解的任务配置、策略管理、运行反馈与问题恢复。复用上游成果时保留原有署名、许可证及修改说明。
+
+当前差异、可复用能力与迁移建议见[项目对比研究报告（2026-10-28）](REFERENCE_RESEARCH.md#comparison-20261028)。以下功能说明描述现有实现，不代表已经接入一条龙后端。
 
 通过游戏客户区截图、OCR / 图标识别和 Windows 鼠标键盘输入，执行《绝区零》每日任务及独立预输入战斗的桌面助手。参考 BetterGI 的屏幕识别原理，并从本机 AutoHSR 项目的窗口控制、OCR、运行控制与 GUI 基础发展而来。
 
