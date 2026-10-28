@@ -18,6 +18,10 @@ class ExecutionWindow:
         self.closed=self.closing=self.busy=self.prepared=self.connected=False
         self.paused=False
         self.bootstrapping=False
+        self.loading_account=True
+        self.account_name=""
+        self.instance_idx=None
+        self.application_states={}
         self.last_state={}
         self.last_report=None
         self.poll_token=None
@@ -48,7 +52,8 @@ class ExecutionWindow:
         header.grid(row=0,column=0,sticky="ew")
         header.columnconfigure(0,weight=1)
         ttk.Label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
-        ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel").grid(row=0,column=1,sticky="e")
+        self.account_badge=ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel")
+        self.account_badge.grid(row=0,column=1,sticky="e")
         settings=ttk.Frame(self.window,padding=(d(18),0,d(18),d(12)))
         settings.grid(row=1,column=0,sticky="ew")
         settings.columnconfigure(1,weight=1)
@@ -109,6 +114,7 @@ class ExecutionWindow:
         self.window.bind("<F10>",lambda _:self.stop())
         if app_id in ("auto_battle","dodge_assistant"):
             self.write("战斗助手需先在游戏中进入战斗；自动选本请使用体力刷本。")
+        if app_id=="one_dragon":self.write("本次运行当前账号配置的默认应用组。")
         self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
         self.worker=self.session.worker
         self.update_buttons()
@@ -142,13 +148,13 @@ class ExecutionWindow:
         self.log.configure(state="disabled")
 
     def update_buttons(self):
-        self.prepare_button.state(["!disabled"] if self.connected and not self.busy and not self.closing else ["disabled"])
+        self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
         self.start_button.state(["!disabled"] if self.connected and self.prepared and not self.busy and not self.closing else ["disabled"])
         self.pause_button.state(["!disabled"] if self.busy and (self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
         self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
         self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
         self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
-        for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing else ["!disabled"])
+        for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing or self.loading_account else ["!disabled"])
         if self.uses_charge:self.budget_frame.grid()
         else:self.budget_frame.grid_remove()
 
@@ -161,7 +167,7 @@ class ExecutionWindow:
         self.busy=True
         self.prepared=False
         self.status.set("正在准备运行环境")
-        self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get())
+        self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get(),instance_idx=self.instance_idx,instance_name=self.account_name)
         self.update_buttons()
 
     def start(self):
@@ -198,6 +204,21 @@ class ExecutionWindow:
                 kind=event["type"]
                 if kind=="connected":
                     self.connected=True
+                    self.status.set("正在读取当前账号配置")
+                    self.session.send("rpc",method="account_list",tag="run-account-list",params={})
+                elif kind=="rpc_result" and event["tag"]=="run-account-list":
+                    snapshot=event["result"]
+                    self.instance_idx=snapshot["current"]
+                    self.account_name=next(item["name"] for item in snapshot["instances"] if item["idx"]==snapshot["current"])
+                    self.session.send("rpc",method="account_describe",tag="run-account",params=dict(idx=snapshot["current"],server=self.profile))
+                elif kind=="rpc_result" and event["tag"]=="run-account":
+                    result=event["result"]
+                    if result["path_configured"]:self.game_path.set(result["values"]["game_path"])
+                    self.region.set(result["values"]["game_region"])
+                    name=self.account_name if len(self.account_name)<=16 else self.account_name[:16]+"…"
+                    self.account_badge.configure(text=("国服" if self.profile=="cn" else "国际服")+" · "+name)
+                    self.write("当前账号配置："+self.account_name)
+                    self.loading_account=False
                     self.status.set("已连接 · 待准备")
                 elif kind=="window":self.ui.overlay_game_handle=event["handle"]
                 elif kind=="report":
@@ -218,10 +239,17 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    for item in state.get("applications",[]):
+                        if self.application_states.get(item["id"])!=item["state"]:
+                            self.application_states[item["id"]]=item["state"]
+                            label={"pending":"等待","running":"运行中","success":"完成","failed":"失败","skipped":"记录已完成","interrupted":"结果未核实"}.get(item["state"],item["state"])
+                            self.write(item["name"]+" · "+label+(" · "+item["detail"] if item.get("detail") else ""))
                     if state.get("window_handle") is not None:self.ui.overlay_game_handle=state["window_handle"]
                     self.busy=state["busy"]
                     self.bootstrapping=False
                     self.prepared=state["state"]=="prepared"
+                    if self.prepared and self.app_id=="one_dragon":
+                        self.write("执行顺序："+" → ".join(item["name"] for item in state.get("prepared_applications",[])))
                     self.uses_charge=state.get("uses_charge",False)
                     control=state.get("control",{})
                     self.paused=control.get("manual_paused",False)
@@ -242,6 +270,7 @@ class ExecutionWindow:
                     if not self.ui.closing:self.ui.overlay.set_status(name)
                 elif kind=="error":
                     self.busy=event.get("busy",False)
+                    if self.loading_account:self.connected=False
                     if not self.busy:self.bootstrapping=False
                     self.status.set(event["message"][:160])
                     self.write(event["message"])

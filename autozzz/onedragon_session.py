@@ -105,10 +105,13 @@ class RuntimeSession:
         finally:self.runner=None
 
     def _handle(self,client,command,params):
-        if command=="prepare":
+        if command=="rpc":
+            result=self._call(client,params["method"],**params.get("params",{}))
+            self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
+        elif command=="prepare":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
             self.parameters=params
-            result=self._call(client,"initialize_execution",server=params["server"],game_path=params["game_path"],region=params["region"])
+            result=self._call(client,"initialize_execution",server=params["server"],game_path=params["game_path"],region=params["region"],instance_idx=params.get("instance_idx"))
             self.phase="initializing"
             self.job_id=result["job_id"]
             self.emit(dict(type="phase",phase="正在初始化"))

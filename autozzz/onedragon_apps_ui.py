@@ -15,7 +15,7 @@ from .onedragon_runtime import OneDragonClient, RequestPending, RuntimePaths,EXE
 
 
 GROUPS = (
-    ("执行与队伍", ("_group","teams","battle_assistant")),
+    ("执行与队伍", ("one_dragon","_group","teams","battle_assistant")),
     ("日常与奖励", ("daily_signin","scratch_card","hou_hou_bakery","coffee","random_play","engagement_reward","ridu_weekly","city_fund","email","redemption_code")),
     ("战斗与刷本", ("charge_plan","notorious_hunt","shiyu_defense","auto_battle","dodge_assistant","intel_board","life_on_line")),
     ("探索与经营", ("lost_void","withered_domain","suibian_temple","trigrams_collection","world_patrol")),
@@ -27,7 +27,7 @@ NOTES = {
     "drive_disc_dismantle":"拆解后的驱动盘无法恢复。",
     "suibian_temple":"采购等选项会消耗丁尼、观行币等资源。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",
-    "battle_assistant":"条件战斗仍在接入；当前设置尚不用于原预输入战斗。",
+    "battle_assistant":"条件战斗与原 JSON 预输入策略分别保存。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 
@@ -62,9 +62,11 @@ class ApplicationsPanel:
         self.profile_box = ttk.Combobox(heading,textvariable=self.profile,values=["国服","国际服"],state="readonly",width=8)
         self.profile_box.grid(row=0,column=2,sticky="e")
         self.profile_box.bind("<<ComboboxSelected>>",self.change_profile)
+        self.accounts_button=ttk.Button(heading,text="账号…",command=self.accounts)
+        self.accounts_button.grid(row=0,column=3,padx=(d(8),0))
         self.load_button = ttk.Button(heading,text="读取配置",command=self.load)
-        self.load_button.grid(row=0,column=3,padx=(d(10),0))
-        self.controls += [self.profile_box,self.load_button]
+        self.load_button.grid(row=0,column=4,padx=(d(10),0))
+        self.controls += [self.profile_box,self.load_button,self.accounts_button]
         body = ttk.Frame(self.page)
         body.grid(row=1,column=0,sticky="nsew")
         body.columnconfigure(1,weight=1)
@@ -165,13 +167,23 @@ class ApplicationsPanel:
         for widget in self.controls: widget.state(["disabled"] if self.busy else ["!disabled"])
         self.save_button.state(["!disabled"] if self.dirty and not self.busy and self.description is not None else ["disabled"])
         self.reload_button.state(["!disabled"] if self.description is not None and not self.busy else ["disabled"])
-        self.run_button.state(["!disabled"] if self.current_id in EXECUTABLE_APPLICATIONS and not self.busy and not self.dirty else ["disabled"])
+        target="one_dragon" if self.current_id=="_group" else self.current_id
+        self.run_button.configure(text="运行应用组…" if target=="one_dragon" else "运行应用…")
+        self.run_button.state(["!disabled"] if target in EXECUTABLE_APPLICATIONS and not self.busy and not self.dirty else ["disabled"])
 
     def run(self):
-        if self.busy or self.dirty or self.current_id not in EXECUTABLE_APPLICATIONS:return
+        target="one_dragon" if self.current_id=="_group" else self.current_id
+        if self.busy or self.dirty or target not in EXECUTABLE_APPLICATIONS:return
         from .onedragon_run_ui import open_execution
         profile="global" if self.profile.get()=="国际服" else "cn"
-        open_execution(self.ui,self.current_id,self.apps[self.current_id]["name"],profile)
+        open_execution(self.ui,target,self.apps[target]["name"],profile)
+
+    def accounts(self):
+        if self.busy or not self.allow_leave():return
+        from .onedragon_accounts_ui import open_accounts
+        profile="global" if self.profile.get()=="国际服" else "cn"
+        if self.dirty:self._clear()
+        open_accounts(self.ui,profile,lambda:self.load() if not self.closing else None)
 
     def _freeze(self):
         def visit(widget):
@@ -266,7 +278,9 @@ class ApplicationsPanel:
         self.description = copy.deepcopy(description)
         if description is None:
             text="无需单独配置。" if self.current_id in EXECUTABLE_APPLICATIONS else "该应用的专用设置尚在接入。"
-            ttk.Label(self.content,text=text,style="Hint.TLabel").grid(row=0,column=0,sticky="w")
+            if self.current_id=="one_dragon":
+                ttk.Button(self.content,text="编辑执行顺序",command=lambda:self.tree.selection_set("_group")).grid(row=0,column=0,sticky="w")
+            else:ttk.Label(self.content,text=text,style="Hint.TLabel").grid(row=0,column=0,sticky="w")
         else:
             simple = [f for f in description["fields"] if f["kind"] not in COLLECTIONS]
             records = [f for f in description["fields"] if f["kind"] in COLLECTIONS]

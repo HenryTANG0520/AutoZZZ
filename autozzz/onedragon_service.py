@@ -108,6 +108,22 @@ class OneDragonService:
         with profile_lock(self.data):
             return store.options()
 
+    def account_list(self) -> dict:
+        from .onedragon_accounts import AccountStore
+        return AccountStore(self).list()
+
+    def account_action(self,action:str,revision:str,idx:int|None=None,name:str|None=None,enabled:bool|None=None,force_login:bool|None=None) -> dict:
+        from .onedragon_accounts import AccountStore
+        return AccountStore(self).action(action,revision,idx,name,enabled,force_login)
+
+    def account_describe(self,idx:int,server:str) -> dict:
+        from .onedragon_accounts import AccountStore
+        return AccountStore(self).describe(idx,server)
+
+    def account_save(self,idx:int,server:str,revision:str,values:dict) -> dict:
+        from .onedragon_accounts import AccountStore
+        return AccountStore(self).save(idx,server,revision,values)
+
     def set_battle_options(self, values: dict) -> dict:
         self._assert_idle()
         allowed = {"auto_battle_config": str, "use_merged_file": bool, "auto_ultimate_enabled": bool,
@@ -249,11 +265,11 @@ class OneDragonService:
         if self._execution is not None and self._execution.busy:
             raise RuntimeError("一条龙任务仍在处理，暂时不能修改或重载配置。")
 
-    def initialize_execution(self, server: str, game_path: str, region: str | None = None) -> dict:
+    def initialize_execution(self, server: str, game_path: str, region: str | None = None,instance_idx:int|None=None) -> dict:
         if self._execution is None:
             from .onedragon_execution import OneDragonExecution
             self._execution = OneDragonExecution(self.ctx)
-        return self._execution.initialize(server, game_path, region)
+        return self._execution.initialize(server, game_path, region,instance_idx)
 
     def execution_status(self) -> dict:
         if self._execution is None:
@@ -323,4 +339,4 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
            "policy_save", "policy_check", "set_battle_options", "initialize_execution",
            "execution_status", "pause_execution", "stop_execution", "runtime_probe",
            "describe_configuration", "save_configuration", "training_options", "configuration_options",
-           "prepare_application", "start_application"}
+           "prepare_application", "start_application","account_list","account_action","account_describe","account_save"}

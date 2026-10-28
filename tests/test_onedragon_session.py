@@ -106,6 +106,21 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(report['status'],'stopped')
             self.assertTrue(report['process_exited'])
 
+    def test_configuration_rpc_keeps_original_request_and_does_not_create_run_report(self):
+        events=queue.Queue()
+        with tempfile.TemporaryDirectory() as folder,patch("autozzz.onedragon_session.OneDragonClient",Client):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                self.wait_event(events,lambda event:event['type']=='connected')
+                session.send('rpc',method='account_list',tag='accounts',params={})
+                event=self.wait_event(events,lambda event:event['type']=='rpc_result')
+                self.assertEqual(event['tag'],'accounts')
+                self.assertEqual([method for method,_ in Client.instances[-1].calls].count('account_list'),1)
+                self.assertEqual(list(Path(folder).rglob('report.json')),[])
+            finally:
+                session.close()
+                session.worker.join(5)
+
     @staticmethod
     def wait_event(events,predicate):
         deadline=time.monotonic()+5

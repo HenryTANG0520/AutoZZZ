@@ -33,6 +33,9 @@ class OneDragonExecution:
         self.battle_control = BattleInputControl(ctx,self.control)
         self.battle_control.install()
         self.prepared_app = self.prepared_hash = ""
+        self.prepared_applications=[]
+        self.group_control=None
+        self.connection=None
         self.uses_charge = False
         self.charge_control = None
         self.active_seconds,self.time_limit,self.time_limited = 0.,600,False
@@ -89,7 +92,7 @@ class OneDragonExecution:
             self.worker.start()
             return self.status()
 
-    def initialize(self, server: str, game_path: str, region: str | None = None) -> dict:
+    def initialize(self, server: str, game_path: str, region: str | None = None,instance_idx:int|None=None) -> dict:
         if server not in ("cn", "global"):
             raise ValueError("区服必须为 cn 或 global。")
         from .config import Settings
@@ -98,14 +101,20 @@ class OneDragonExecution:
         if game.name.casefold() != "zenlesszonezero.exe" or not game.is_file():
             raise ValueError("请选择有效的 ZenlessZoneZero.exe。")
         region = region or ("cn" if server == "cn" else "asia")
-        if region not in (("cn",) if server == "cn" else ("us", "eu", "asia", "twhkmo")):
+        if region not in (("cn","cn_b") if server == "cn" else ("us", "eu", "asia", "twhkmo")):
             raise ValueError("客户端与游戏服务器不匹配。")
+        if instance_idx is not None and type(instance_idx) is not int:raise ValueError("账号配置编号无效。")
         def initialize():
             self.prepared_app=self.prepared_hash=""
             self.ctx.ready_for_application = False
+            self.backend._refresh_runtime_config()
+            if instance_idx is not None and self.ctx.current_instance_idx!=instance_idx:
+                raise ValueError("当前账号配置已变化，请重新打开运行窗口。")
             config = self.ctx.game_account_config
-            config.data.update(game_path=str(game.resolve()), game_region=region, game_language="cn")
+            config.data.update(game_path=str(game.resolve()), game_region=region)
+            config.data.setdefault("game_language","cn")
             config.save()
+            self.connection=(self.ctx.current_instance_idx,config.game_path,config.game_region,config.game_language)
             self.ctx.init()
             if self.cancelled.is_set():
                 self.ctx.ready_for_application = False
@@ -134,13 +143,25 @@ class OneDragonExecution:
         def prepare():
             self.prepared_app=self.prepared_hash=""
             self.backend._refresh_runtime_config()
+            current=self.ctx.game_account_config
+            if self.connection is not None and self.connection!=(self.ctx.current_instance_idx,current.game_path,current.game_region,current.game_language):
+                self.ctx.ready_for_application=False
+                raise ValueError("游戏登录设置已变化，请重新准备运行环境。")
+            self.ctx.on_switch_instance()
             from .onedragon_config import ConfigurationStore
             from types import SimpleNamespace
             store=ConfigurationStore(SimpleNamespace(ctx=self.ctx,data=self.data))
-            charge=store.get("charge_plan")
-            self.uses_charge=app_id=="charge_plan" or (app_id=="coffee" and store.get("coffee").run_charge_plan_afterwards)
+            applications=[app_id]
+            if app_id=="one_dragon":
+                applications=[item.app_id for item in store.get("_group").app_list if item.enabled]
+                if not applications:raise ValueError("请先在执行顺序中启用应用。")
+                unsupported=[self.ctx.run_context.get_application_name(key) for key in applications if key not in EXECUTABLE_APPLICATIONS]
+                if unsupported:raise ValueError("以下应用的执行适配尚未完成："+"、".join(unsupported))
+            self.prepared_applications=applications
+            self.uses_charge="charge_plan" in applications or ("coffee" in applications and store.get("coffee").run_charge_plan_afterwards)
             policies=[]
             if self.uses_charge:
+                charge=store.get("charge_plan")
                 from .onedragon_charge import ChargeBudgetControl
                 if charge.restore_charge!="不使用":raise ValueError("本轮仅使用现有电量，请将补充电量方式设为“不使用”。")
                 plans=charge.plan_list+([charge.combat_simulation_double_reward_config] if charge.double_reward else [])
@@ -153,8 +174,8 @@ class OneDragonExecution:
                     if error:raise ValueError(error)
                     policy=plan.auto_battle_config if plan.predefined_team_idx==-1 else self.ctx.team_config.team_list[plan.predefined_team_idx].auto_battle
                     policies.append(("auto_battle",policy))
-            if app_id=="auto_battle":policies.append(("auto_battle",self.ctx.battle_assistant_config.auto_battle_config))
-            if app_id=="dodge_assistant":policies.append(("dodge",self.ctx.battle_assistant_config.dodge_assistant_config))
+            if "auto_battle" in applications:policies.append(("auto_battle",self.ctx.battle_assistant_config.auto_battle_config))
+            if "dodge_assistant" in applications:policies.append(("dodge",self.ctx.battle_assistant_config.dodge_assistant_config))
             from one_dragon.base.conditional_operation.loader import ConditionalOperatorLoader
             for directory,name in sorted(set(policies)):
                 path=Path(ConditionalOperatorLoader.get_yaml_file_path([directory],name,self.ctx.battle_assistant_config.use_merged_file))
@@ -188,18 +209,24 @@ class OneDragonExecution:
             with RunLock():
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
                 self.charge_control=None
-                if self.uses_charge:
-                    from .battle_budget import BattleBudget,budget_directory
-                    from .onedragon_charge import ChargeBudgetControl
-                    server="global" if self.ctx.game_account_config.game_region!="cn" else "cn"
-                    ledger=BattleBudget(budget_directory(),budget["id"],server,budget["allowance"],budget["battle_limit"])
-                    self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"])
-                    self.charge_control.install()
+                self.group_control=None
                 try:
+                    if app_id=="one_dragon":
+                        from .onedragon_group import GroupRunControl
+                        self.group_control=GroupRunControl(self.ctx,self.control,self.prepared_applications)
+                        self.group_control.install()
+                    if self.uses_charge:
+                        from .battle_budget import BattleBudget,budget_directory
+                        from .onedragon_charge import ChargeBudgetControl
+                        server="cn" if self.ctx.game_account_config.game_region in ("cn","cn_b") else "global"
+                        ledger=BattleBudget(budget_directory(),budget["id"],server,budget["allowance"],budget["battle_limit"])
+                        self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"])
+                        self.charge_control.install()
                     self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
                     self._run_bound_app(app_id)
                 finally:
                     if self.charge_control is not None:self.charge_control.close()
+                    if self.group_control is not None:self.group_control.close()
         return self._submit("running", run)
 
     def _run_bound_app(self,app_id:str) -> None:
@@ -263,6 +290,8 @@ class OneDragonExecution:
             result = dict(job_id=self.job_id, state=self.state, busy=self.busy,
                           ready=bool(self.ctx.ready_for_application), error=self.error)
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
+            result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
+            if self.group_control is not None:result["applications"]=self.group_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
             bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
             result["window_handle"]=None if bound is None else bound.hwnd

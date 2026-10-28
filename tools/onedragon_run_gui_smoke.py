@@ -38,6 +38,10 @@ class Session:
         self.emit(dict(type="closed"))
     def send(self,command,**params):
         self.commands.append((command,params))
+        if command=="rpc":
+            result=dict(current=1,instances=[dict(idx=1,name="离线账号"*20)]) if params["method"]=="account_list" else dict(path_configured=False,values=dict(game_region="cn"))
+            self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
+            return
         if command=="prepare":self.state.update(state="prepared",busy=False)
         elif command=="start":self.state.update(state="running",busy=True)
         self.emit(dict(type="state",state=copy.deepcopy(self.state)))
@@ -68,7 +72,7 @@ def main():
                 window=ExecutionWindow(ui,'charge_plan','体力刷本','cn')
                 ui.execution_window=window
                 try:
-                    pump(root,lambda:window.connected)
+                    pump(root,lambda:window.connected and not window.loading_account)
                     for size in ('default','minimum'):
                         if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
                         root.update()
@@ -132,7 +136,7 @@ def main():
             window=ExecutionWindow(ui,'email','邮件','cn')
             ui.execution_window=window
         try:
-            pump(root,lambda:window.connected,timeout=45)
+            pump(root,lambda:window.connected and not window.loading_account,timeout=45)
             window.prepare_button.invoke()
             pump(root,lambda:window.prepared or (not window.busy and '失败' in window.status.get()),timeout=90)
             assert window.prepared,window.status.get()
@@ -158,7 +162,7 @@ def main():
         with patch('autozzz.onedragon_run_ui.RuntimeSession',Session):
             window=ExecutionWindow(ui,'charge_plan','体力刷本','cn')
         ui.execution_window=window
-        pump(root,lambda:window.connected)
+        pump(root,lambda:window.connected and not window.loading_account)
         window.prepare_button.invoke()
         pump(root,lambda:window.prepared)
         window.auto_launch.set(False)

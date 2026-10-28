@@ -134,6 +134,7 @@ class ScalarForm:
             else:
                 variable = tk.StringVar(line,str(value or "") if kind=="str" else str(value))
                 widget = ttk.Entry(line,textvariable=variable,width=24)
+                if kind=="secret":widget.configure(show="●")
                 def reader(variable=variable, kind=kind, label=field["label"]):
                     text = variable.get()
                     try: return int(text) if kind=="int" else float(text) if kind=="float" else text

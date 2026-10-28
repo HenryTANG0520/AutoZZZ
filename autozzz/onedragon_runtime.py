@@ -17,7 +17,7 @@ UPSTREAM_REVISION = "f80b68456306d2afb97be72436dcda27f2ed6b59"
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 EXECUTABLE_APPLICATIONS = frozenset({"daily_signin","scratch_card","hou_hou_bakery","random_play","engagement_reward","ridu_weekly","city_fund",
-    "email","coffee","trigrams_collection","predefined_team_checker","mouse_sensitivity_checker","auto_battle","dodge_assistant","screenshot_helper","charge_plan"})
+    "email","coffee","trigrams_collection","predefined_team_checker","mouse_sensitivity_checker","auto_battle","dodge_assistant","screenshot_helper","charge_plan","one_dragon"})
 
 
 class RuntimeUnavailable(RuntimeError):
