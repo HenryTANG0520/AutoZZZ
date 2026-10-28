@@ -17,6 +17,8 @@ class ApplicationRequirements:
         self.contexts: set[str] = set()
         self.challenges: dict[str, str] = {}
         self.routes: list[str] = []
+        self.scripts: list[dict] = []
+        self.shortcuts: dict[str, str] = {}
         self.uses_charge = False
 
     def policy(self, name: str, directory: str = "auto_battle") -> None:
@@ -83,6 +85,26 @@ class ApplicationRequirements:
                 config = self.store.get(app_id)
                 self.policy(config.auto_battle)
                 self._world_patrol(config)
+            elif app_id == "commission_assistant":
+                from .onedragon_assistant import validate_shortcuts
+                config=self.store.get(app_id)
+                validate_shortcuts(config)
+                self.shortcuts=dict(dodge=config.dodge_switch,battle=config.auto_battle_switch)
+                self.policy(config.auto_battle)
+                self.policy(config.dodge_config,"dodge")
+                hollow=self.store.get("withered_domain")
+                challenge=self.challenge("hollow_zero_challenge",hollow.challenge_config)
+                self.policy(challenge.auto_battle)
+                self.contexts.add("withered_domain")
+                self.models.add("hollow_zero_event")
+            elif app_id == "life_on_line":
+                config=self.store.get(app_id)
+                if config.predefined_team_idx!=-1:
+                    teams=self.ctx.team_config.team_list
+                    if type(config.predefined_team_idx)is not int or not 0<=config.predefined_team_idx<len(teams):raise ValueError("预编队伍位置无效。")
+                self.scripts.append(dict(kind="key_sim",name="真拿命验收",app_id=app_id))
+            elif app_id == "operation_debug":
+                self.scripts.append(dict(kind="operation_template",name=self.store.get(app_id).operation_template))
 
     def _charge(self) -> None:
         from .onedragon_charge import ChargeBudgetControl
@@ -137,6 +159,14 @@ class ApplicationRequirements:
             path = Path(selected).resolve()
             if path.parent != (self.data / "config" / directory).resolve() or not path.is_file():
                 raise ValueError("战斗策略不存在：" + name)
+        from .onedragon_scripts import compile_key_sim,compile_operation_template
+        for script in self.scripts:
+            def compile(script=script):
+                operations=compile_key_sim(self.ctx,script["name"],script["app_id"]) if script["kind"]=="key_sim" else compile_operation_template(self.ctx,script["name"])
+                try:script["operations"]=len(operations)
+                finally:
+                    for operation in operations:operation.dispose()
+            step("键鼠指令 · "+script["name"],compile)
         if "lost_void" in self.contexts:
             step("迷失之地 · 挑战方案与鸣徽", self.ctx.lost_void.init_before_run)
         elif "lost_void_det" in self.models:
@@ -159,4 +189,4 @@ class ApplicationRequirements:
     def summary(self) -> dict:
         return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
                     models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
-                    challenges=dict(self.challenges), routes=list(self.routes))
+                    challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts))

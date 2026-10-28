@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import argparse
 import json
 from pathlib import Path
 import shutil
@@ -39,7 +40,12 @@ class Session:
     def send(self,command,**params):
         self.commands.append((command,params))
         if command=="rpc":
-            result=dict(current=1,instances=[dict(idx=1,name="离线账号"*20)]) if params["method"]=="account_list" else dict(path_configured=False,values=dict(game_region="cn"))
+            if params["method"]=="set_assistant_mode":
+                assert params['params']['job_id']==self.state['job_id']
+                self.state['assistant']['mode']=params['params']['mode']
+                result=copy.deepcopy(self.state)
+            else:
+                result=dict(current=1,instances=[dict(idx=1,name="离线账号"*20)]) if params["method"]=="account_list" else dict(path_configured=False,values=dict(game_region="cn"))
             self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
             return
         if command=="prepare":self.state.update(state="prepared",busy=False)
@@ -55,6 +61,10 @@ class Session:
 
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--screenshots',type=Path)
+    output=parser.parse_args().screenshots
+    if output is not None:output.mkdir(parents=True,exist_ok=True)
     cases=[]
     with tempfile.TemporaryDirectory(prefix="autozzz-run-ui-") as folder:
         root_path=Path(folder)
@@ -128,6 +138,41 @@ def main():
                         root.update()
                         layout(window.window)
                         cases.append([scale,size,'global'])
+                    window.close()
+                    pump(root,lambda:window.closed)
+                    window.worker.join(1)
+                    window=ExecutionWindow(ui,'commission_assistant','委托助手','cn')
+                    ui.execution_window=window
+                    pump(root,lambda:window.connected and not window.loading_account)
+                    assert not window.auto_launch.get()
+                    assert window.mode_selector.instate(['disabled'])
+                    window.session.state.update(job_id='same-assistant-job',state='running',busy=True,
+                                                uses_charge=False,assistant=dict(mode=0,keys=dict(dodge='5',battle='6')))
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.busy)
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update()
+                        layout(window.window)
+                        cases.append([scale,size,'commission'])
+                        if output is not None and scale==1. and size=='default':
+                            from PIL import ImageGrab
+                            ImageGrab.grab(window=window.window.winfo_id()).save(output/'commission-run.png')
+                    assert not window.mode_selector.instate(['disabled'])
+                    assert window.mode_labels==['对话','闪避（5）','战斗（6）']
+                    window.mode.set('战斗（6）')
+                    window.mode_selector.event_generate('<<ComboboxSelected>>')
+                    pump(root,lambda:window.last_state['assistant']['mode']==2)
+                    window.pause_button.invoke()
+                    pump(root,lambda:window.paused)
+                    window.mode.set('闪避（5）')
+                    window.mode_selector.event_generate('<<ComboboxSelected>>')
+                    pump(root,lambda:window.last_state['assistant']['mode']==1)
+                    assert window.paused
+                    window.stop_button.invoke()
+                    pump(root,lambda:not window.busy)
+                    assert window.mode_selector.instate(['disabled'])
+                    assert not errors,errors
                     window.close()
                     pump(root,lambda:window.closed)
                     window.worker.join(1)

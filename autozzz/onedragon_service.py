@@ -289,6 +289,10 @@ class OneDragonService:
             raise RuntimeError("当前没有一条龙执行任务。")
         return self._execution.pause(paused)
 
+    def set_assistant_mode(self,mode:int,job_id:str) -> dict:
+        if self._execution is None:raise RuntimeError("委托助手尚未开始。")
+        return self._execution.set_assistant_mode(mode,job_id)
+
     def stop_execution(self) -> dict:
         if self._execution is None:
             return self.execution_status()
@@ -345,6 +349,6 @@ class OneDragonService:
 
 METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_validate",
            "policy_save", "policy_check", "set_battle_options", "initialize_execution",
-           "execution_status", "pause_execution", "stop_execution", "runtime_probe",
+           "execution_status", "pause_execution", "stop_execution", "runtime_probe","set_assistant_mode",
            "describe_configuration", "save_configuration", "training_options", "configuration_options",
            "prepare_application", "start_application","account_list","account_action","account_describe","account_save"}

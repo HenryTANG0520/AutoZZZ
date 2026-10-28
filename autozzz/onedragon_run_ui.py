@@ -42,7 +42,7 @@ class ExecutionWindow:
         self.region=tk.StringVar(self.window,"cn" if profile=="cn" else "asia")
         self.traces=[(var,var.trace_add("write",self.connection_changed)) for var in (self.game_path,self.region)]
         self.window.bind("<Destroy>",self.disposed,add="+")
-        self.auto_launch=tk.BooleanVar(self.window,True)
+        self.auto_launch=tk.BooleanVar(self.window,app_id not in ("auto_battle","dodge_assistant","commission_assistant","operation_debug"))
         self.timeout=tk.StringVar(self.window,"600")
         self.allowance=tk.StringVar(self.window,"20")
         self.rounds=tk.StringVar(self.window,"1")
@@ -75,8 +75,11 @@ class ExecutionWindow:
             region.pack(side="right")
             self.settings_controls.append(region)
             ttk.Label(row,text="账号时区").pack(side="right",padx=d(8))
-        self.budget_frame=ttk.LabelFrame(self.window,text="本轮战斗预算",padding=d(12))
-        self.budget_frame.grid(row=2,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
+        self.options=ttk.Frame(self.window)
+        self.options.grid(row=2,column=0,sticky="ew")
+        self.options.columnconfigure(0,weight=1)
+        self.budget_frame=ttk.LabelFrame(self.options,text="本轮战斗预算",padding=d(12))
+        self.budget_frame.grid(row=0,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
         for col,(name,var) in enumerate((("总电量上限",self.allowance),("最多场次",self.rounds),("每场电量上限",self.per_battle))):
             ttk.Label(self.budget_frame,text=name).grid(row=0,column=col*2,sticky="w",padx=(0,d(8)))
             entry=ttk.Entry(self.budget_frame,textvariable=var,width=6)
@@ -86,6 +89,14 @@ class ExecutionWindow:
         self.budget_button=ttk.Button(self.budget_frame,text="预算记录…",command=self.budget_records)
         self.budget_button.grid(row=1,column=5,sticky="e",pady=(d(9),0))
         self.settings_controls.append(self.budget_button)
+        self.assistant_frame=ttk.Frame(self.options,padding=(d(18),0,d(18),d(12)))
+        self.assistant_frame.grid(row=1,column=0,sticky="ew")
+        ttk.Label(self.assistant_frame,text="助手模式").pack(side="left",padx=(0,d(12)))
+        self.mode_labels=["对话","闪避","战斗"]
+        self.mode=tk.StringVar(self.window,self.mode_labels[0])
+        self.mode_selector=ttk.Combobox(self.assistant_frame,textvariable=self.mode,values=self.mode_labels,state="readonly",width=16)
+        self.mode_selector.pack(side="left")
+        self.mode_selector.bind("<<ComboboxSelected>>",self.set_assistant_mode)
         area=ttk.Frame(self.window,padding=(d(18),0))
         area.grid(row=3,column=0,sticky="nsew")
         area.columnconfigure(0,weight=1)
@@ -159,6 +170,15 @@ class ExecutionWindow:
         for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing or self.loading_account else ["!disabled"])
         if self.uses_charge:self.budget_frame.grid()
         else:self.budget_frame.grid_remove()
+        assistant=self.last_state.get("assistant",{})
+        if self.app_id=="commission_assistant" or assistant.get("mode") is not None:self.assistant_frame.grid()
+        else:self.assistant_frame.grid_remove()
+        self.mode_selector.state(["!disabled"] if assistant.get("mode") is not None and self.busy and not self.closing else ["disabled"])
+
+    def set_assistant_mode(self,_event=None):
+        if self.mode_selector.instate(["disabled"]):return
+        self.session.send("rpc",method="set_assistant_mode",tag="assistant-mode",
+                          params=dict(mode=self.mode_labels.index(self.mode.get()),job_id=self.last_state.get("job_id","")))
 
     def prepare(self):
         if self.busy or self.closing:return
@@ -222,6 +242,8 @@ class ExecutionWindow:
                     self.write("当前账号配置："+self.account_name)
                     self.loading_account=False
                     self.status.set("已连接 · 待准备")
+                elif kind=="rpc_result" and event["tag"]=="assistant-mode":
+                    self.events.put(dict(type="state",state=event["result"]))
                 elif kind=="window":self.ui.overlay_game_handle=event["handle"]
                 elif kind=="report":
                     from pathlib import Path
@@ -241,6 +263,12 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    assistant=state.get("assistant",{})
+                    keys=assistant.get("keys") or state.get("prepared_requirements",{}).get("shortcuts",{})
+                    self.mode_labels=["对话","闪避"+("（"+keys["dodge"]+"）" if keys.get("dodge") else ""),
+                                      "战斗"+("（"+keys["battle"]+"）" if keys.get("battle") else "")]
+                    self.mode_selector.configure(values=self.mode_labels)
+                    if assistant.get("mode") is not None:self.mode.set(self.mode_labels[assistant["mode"]])
                     for item in state.get("applications",[]):
                         if self.application_states.get(item["id"])!=item["state"]:
                             self.application_states[item["id"]]=item["state"]
@@ -261,6 +289,8 @@ class ExecutionWindow:
                     self.paused=control.get("manual_paused",False)
                     name={"ready":"运行环境已就绪","prepared":"已准备","running":"正在运行","initializing":"正在初始化",
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
+                    if state["state"]=="success" and state.get("redemption"):
+                        name="流程结束 · 兑换奖励到账未核实"
                     if control.get("focus_waiting"):name="等待游戏恢复焦点"
                     if self.paused:name="已暂停"
                     if state.get("time_limited"):name="已达到运行时限"

@@ -28,6 +28,8 @@ NOTES = {
     "suibian_temple":"采购等选项会消耗丁尼、观行币等资源。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",
     "shiyu_defense":"自动扫描游戏内编队并按弱点配队。",
+    "commission_assistant":"模式快捷键使用单键；F9/F10 用于暂停和停止。",
+    "redemption_code":"兑换流程结束后，奖励是否到账仍需核对。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 

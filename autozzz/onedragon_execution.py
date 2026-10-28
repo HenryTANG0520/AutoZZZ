@@ -32,6 +32,13 @@ class OneDragonExecution:
         from .onedragon_battle import BattleInputControl
         self.battle_control = BattleInputControl(ctx,self.control)
         self.battle_control.install()
+        from .onedragon_scripts import ScriptPlaybackControl
+        from .onedragon_assistant import AssistantModeControl
+        from .onedragon_redemption import RedemptionControl
+        self.script_control=ScriptPlaybackControl(self.control)
+        self.assistant_control=AssistantModeControl(ctx,self.control)
+        self.redemption_control=RedemptionControl(self.control)
+        for adapter in (self.script_control,self.assistant_control,self.redemption_control):adapter.install()
         self.prepared_app = self.prepared_hash = ""
         self.prepared_applications=[]
         self.prepared_requirements={}
@@ -119,6 +126,8 @@ class OneDragonExecution:
             self.prepared_applications=[]
             self.uses_charge=False
             self.charge_control=self.group_control=None
+            self.script_control.reset()
+            self.redemption_control.reset()
             self.ctx.ready_for_application = False
             self.backend._refresh_runtime_config()
             if instance_idx is not None and self.ctx.current_instance_idx!=instance_idx:
@@ -209,6 +218,8 @@ class OneDragonExecution:
         def run():
             with RunLock():
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
+                self.script_control.reset()
+                self.redemption_control.reset()
                 self.charge_control=None
                 self.group_control=None
                 try:
@@ -273,6 +284,7 @@ class OneDragonExecution:
                     self.control.toggle_pause()
                 f9 = pressed
                 self.control.poll()
+                self.assistant_control.poll_keys(user32.GetAsyncKeyState)
                 now=time.monotonic()
                 if self.control.status()["state"]=="running":self.active_seconds+=now-previous
                 previous=now
@@ -292,6 +304,7 @@ class OneDragonExecution:
                           ready=bool(self.ctx.ready_for_application), error=self.error)
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
+            result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts))
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
@@ -311,6 +324,11 @@ class OneDragonExecution:
         self.control.set_manual_pause(paused)
         return self.status()
 
+    def set_assistant_mode(self,mode:int,job_id:str) -> dict:
+        if job_id!=self.job_id or self.state!="running" or not self.busy:raise RuntimeError("委托助手任务已结束或已变化。")
+        self.assistant_control.set_mode(mode)
+        return self.status()
+
     def stop(self) -> dict:
         with self.lock:
             active=self.busy and self.state in ("initializing","preparing","running","stopping")
@@ -326,5 +344,6 @@ class OneDragonExecution:
         self.stop()
         if self.worker is not None:
             self.worker.join()  # 初始化下载或运行仍在退出时，保留同一线程与进程。
+        for adapter in (self.redemption_control,self.assistant_control,self.script_control):adapter.close()
         self.adapter.close()
         self.battle_control.close()

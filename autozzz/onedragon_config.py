@@ -332,6 +332,11 @@ class ConfigurationStore:
             if app_id == "battle_assistant" and {"auto_battle_config", "use_merged_file"}&set(values):
                 self.service._policy_validate(values.get("auto_battle_config",config.auto_battle_config),
                                               values.get("use_merged_file",config.use_merged_file))
+            if app_id=="commission_assistant" and {"dodge_switch","auto_battle_switch"}&set(values):
+                from types import SimpleNamespace
+                from .onedragon_assistant import validate_shortcuts
+                validate_shortcuts(SimpleNamespace(dodge_switch=values.get("dodge_switch",config.dodge_switch),
+                                                  auto_battle_switch=values.get("auto_battle_switch",config.auto_battle_switch)))
             target = config.user_config if app_id == "redemption_code" else config
             def apply():
                 for name, value in converted.items():
