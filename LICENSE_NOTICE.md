@@ -4,6 +4,12 @@ Copyright (C) 2026 HenryTANG0520 and AutoZZZ / AutoHSR contributors.
 
 AutoZZZ derives its window capture, OCR, input, configuration, execution-control and desktop scaffolding from the local [AutoHSR](https://github.com/HenryTANG0520/AutoHSR) project at `D:\Projects\AutoHSR`. AutoHSR's source and notice use GNU General Public License version 3 only; AutoZZZ preserves that license, SPDX identifier `GPL-3.0-only`. The full license text is included in [LICENSE](LICENSE).
 
+## OneDragon execution integration (2026-10-28)
+
+The Git submodule [vendor/onedragon](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon/tree/f80b68456306d2afb97be72436dcda27f2ed6b59) pins ZenlessZoneZero-OneDragon at `f80b68456306d2afb97be72436dcda27f2ed6b59`. Its upstream source, license, author credits, strategy metadata and asset notices are retained unchanged. The upstream GPL version 3 license remains in `vendor/onedragon/LICENSE`; game assets and third-party dependencies retain their respective rights and notices.
+
+AutoZZZ adds its own process protocol, separate data-directory initialization, configuration and strategy adapters, and Tk interface in `autozzz/onedragon_*.py`. These integration changes are outside the submodule. The upstream Python environment is installed separately using its pinned lock file. Preserve the submodule revision, original notices, and dependency licenses when distributing an integrated runtime. Integration scope and verification limits are recorded in [ONEDRAGON_INTEGRATION.md](ONEDRAGON_INTEGRATION.md).
+
 AutoZZZ is distributed without warranty. Distribution of modified source or binaries must preserve applicable notices and satisfy the corresponding-source requirements of GPL version 3. Third-party packages retain their own licenses and notices. Game artwork, names and trademarks belong to their respective rights holders; this project is not an official game product.
 
 BetterGI informs the screenshot → recognition → simulated-input design. No BetterGI source file or binary is bundled as part of this initial implementation. AutoHSR's HSR-specific templates are not copied into the ZZZ template set.

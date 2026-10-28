@@ -78,6 +78,10 @@ class BattlePanel:
         buttons=ttk.Frame(page);buttons.grid(row=4,column=0,sticky="w")
         for label,command in (("保存方案",self.save),("读取副本目录",lambda:ui._start("battle_catalog")),("准备队伍（不出战）",lambda:ui._start("battle_prepare")),("开始战斗",lambda:ui._start("battle"))):
             button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
+        from .onedragon_ui import open_strategies
+        self.condition_button = ttk.Button(buttons, text="条件策略…", command=lambda: open_strategies(ui))
+        self.condition_button.pack(side="left", padx=(d(12), 0))
+        ui.setting_controls.append(self.condition_button)
 
     def refresh_strategy_hint(self, *_args):
         selected = bool(self.vars["strategy_file"].get().strip())

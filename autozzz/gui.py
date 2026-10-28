@@ -628,7 +628,9 @@ class AutoZZZWindow:
             self.focus_waiting = False
             self.runner = None
             self._refresh_controls()
-        if self.closing and not worker_alive:
+        strategies = getattr(self, "condition_strategies", None)
+        strategy_worker_alive = strategies is not None and strategies.worker is not None and strategies.worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive:
             self.root.destroy()
             return
         self.root.after(80, self._drain)
@@ -640,6 +642,9 @@ class AutoZZZWindow:
             choice = messagebox.askyesnocancel("保存修改", "配置有未保存修改，关闭前保存吗？", parent=self.root)
             if choice is None or (choice and self._read_settings(save=True, operation="save") is None):
                 return
+        strategies = getattr(self, "condition_strategies", None)
+        if strategies is not None and not strategies.closed and not strategies.close():
+            return
         self.closing = True
         if getattr(self, "overlay", None):
             self.overlay.close()
@@ -647,7 +652,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if self.worker is None or not self.worker.is_alive():
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()):
             self.root.destroy()
 
 

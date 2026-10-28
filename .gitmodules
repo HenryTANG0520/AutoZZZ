@@ -1,0 +1,3 @@
+[submodule "vendor/onedragon"]
+	path = vendor/onedragon
+	url = https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon.git
