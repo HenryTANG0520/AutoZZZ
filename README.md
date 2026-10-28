@@ -12,7 +12,7 @@
 
 当前差异、可复用能力与迁移建议见[项目对比研究报告（2026-10-28）](REFERENCE_RESEARCH.md#comparison-20261028)。以下功能说明描述现有实现，不代表已经接入一条龙后端。
 
-完整迁移范围和验收状态见 [ONEDRAGON_INTEGRATION.md](ONEDRAGON_INTEGRATION.md)。源码开发版已接入固定版本的一条龙独立进程、原生应用配置、条件策略编辑和首批应用运行窗口；完整功能迁移、分发版打包与新执行层实机验收仍在开发。现有每日和 JSON 预输入战斗继续保留。
+完整迁移范围和验收状态见 [ONEDRAGON_INTEGRATION.md](ONEDRAGON_INTEGRATION.md)。源码开发版已接入固定版本的一条龙独立进程、原生应用配置、条件策略编辑和首批应用运行窗口。2026-10-29 已通过国际服异常演练一场 20 电量的条件战斗实测；完整功能迁移、其他应用实机验收与分发版打包仍在开发。现有每日和 JSON 预输入战斗继续保留。
 
 通过游戏客户区截图、OCR / 图标识别和 Windows 鼠标键盘输入，执行《绝区零》每日任务及独立预输入战斗的桌面助手。参考 BetterGI 的屏幕识别原理，并从本机 AutoHSR 项目的窗口控制、OCR、运行控制与 GUI 基础发展而来。
 
@@ -178,6 +178,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -PythonPath "C:\
 关闭执行中的助手会请求停止并等待后台线程结束、保存报告。未点击“保存设置”的表单修改不会写入配置；关闭时可选择保存、放弃或取消。失焦等待期间仍可停止；恢复后旧截图和坐标作废，不重复发送已完成的点击。遇到未知页面或验证失败时，查看报告与截图，恢复主场景后重新检测；不将一次点击当作成功证据。完整流程约束见 [DAILY_FLOW.md](DAILY_FLOW.md)。
 
 ## 命令行与记录
+
+源码版一条龙也可通过 `--onedragon-run` 执行已保存的应用配置，与原生运行窗口共用执行会话和报告。例如，先在“应用 → 体力刷本”保存计划，再运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m autozzz --onedragon-run charge_plan --server global --energy-limit 20 --battle-limit 1 --battle-cost-limit 20
+```
+
+三项预算必须同时明确指定；此入口只使用现有电量，不补充备用电或电池。`--budget-id` 可沿用原预算，待核对出战仍会阻止重开；`--no-auto-launch` 直接使用已进入游戏的窗口。Ctrl+C 请求停止并等待报告落盘。消费或拆解仍须在图形界面核对清单并确认，命令行不会代为确认。
 
 ```powershell
 # 只检测，不点击任务按钮；默认使用国服配置

@@ -318,7 +318,11 @@ class OneDragonService:
             if detector is not None:
                 result=detector.run(np.zeros((1080,1920,3),dtype=np.uint8))
                 detectors[key]=dict(name=detector.model_name,providers=detector.session.get_providers(),objects=len(result.results))
-        return dict(ocr_text=text, controller=type(self.ctx.controller).__name__,
+        controller = self.ctx.controller
+        capture = controller.screenshot_controller
+        return dict(ocr_text=text, controller=type(controller).__name__,
+                    screenshot_window_bound=capture.game_win is controller.game_win and
+                        all(strategy.game_win is controller.game_win for strategy in capture.strategies.values()),
                     window_bound=self.ctx.controller.game_win.bound is not None,
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 

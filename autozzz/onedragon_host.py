@@ -176,6 +176,10 @@ class ManagedController(ZPcController):
         self.keyboard_controller = ControlledKeyboard(control)
         self.btn_controller = self.keyboard_controller
         self.game_win = BoundGameWindow(self.standard_width, self.standard_height)
+        # 上游构造器已把原 game_win 传入截图器及其每个策略；换窗口须同步重建。
+        from one_dragon.base.controller.pc_screenshot.pc_screenshot_controller import PcScreenshotController
+        self.screenshot_controller.cleanup()
+        self.screenshot_controller = PcScreenshotController(self.game_win, self.standard_width, self.standard_height)
 
     def bind(self, game_path: str) -> None:
         from .windows import find_game, user32, kernel32, W, C

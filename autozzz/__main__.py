@@ -30,6 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--battle", action="store_true", help="按独立方案及电量预算执行战斗批次")
     mode.add_argument("--battle-resume", type=Path, help="仅续接报告对应的未完成战斗；不重新出战")
     mode.add_argument("--battle-prepare", action="store_true", help="核实副本与预编队伍；不出战")
+    mode.add_argument("--onedragon-run", metavar="APP_ID", help="运行已保存的一条龙应用配置")
+    parser.add_argument("--energy-limit", type=int, help="一条龙本轮总电量上限")
+    parser.add_argument("--battle-limit", type=int, help="一条龙本轮场次上限")
+    parser.add_argument("--battle-cost-limit", type=int, help="一条龙每场电量上限")
+    parser.add_argument("--budget-id", help="沿用同一电量预算编号；存在待核对出战时仍禁止重开")
+    parser.add_argument("--account-region", choices=("cn", "cn_b", "us", "eu", "asia", "twhkmo"), help="一条龙账号时区")
+    parser.add_argument("--run-timeout", type=int, default=600, help="一条龙运行时限，30—7200 秒")
+    parser.add_argument("--no-auto-launch", action="store_true", help="一条龙直接使用已进入游戏的窗口")
     parser.add_argument("--battle-plan", type=Path, default=ROOT / "battle.json", help="独立战斗配置路径")
     parser.add_argument("--battle-strategy", help="覆盖方案中的策略JSON路径，或builtin:策略名")
     mode.add_argument("--self-test", action="store_true", help="运行源码版离线测试，不访问游戏")
@@ -37,6 +45,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--game-path", help="覆盖所选区服的 ZenlessZoneZero.exe 路径")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="配置 JSON 路径")
     args = parser.parse_args(argv)
+    native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
+    if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.run_timeout != 600):
+        parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
+
+    if args.onedragon_run:
+        try:
+            from .onedragon_cli import run_application
+            from .config import GAME_PATHS
+            if args.server is None:
+                raise ValueError("一条龙命令行运行须明确指定 --server cn 或 global。")
+            result = run_application(args.onedragon_run, server=args.server,
+                game_path=args.game_path or GAME_PATHS[args.server],
+                region=args.account_region or ("cn" if args.server == "cn" else "asia"),
+                allowance=args.energy_limit, battles=args.battle_limit, maximum=args.battle_cost_limit,
+                budget_id=args.budget_id,
+                timeout=args.run_timeout, auto_launch=not args.no_auto_launch,
+                emit=lambda event: print(json.dumps(event, ensure_ascii=False, default=str), file=sys.stderr, flush=True))
+            print(_json(result))
+            return {"success": 0, "stopped": 130}.get(result["state"]["state"], 1)
+        except Exception as exc:
+            print(_json({"error": str(exc)}), file=sys.stderr)
+            return 2
 
     if args.self_test:
         import unittest

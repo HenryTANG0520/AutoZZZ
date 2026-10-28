@@ -46,6 +46,7 @@ def main():
         probe = client.call("runtime_probe", timeout=30)
         assert "400" in probe["ocr_text"], probe
         assert not probe["window_bound"] and not probe["upstream_hotkeys_started"], probe
+        assert probe["screenshot_window_bound"], probe
         try:
             client.call("start_application", app_id="charge_plan")
             raise AssertionError("预算与界面未接入前不能开放游戏执行请求")

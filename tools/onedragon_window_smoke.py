@@ -5,13 +5,16 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendor" / "onedragon" / "src"))
 
 
 def main():
-    from autozzz.onedragon_host import BoundGameWindow
+    import numpy as np
+    from autozzz.onedragon_host import ManagedController
+    from autozzz.onedragon_control import ExecutionControl, WindowState
     from autozzz.windows import GameWindow, kernel32, W, C, user32
     code = '''import ctypes as C,json,sys,os
 from ctypes import wintypes as W
@@ -31,7 +34,13 @@ for command in sys.stdin:
     process = subprocess.Popen([sys.executable, "-u", "-c", code], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    window = BoundGameWindow(1920, 1080)
+    no_op = lambda: None
+    control = ExecutionControl(lambda: WindowState(False, False), no_op, no_op, no_op, no_op)
+    ctx = SimpleNamespace(game_config=SimpleNamespace(get_action_keys=lambda _: {}, get_gamepad_action_keys=lambda: {}),
+                          env_config=SimpleNamespace(screenshot_method="auto"),
+                          project_config=SimpleNamespace(screen_standard_width=1920, screen_standard_height=1080))
+    controller = ManagedController(ctx, control)
+    window = controller.game_win
     try:
         details = json.loads(process.stdout.readline())
         window.bound = GameWindow(details["hwnd"])
@@ -41,6 +50,17 @@ for command in sys.stdin:
         assert window.identity_valid()
         window.init_win()
         assert window.get_hwnd() == details["hwnd"]
+        captured = []
+        for strategy in controller.screenshot_controller.strategies.values():
+            def record(rect, independent=False, strategy=strategy):
+                assert strategy.game_win.get_hwnd() == details["hwnd"]
+                captured.append((rect.width, rect.height))
+                return np.full((rect.height, rect.width, 3), 50, dtype=np.uint8)
+            strategy.capture = record
+        expected = window.win_rect
+        frame = controller.get_screenshot(independent=True)
+        assert frame is not None and frame.shape == (1080, 1920, 3)
+        assert captured == [(expected.width, expected.height)]
         foreground = user32.GetForegroundWindow()
         assert not window.active() and user32.GetForegroundWindow() == foreground
         window.process_id += 1
@@ -58,7 +78,8 @@ for command in sys.stdin:
         assert kernel32.WaitForSingleObject(window.process_handle, 0) == 0
         assert not window.identity_valid()
         print(json.dumps(dict(checks=["exact_window_pid_and_process_handle", "query_does_not_activate",
-                                      "destroyed_window_not_replaced", "terminated_process_stays_invalid"],
+                                      "destroyed_window_not_replaced", "terminated_process_stays_invalid",
+                                      "actual_screenshot_pipeline_uses_retained_window"],
                               game_accessed=False, game_input_sent=False)))
     finally:
         if process.poll() is None:
@@ -67,6 +88,7 @@ for command in sys.stdin:
         process.stdout.close()
         process.stderr.close()
         window.clear_binding()
+        controller.screenshot_controller.cleanup()
 
 
 if __name__ == "__main__":
