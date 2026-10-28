@@ -326,15 +326,15 @@ def _window_identity(root):
     root.bind("<Destroy>", lambda event: root.after_cancel(token) if event.widget is root else None, add="+")
 
 
-def page_heading(parent, title, english, hint, scale):
+def page_heading(parent, title, scale, *, note=None):
     d = lambda n: round(n * scale)
     frame = ttk.Frame(parent)
     frame.grid(row=0, column=0, sticky="ew", pady=(0, d(10)))
     line = ttk.Frame(frame)
     line.pack(fill="x")
     ttk.Label(line, text=title, style="PageTitle.TLabel").pack(side="left")
-    ttk.Label(line, text=" / " + english, style="Kicker.TLabel").pack(side="left", padx=d(12))
-    wrapped_label(frame, text=hint, style="Hint.TLabel").pack(fill="x", pady=(d(4), 0))
+    if note:
+        ttk.Label(line, text=note, style="Hint.TLabel").pack(side="right")
 
 
 def card(parent, scale, *, padding=16):

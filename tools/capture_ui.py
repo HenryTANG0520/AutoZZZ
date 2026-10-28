@@ -25,7 +25,8 @@ def main():
         try:
             ui.overlay.set_enabled(False)
             root.update()
-            for page, name in (("home", "compendium"), ("settings", "settings")):
+            for page, name in (("home", "compendium"), ("tasks", "daily-plan"),
+                               ("combat", "training"), ("settings", "settings")):
                 ui._show_page(page)
                 root.update()
                 ImageGrab.grab(window=root.winfo_id()).save(output / (name+".png"))

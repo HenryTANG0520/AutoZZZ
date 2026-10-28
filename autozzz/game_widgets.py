@@ -14,7 +14,6 @@ class Header(t.Surface):
         p.asset("zzz-logo.png", (22, 12, 61, 51))
         p.text((77, 17), "快捷手册", 27)
         p.text((212, 26), "AUTOZZZ", 14, fill=t.MUTED, latin=True)
-        p.text((p.width - 26, 30), "绳匠的每日委托", 15, fill=t.MUTED, anchor="rm")
         p.line((20, p.height - 2, p.width - 20, p.height - 2), "#252525")
 
 
@@ -139,8 +138,6 @@ class EngagementMeter(t.Surface):
 
 TITLES = {"scratch": "进行一次刮刮卡\n或领取饼铺盲盒", "coffee": "喝一杯咖啡", "video": "让录像店\n开始营业",
           "daily": "领取今日\n活跃度奖励", "weekly": "领取丽都周纪\n已有奖励", "city_fund": "领取丽都城募\n已有奖励"}
-DESCRIPTIONS = {"scratch": "领取当日免费签到奖励", "coffee": "选择今日免费饮品", "video": "按设置选择已拥有宣传员",
-                "daily": "核实 400 活跃与四档奖励", "weekly": "已完成任务与里程奖励", "city_fund": "成长任务与等级回馈"}
 
 
 class TaskBoard(t.Surface):
@@ -262,7 +259,7 @@ class TaskBoard(t.Surface):
         p.box((x+8, y-6, x+31, y+24), 3, fill=t.ORANGE)
         p.text((x+20, y+8), "★", 16, fill=t.BG, anchor="mm")
         p.text((x+40, y+10), "本次委托", 13, fill="#bdbdbd")
-        p.text((x+18, y+43), "自定义日程", 21, stroke=1)
+        p.text((x+18, y+43), "每日计划", 21, stroke=1)
         labels = ("每日签到", "喝杯咖啡", "录像店营业", "活跃度奖励", "丽都周纪", "丽都城募")
         step = min(29, max(20, (bottom-y-125)/6))
         for i, (key, label) in enumerate(zip(self.names, labels)):
@@ -273,7 +270,7 @@ class TaskBoard(t.Surface):
                 p.line((x+21, top+5, x+24, top+8, x+28, top+2), "#333333", 1.5)
             p.text((x+39, top+5), label, 13, anchor="lm", fill="#d2d2cc" if selected else "#737373")
         p.text((x+19, bottom-78), "每日电量消耗  0", 12, fill=t.ACCENT)
-        self._pill(p, (x+14, bottom-44, x+width-14, bottom-12), "修改委托", self.hover == "schedule")
+        self._pill(p, (x+14, bottom-44, x+width-14, bottom-12), "修改计划", self.hover == "schedule")
         self.hitboxes["schedule"] = (x, y, x+width, bottom)
 
     def _task_card(self, p, key, x, y, width, bottom):
@@ -290,9 +287,7 @@ class TaskBoard(t.Surface):
         p.text((x+14, y+9), "进度："+("1 / 1" if done else "— / 1"), 13, fill="#aaaaaa")
         title = p.wrap(TITLES[key], width-31, 21, 3)
         p.text((x+16, y+43), title, 21, stroke=1)
-        p.text((x+16, y+127), p.wrap(DESCRIPTIONS[key], width-32, 12, 2), 12, fill="#9e9e9a")
         p.text((x+17, bottom-111), status, 23, fill=color, stroke=1)
-        p.text((x+17, bottom-80), "DAILY COMMISSION", 8, fill="#a59735", latin=True)
         if done:
             p.asset("daily_completed.png", (x+16, bottom-39, x+36, bottom-19), template=True)
             p.text((x+43, bottom-28), "已完成", 17, fill=t.SUCCESS, anchor="lm")

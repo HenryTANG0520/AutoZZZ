@@ -11,9 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from autozzz import windows  # Establish Windows DPI awareness before creating Tk.
 from autozzz.config import Settings
 from autozzz.gui import AutoZZZWindow
+from autozzz.game_widgets import SettingRow
+from autozzz.theme import bitmap_font
 
 
 def check_layout(widget):
+    if isinstance(widget, SettingRow) and widget.control and widget.control.winfo_ismapped():
+        title_width = bitmap_font(round(17 * widget.scale * 2)).getlength(widget.title) / 2
+        assert 20 * widget.scale + title_width <= widget.control.winfo_x() - 6 * widget.scale, (widget.title, "setting title overlaps editor")
     for child in widget.winfo_children():
         if not child.winfo_ismapped():
             continue

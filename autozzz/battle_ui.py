@@ -29,8 +29,7 @@ class BattlePanel:
             except tk.TclError:pass
         s = ui.ui_scale
         d = lambda n: round(n * s)
-        theme.page_heading(page, "自动战斗", "TRAINING / EXPERIMENTAL",
-                           "先配置并命名预编队伍。按独立预算使用现有电量；无法核实副本或队伍时停止。", s)
+        theme.page_heading(page, "自动战斗（试验）", s, note="仅用现有电量 · 不使用备用电或电池")
         forms = ttk.Frame(page)
         forms.grid(row=1, column=0, sticky="ew")
         for col in (0, 1):
@@ -41,10 +40,10 @@ class BattlePanel:
         if not path.exists():path=RESOURCE_ROOT/"assets"/"training_catalog.json"
         if path.exists():self.catalog=json.loads(path.read_text(encoding="utf-8"))
         groups = (
-            ("01  /  副本与队伍", (("category", "训练分类"), ("subcategory", "子菜单"),
-                ("stage", "目标副本"), ("team", "预编队伍名"), ("expected_roster", "角色顺序（选填）"),
-                ("battles", "场次 · 最多 15"), ("energy_budget", "批次电量 · 最多 300"), ("max_energy", "本次电量上限"))),
-            ("02  /  预输入策略", (("strategy_file", "策略 JSON（选填）"), ("script", "预输入脚本"),
+            ("副本与队伍", (("category", "训练模式"), ("subcategory", "训练项目"),
+                ("stage", "目标副本"), ("team", "游戏内预编队名"), ("expected_roster", "角色顺序（逗号分隔）"),
+                ("battles", "场次 · 1—15"), ("energy_budget", "总电量上限 · 20—300"), ("max_energy", "每场电量上限"))),
+            ("战斗策略", (("strategy_file", "策略文件（选填）"), ("script", "动作序列"),
                 ("hold_unit", "长按单位（秒）"), ("intro_wait", "转场等待（秒）"),
                 ("cycles", "每场脚本轮数"), ("timeout", "结算超时（秒）"))))
         for col, (title, fields) in enumerate(groups):
@@ -64,17 +63,26 @@ class BattlePanel:
                     from .battle_strategy import BUILTINS
                     control.configure(values=("",) + BUILTINS)
             if col == 1:
-                button = ttk.Button(form, text="浏览策略文件  ↗", command=self.browse_strategy)
+                button = ttk.Button(form, text="选择 JSON 文件…", command=self.browse_strategy)
                 button.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="w", pady=(d(9), 0))
                 ui.setting_controls.append(button)
         self.controls["category"].configure(values=CATEGORIES,state="readonly")
         self.controls["category"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("category"))
         self.controls["subcategory"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("subcategory"))
         self.refresh_choices()
-        theme.wrapped_label(page, text="A 普攻 · E / Q 技能 · Space 换人 · h 长按 · | 轮末。结算即释放按键。", style="Hint.TLabel").grid(row=2, column=0, sticky="ew", pady=d(6))
-        buttons=ttk.Frame(page);buttons.grid(row=3,column=0,sticky="w")
-        for label,command in (("保存战斗方案",self.save),("读取训练目录",lambda:ui._start("battle_catalog")),("仅准备（不出战）",lambda:ui._start("battle_prepare")),("开始战斗批次",lambda:ui._start("battle"))):
-            button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗批次" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
+        self.strategy_hint = tk.StringVar(ui.root)
+        theme.wrapped_label(page, textvariable=self.strategy_hint, style="Hint.TLabel").grid(row=2, column=0, sticky="ew", pady=(d(8), d(3)))
+        self.vars["strategy_file"].trace_add("write", self.refresh_strategy_hint)
+        self.refresh_strategy_hint()
+        theme.wrapped_label(page, text="A 鼠标普攻 · E / Q 技能 · Space 换人 · h 长按单位 · - 换人标记 · | 轮末", style="Hint.TLabel").grid(row=3, column=0, sticky="ew", pady=(0, d(10)))
+        buttons=ttk.Frame(page);buttons.grid(row=4,column=0,sticky="w")
+        for label,command in (("保存方案",self.save),("读取副本目录",lambda:ui._start("battle_catalog")),("准备队伍（不出战）",lambda:ui._start("battle_prepare")),("开始战斗",lambda:ui._start("battle"))):
+            button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
+
+    def refresh_strategy_hint(self, *_args):
+        selected = bool(self.vars["strategy_file"].get().strip())
+        self.strategy_hint.set("文件覆盖队名、角色顺序及策略参数；电量上限沿用左侧设置。" if selected else
+                               "角色顺序可留空；策略文件留空时使用当前表单。")
 
     def refresh_choices(self, changed=None):
         group=self.catalog.get(self.vars["category"].get(),{})

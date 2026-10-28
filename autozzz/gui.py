@@ -64,12 +64,12 @@ class AutoZZZWindow:
         self.transition_timeout = tk.StringVar(root, str(self.settings.transition_timeout))
         self.ocr_confidence = tk.StringVar(root, str(self.settings.ocr_confidence))
         self.promoter = tk.StringVar(root, self.settings.promoter)
-        self.promoter_hint = tk.StringVar(root, "留空选择第一位；账号未拥有时回退第一位。")
+        self.promoter_hint = tk.StringVar(root, "输入角色名；留空或未拥有时选第一位。")
         self.status = tk.StringVar(root, "准备就绪")
-        self.summary = tk.StringVar(root, "点击启动游戏进入主界面，或直接开始每日。")
+        self.summary = tk.StringVar(root, "准备就绪")
         self.elapsed = tk.StringVar(root, "00:00")
         self.engagement = tk.StringVar(root, "未验证")
-        self.saved = tk.StringVar(root, "仅“保存设置”写入配置；检测、启动、开始均不保存。")
+        self.saved = tk.StringVar(root, "设置已加载" if self.config_path.exists() else "默认设置")
         self.plan = tk.StringVar(root)
         self.readiness = tk.StringVar(root, "游戏窗口与输入条件：尚未检测")
         self.history_context = tk.StringVar(root, "暂无历史运行记录")
@@ -143,7 +143,7 @@ class AutoZZZWindow:
     def _select_server(self, _event: Any = None) -> None:
         server = next(key for key, label in SERVER_NAMES.items() if label == self.server.get())
         self.game_path.set(GAME_PATHS[server])
-        self.saved.set("区服与游戏路径已修改；本次可用草稿，只有保存设置会写入配置。")
+        self.saved.set("未保存 · 本次使用当前设置")
 
     def _form_signature(self) -> tuple:
         return (self.server.get(), self.game_path.get(), self.auto_launch.get(), self.close_game_on_success.get(), self.overlay_logs.get(), self.action_delay.get(),
@@ -154,7 +154,7 @@ class AutoZZZWindow:
         from .characters import canonical_promoter_name
         try:
             name = canonical_promoter_name(self.promoter.get())
-            text = f"优先选择 {name}；未拥有时选择第一位。" if name else "留空选择第一位；账号未拥有时回退第一位。"
+            text = "未拥有时选第一位。" if name else "输入角色名；留空或未拥有时选第一位。"
             self.promoter_hint.set(text)
             self.promoter_hint_label.configure(foreground=theme.MUTED)
         except (TypeError, ValueError) as exc:
@@ -167,14 +167,13 @@ class AutoZZZWindow:
         return self._form_signature() != self._saved_form
 
     def _update_plan(self):
-        selected = [label for name, label in TASK_NAMES.items() if self.tasks[name].get()]
-        self.plan.set(("自动进入游戏" if self.auto_launch.get() else "使用已打开的游戏") + " · 电量消耗 0 · " + "、".join(selected))
+        self.plan.set(self.server.get() + " · " + ("自动进入游戏" if self.auto_launch.get() else "使用已打开的游戏"))
 
     def _form_changed(self, *_args: Any) -> None:
         if self._form_signature() != self._saved_form:
-            self.saved.set("有未保存修改 · 本次操作使用草稿；仅保存设置会写入配置。")
+            self.saved.set("未保存 · 本次使用当前设置")
         else:
-            self.saved.set("设置与保存值一致 · 检测、启动和开始不会写入配置。")
+            self.saved.set("无未保存修改")
         self._update_plan()
 
     def _choose_game(self) -> None:
@@ -204,9 +203,9 @@ class AutoZZZWindow:
                 self.settings = settings
                 self.promoter.set(settings.promoter)
                 self._saved_form = self._form_signature()
-                self.saved.set(f"配置已保存：{self.config_path}")
+                self.saved.set("设置已保存")
             else:
-                self.saved.set("本次使用当前表单；未写入配置。")
+                self.saved.set("未保存 · 本次使用当前设置" if self.dirty else "无未保存修改")
             return settings
         except (ValueError, TypeError, OSError, StopIteration) as exc:
             self.saved.set("输入未通过检查；配置未改变。")
@@ -226,7 +225,7 @@ class AutoZZZWindow:
             control.configure(state="disabled" if self.busy else ("readonly" if control is self.server_combo else "normal"))
         for button in (self.start_button, self.check_button, self.launch_button):
             button.configure(state="disabled" if self.busy else "normal")
-        self.pause_button.configure(text="继续" if self.paused else "暂停",
+        self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9",
                                     state="normal" if self.running and self.runner is not None and not self.stopping else "disabled")
         self.stop_button.configure(state="normal" if self.busy and not self.stopping else "disabled")
         if hasattr(self, "reward_button"):
@@ -286,10 +285,9 @@ class AutoZZZWindow:
         if operation == "reward_only":
             settings = replace(settings, scratch=False, coffee=False, video=False, daily=True, weekly=False, city_fund=False)
         if hasattr(self, "plan"):
-            self.plan.set("仅补领奖 · 不执行签到、饮品或营业 · 电量消耗 0 · 本次不保存" if operation == "reward_only" else
+            self.plan.set("仅补领奖 · 电量消耗 0" if operation == "reward_only" else
                           ("仅进入游戏，不执行每日" if operation == "enter_game" else
-                           ("自动进入游戏" if settings.auto_launch else "使用已打开的游戏") + " · 电量消耗 0 · " +
-                           "、".join(label for name, label in TASK_NAMES.items() if getattr(settings, name))))
+                           self.server.get() + " · " + ("自动进入游戏" if settings.auto_launch else "使用已打开的游戏")))
         self.runner = None
         self.operation = operation
         self.overlay_game_handle = None
@@ -301,8 +299,7 @@ class AutoZZZWindow:
         self.started_at = time.monotonic()
         entering = operation == "enter_game"
         self.status.set("正在进入游戏" if entering else "正在运行")
-        self.summary.set("正在登录并进入已保存账号；F9 暂停 / 继续，F10 停止。" if entering else
-                         "F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
+        self.summary.set("正在进入游戏" if entering else "正在执行每日 · 电量消耗 0")
         if not entering:
             self.engagement.set("活跃度未验证")
             for name, label in TASK_NAMES.items():
@@ -368,13 +365,16 @@ class AutoZZZWindow:
     def _runtime_status(self) -> None:
         if self.paused:
             self.status.set("已暂停")
-            self.summary.set("任务已暂停；点击继续或按 F9 恢复。")
+            self.summary.set("已暂停")
         elif self.focus_waiting:
             self.status.set("等待游戏回到前台")
-            self.summary.set("游戏窗口失去焦点，操作已暂停；切回绝区零后自动继续，F10 可停止。")
+            self.summary.set("游戏已失焦；切回后自动继续。")
         else:
-            self.status.set("正在进入游戏" if getattr(self, "operation", "daily") == "enter_game" else "正在运行")
-            self.summary.set("F9 暂停 / 继续 · F10 紧急停止 · 按独立预算运行，结算时释放按键" if getattr(self,"operation","") in ("battle","battle_prepare") else "F9 暂停 / 继续 · F10 紧急停止 · 本次执行不消耗体力")
+            operation = getattr(self, "operation", "daily")
+            self.status.set("正在进入游戏" if operation == "enter_game" else "正在运行")
+            self.summary.set("正在进入游戏" if operation == "enter_game" else
+                             "按战斗方案运行" if operation in ("battle", "battle_prepare") else
+                             "正在执行每日 · 电量消耗 0")
 
     def _focus_wait_state(self, waiting: bool) -> None:
         if not self.running or self.stopping or self.closing:

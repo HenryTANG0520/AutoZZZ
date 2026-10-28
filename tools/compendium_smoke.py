@@ -71,6 +71,18 @@ def main():
                 assert str(button.cget("style")) == "Selected.Nav.TButton"
                 check_layout(root)
             checks.append("tabs_switch_pages_and_selected_state")
+            ui._show_page("tasks")
+            root.update()
+            for name, control in ui.task_controls.items():
+                original = ui.tasks[name].get()
+                control.invoke()
+                root.update()
+                assert ui.tasks[name].get() != original, name
+                assert ui.dirty and path.read_bytes() == before
+                control.invoke()
+                root.update()
+                assert ui.tasks[name].get() == original, name
+            checks.append("regrouped_task_controls_preserve_task_binding_and_draft")
             ui._show_page("settings")
             for key, button in ui.settings_buttons.items():
                 button.invoke()

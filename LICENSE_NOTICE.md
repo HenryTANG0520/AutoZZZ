@@ -41,7 +41,7 @@ are in [assets/ui/README.md](assets/ui/README.md) and
 original rights and are not relicensed under the source-code GPL. The UI also
 reuses the previously attributed `daily_completed.png` template above. Public
 availability does not imply an additional license grant or official endorsement.
-Full online reference screenshots are not distributed. The two documentation
+Full online reference screenshots are not distributed. The documentation
 previews show only AutoZZZ with a temporary generic configuration and no user
 history or account data.
 

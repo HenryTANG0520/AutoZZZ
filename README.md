@@ -189,3 +189,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build.ps1
 按网上实机参考重建快捷手册和设置控件，替换原侧栏 / 磁带方案。`autozzz/theme.py` 管理原字体、胶囊控件、焦点及 DPI；`autozzz/game_widgets.py` 绘制手册和实时任务卡；`autozzz/desktop.py` 接入现有功能。游戏截图不作为程序背景，参考图中的固定进度、账号信息和水印不随程序分发。
 
 `tools/ui_layout_smoke.py` 覆盖三个 DPI、默认 / 最小窗口、五个页面及三个设置子页，共 42 组边界和文本检查。`tools/compendium_smoke.py` 覆盖任务翻页、键盘导航、真实进度、长详情、设置草稿及执行时禁用控件；均不启动游戏。`tools/capture_ui.py` 用临时通用配置重建上述文档预览。
+
+## 2026-10-28 界面文字整理
+
+每日计划按“每日任务 / 收尾奖励”分组，移除重复释义、页面介绍和口号。按钮直接标明“进入游戏”“准备队伍（不出战）”，保存状态只显示已加载、未保存或已保存。输入格式、错误原因、自动关闭条件、电量上限与策略文件覆盖关系继续显示。
+
+本次只调整现有界面的文案、分组和间距，没有接入一条龙执行框架。检查包含同一页面修改前后的截图、离线布局与操作回归；未进行用户可用性测试，不据此声称完成率或操作速度提高。
+
+[每日计划预览](docs/images/daily-plan.png) · [训练预览](docs/images/training.png)
