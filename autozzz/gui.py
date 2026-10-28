@@ -77,6 +77,8 @@ class AutoZZZWindow:
         self._build()
         from .battle_ui import BattlePanel
         self.combat_panel = BattlePanel(self)
+        from .onedragon_apps_ui import ApplicationsPanel
+        self.onedragon_panel = ApplicationsPanel(self)
         from .overlay import GameLogOverlay
         self.overlay = GameLogOverlay(root, lambda: self.overlay_game_handle, self._log)
         self.overlay.set_enabled(self.overlay_logs.get())
@@ -630,7 +632,9 @@ class AutoZZZWindow:
             self._refresh_controls()
         strategies = getattr(self, "condition_strategies", None)
         strategy_worker_alive = strategies is not None and strategies.worker is not None and strategies.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive:
+        application_worker = getattr(getattr(self,"onedragon_panel",None),"worker",None)
+        application_worker_alive = application_worker is not None and application_worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive:
             self.root.destroy()
             return
         self.root.after(80, self._drain)
@@ -643,8 +647,13 @@ class AutoZZZWindow:
             if choice is None or (choice and self._read_settings(save=True, operation="save") is None):
                 return
         strategies = getattr(self, "condition_strategies", None)
+        applications = getattr(self,"onedragon_panel",None)
+        if applications is not None and not applications.allow_leave():
+            return
         if strategies is not None and not strategies.closed and not strategies.close():
             return
+        if applications is not None:
+            applications.close(discard=True)
         self.closing = True
         if getattr(self, "overlay", None):
             self.overlay.close()
@@ -652,7 +661,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()):
             self.root.destroy()
 
 

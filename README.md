@@ -12,7 +12,7 @@
 
 当前差异、可复用能力与迁移建议见[项目对比研究报告（2026-10-28）](REFERENCE_RESEARCH.md#comparison-20261028)。以下功能说明描述现有实现，不代表已经接入一条龙后端。
 
-完整迁移范围和验收状态见 [ONEDRAGON_INTEGRATION.md](ONEDRAGON_INTEGRATION.md)。目前已接入固定版本的一条龙独立进程、应用与配置查询，以及原生条件策略编辑窗口；完整应用配置、运行控制与实机出战仍在开发。现有每日和 JSON 预输入战斗继续保留。
+完整迁移范围和验收状态见 [ONEDRAGON_INTEGRATION.md](ONEDRAGON_INTEGRATION.md)。目前已接入固定版本的一条龙独立进程、原生应用配置和条件策略编辑，以及执行控制基础；运行入口、其余专项配置与实机出战仍在开发。现有每日和 JSON 预输入战斗继续保留。
 
 通过游戏客户区截图、OCR / 图标识别和 Windows 鼠标键盘输入，执行《绝区零》每日任务及独立预输入战斗的桌面助手。参考 BetterGI 的屏幕识别原理，并从本机 AutoHSR 项目的窗口控制、OCR、运行控制与 GUI 基础发展而来。
 
@@ -36,9 +36,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup_onedragon.ps1
 
 源码界面“训练 → 条件策略…”可读取上游 YAML 策略、导入文件、校验草稿、改名另存及选择条件战斗默认策略。校验使用实际 `AutoBattleOperator` 构建状态树、模板和原子操作，但不运行操作。内置策略保留作者信息并要求另存新名称。该窗口的默认策略与原 JSON 预输入脚本分别保存；目前没有条件战斗出战按钮，也尚未更新本机分发版 EXE。
 
+源码界面“应用 → 读取配置”按日常、战斗、探索和辅助工具分组，提供刷本计划、预编队伍、防卫战队伍、兑换码、执行顺序和挑战方案等 29 组配置。副本使用逐级选择，计划与队伍使用表格编辑，优先级显示中文名称。国服与国际服分别保存；修改先留在草稿中，点击“保存配置”后校验并原子写入，文件被其他窗口修改时要求重新读取。此页目前仅管理配置，不启动应用。
+
+`tools/onedragon_configuration_smoke.py` 验证真实上游的 211 个配置字段、专用列表保存、冲突拒绝及配置文件隔离；`tools/onedragon_configuration_gui_smoke.py` 验证表单、弹窗、界面添加刷本计划、实际保存和重新读取。配置页保留资源消耗、不可逆操作和输入格式提示；用分组、间距和按钮名称表达操作顺序。
+
 `tools/onedragon_smoke.py` 使用真实独立进程检查 30 个应用注册、17 个应用配置快照、内置与自定义条件策略，以及错误名称、非法策略和未开放执行请求的拒绝。`tools/onedragon_engine_smoke.py` 用真实条件引擎配合记录型原子操作验证状态选择、优先级打断和停止；`tools/onedragon_gui_smoke.py` 检查原生策略窗口的导入、保存、默认选择、关闭等待及三种 DPI。它们不启动游戏，也不能作为实机战斗成功的证据。
 
-执行适配层现已支持异步初始化、同一任务的状态查询与停止，以及受控前台键鼠、F9/F10、失焦等待、旧截图/线程池结果作废和共用任务锁。`tools/onedragon_initialize_smoke.py` 实际下载并加载上游 OCR，识别合成文字；`tools/onedragon_control_smoke.py` 使用真实上游 Operation、线程池和 RunSlot 回放暂停与停止，设备输入由记录器替代。`tools/onedragon_window_smoke.py` 用隐藏的测试子进程窗口核实进程绑定，不操作游戏。当前传输接口仅开放初始化与查询控制；完整配置、资源预算、后台/手柄适配和实机检查完成后才会开放新出战入口。
+执行适配层现已支持异步初始化、同一任务的状态查询与停止，以及受控前台键鼠、F9/F10、失焦等待、旧截图/线程池结果作废和共用任务锁。`tools/onedragon_initialize_smoke.py` 实际下载并加载上游 OCR，识别合成文字；`tools/onedragon_control_smoke.py` 使用真实上游 Operation、线程池和 RunSlot 回放暂停与停止，设备输入由记录器替代。`tools/onedragon_window_smoke.py` 用隐藏的测试子进程窗口核实进程绑定，不操作游戏。当前传输接口仅开放初始化与查询控制；专项配置、资源预算、后台/手柄适配和实机检查完成后才会开放新出战入口。
 
 ## 当前范围
 

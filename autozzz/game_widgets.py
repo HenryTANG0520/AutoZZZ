@@ -33,7 +33,7 @@ class Compendium(t.Surface):
     def _position(self, _event=None):
         d = lambda n: round(n * self.scale)
         width, height = self.winfo_width(), self.winfo_height()
-        left = 34 if self.section == "settings" else 130
+        left = 34 if self.section in ("settings","applications") else 130
         self.content.place(x=d(left), y=d(88), width=max(1, width-d(left+46)), height=max(1, height-d(124)))
         self.tabs.place(relx=1, x=-d(54), y=d(17), anchor="ne")
 
@@ -52,9 +52,9 @@ class Compendium(t.Surface):
         for y in range(79, round(h-40), 22):
             p.line((27, y, 27, y+12), "#202020")
             p.line((w-43, y, w-43, y+12), "#202020")
-        words = {"home": "ERRANDS", "tasks": "CUSTOM SCHEDULE", "combat": "TRAINING", "logs": "RECORDS", "settings": "OPTIONS"}
-        p.text((132 if self.section != "settings" else 42, 67), "+  " + words[self.section] + "  +", 10, fill="#121212")
-        if self.section != "settings":
+        words = {"home": "ERRANDS", "tasks": "CUSTOM SCHEDULE", "combat": "TRAINING", "applications":"APPLICATIONS", "logs": "RECORDS", "settings": "OPTIONS"}
+        p.text((42 if self.section in ("settings","applications") else 132, 67), "+  " + words[self.section] + "  +", 10, fill="#121212")
+        if self.section not in ("settings","applications"):
             self._spine(p, h)
 
     def _spine(self, p, height):

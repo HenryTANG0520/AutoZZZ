@@ -8,13 +8,15 @@ from typing import Any
 import uuid
 
 from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState
-from .run_lock import RunLock
+from .run_lock import RunLock, profile_lock
 
 
 class OneDragonExecution:
     def __init__(self, ctx: Any):
         from zzz_od.backend.backend_context import ZzzBackendContext
         self.ctx = ctx
+        from one_dragon.utils import os_utils
+        self.data = Path(os_utils.get_work_dir())
         self.backend = ZzzBackendContext(ctx)
         self.lock = threading.RLock()
         self.worker: threading.Thread | None = None
@@ -68,7 +70,8 @@ class OneDragonExecution:
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
                 try:
-                    operation()
+                    with profile_lock(self.data):
+                        operation()
                 except Exception as exc:
                     with self.lock:
                         self.error = f"{type(exc).__name__}: {exc}"

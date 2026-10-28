@@ -202,6 +202,8 @@ def apply_theme(root, scale):
         style.configure(name, background=FIELD, foreground=TEXT, font=(FONT, 10))
     style.configure("CardHint.TLabel", foreground=MUTED, font=("Microsoft YaHei UI", 9))
     style.configure("CardKicker.TLabel", foreground=MUTED, font=(FONT, 11))
+    style.configure("Config.TLabel", background=PANEL, foreground=TEXT, font=("Microsoft YaHei UI",10))
+    style.configure("ConfigTitle.TLabel", background=PANEL, foreground=TEXT, font=(FONT,11))
     style.configure("PageTitle.TLabel", background=PANEL, foreground=TEXT, font=(FONT, 18))
     style.configure("Footer.TLabel", background=BG, foreground=MUTED, font=("Microsoft YaHei UI", 9))
     style.configure("FooterStatus.TLabel", background=BG, foreground=TEXT, font=(FONT, 10))
@@ -233,6 +235,16 @@ def apply_theme(root, scale):
     for name in ("Compact.TEntry", "Compact.TCombobox"):
         style.configure(name, padding=d(3), font=("Microsoft YaHei UI", 9))
     _check_indicators(root, style, scale)
+    style.configure("Config.TCheckbutton",background=PANEL,font=("Microsoft YaHei UI",10))
+    style.map("Config.TCheckbutton",background=[("active",PANEL),("!disabled",PANEL)])
+    style.configure("Config.Treeview",background=FIELD,fieldbackground=FIELD,foreground=TEXT,
+                    font=("Microsoft YaHei UI",10),rowheight=d(30),bordercolor=LINE,
+                    lightcolor=FIELD,darkcolor=FIELD)
+    style.map("Config.Treeview",background=[("selected","#45451f")],
+              foreground=[("selected",ACCENT),("disabled",MUTED)])
+    style.configure("Config.Treeview.Heading",background="#252525",foreground=MUTED,
+                    font=("Microsoft YaHei UI",10),bordercolor=LINE,lightcolor=LINE,darkcolor=LINE,padding=d(7))
+    style.map("Config.Treeview.Heading",background=[("active","#3e3e3e")],foreground=[("active",TEXT)])
     style.configure("TNotebook", background=PANEL, borderwidth=0, tabmargins=0)
     style.configure("TNotebook.Tab", background=FIELD, foreground=MUTED, padding=(d(22), d(9)))
     style.map("TNotebook.Tab", background=[("selected", ACCENT), ("active", "#505050")],
@@ -242,6 +254,9 @@ def apply_theme(root, scale):
     style.map("Vertical.TScrollbar", background=[("disabled", "#303030"), ("active", "#777777"), ("!disabled", "#454545")],
               troughcolor=[("disabled", FIELD), ("!disabled", FIELD)],
               arrowcolor=[("disabled", "#666666"), ("!disabled", TEXT)])
+    style.configure("Horizontal.TScrollbar",background=LINE,troughcolor=FIELD,bordercolor=FIELD,
+                    arrowcolor=TEXT,lightcolor=FIELD,darkcolor=FIELD)
+    style.map("Horizontal.TScrollbar",background=[("disabled","#303030"),("active","#777777"),("!disabled","#454545")])
     style.configure("TSeparator", background=LINE)
     _window_identity(root)
     return style

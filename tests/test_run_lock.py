@@ -2,10 +2,11 @@
 import ctypes
 import subprocess
 import sys
+from pathlib import Path
 import unittest
 import uuid
 
-from autozzz.run_lock import RunLock
+from autozzz.run_lock import RunLock, profile_lock
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows named mutex")
@@ -31,6 +32,15 @@ class RunLockTests(unittest.TestCase):
             first.close()
         second.acquire()
         second.close()
+
+    def test_profile_locks_ignore_path_case_but_allow_other_profiles(self):
+        root = Path.cwd()/"build"/uuid.uuid4().hex
+        with profile_lock(root/"cn"):
+            with self.assertRaises(RuntimeError):
+                with profile_lock(Path(str(root/"CN").upper())):
+                    self.fail("same profile")
+            with profile_lock(root/"global"):
+                pass
 
 
 if __name__ == "__main__":

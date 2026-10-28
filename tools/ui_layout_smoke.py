@@ -74,7 +74,7 @@ def main():
                     root.after_cancel(token)
                 root.destroy()
     print(json.dumps(dict(game_started=False, config_unchanged=True, layout_cases=len(cases),
-                          dpi=[100, 150, 200], pages=5, settings_sections=3), ensure_ascii=False))
+                          dpi=[100, 150, 200], pages=len(ui.pages), settings_sections=3), ensure_ascii=False))
 
 
 if __name__ == "__main__":

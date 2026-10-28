@@ -27,11 +27,11 @@ def build_window(ui, task_names, server_names):
     body.columnconfigure(0, weight=1)
     body.rowconfigure(0, weight=1)
     ui.nav_buttons = {}
-    for col, (key, label) in enumerate((("tasks", "目标"), ("home", "日常"), ("combat", "训练"), ("logs", "记录"), ("settings", "设置"))):
+    for col, (key, label) in enumerate((("tasks", "目标"), ("home", "日常"), ("combat", "训练"), ("applications", "应用"), ("logs", "记录"), ("settings", "设置"))):
         button = ttk.Button(ui.compendium.tabs, text=label, style="Nav.TButton", width=8, command=lambda key=key: ui._show_page(key))
         button.grid(row=0, column=col, padx=d(2))
         ui.nav_buttons[key] = button
-    ui.pages = {name: ttk.Frame(body) for name in ("home", "tasks", "combat", "logs", "settings")}
+    ui.pages = {name: ttk.Frame(body) for name in ("home", "tasks", "combat", "applications", "logs", "settings")}
     for page in ui.pages.values():
         page.grid(row=0, column=0, sticky="nsew")
         page.columnconfigure(0, weight=1)

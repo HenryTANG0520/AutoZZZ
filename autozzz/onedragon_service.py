@@ -37,10 +37,12 @@ class OneDragonService:
     @property
     def ctx(self) -> Any:
         if self._ctx is None:
-            from .onedragon_host import ManagedZContext
-            ctx = ManagedZContext()
-            ctx.register_application_factory()
-            self._ctx = ctx
+            from .run_lock import profile_lock
+            with profile_lock(self.data):
+                from .onedragon_host import ManagedZContext
+                ctx = ManagedZContext()
+                ctx.register_application_factory()
+                self._ctx = ctx
         return self._ctx
 
     def catalog(self) -> dict:
@@ -69,6 +71,12 @@ class OneDragonService:
 
     def configuration(self, app_id: str) -> dict:
         self._assert_idle()
+        self.ctx
+        from .run_lock import profile_lock
+        with profile_lock(self.data):
+            return self._configuration(app_id)
+
+    def _configuration(self, app_id: str) -> dict:
         config = self._config(app_id)
         values, failures = {}, {}
         for name, prop in inspect.getmembers(type(config), lambda p: isinstance(p, property)):
@@ -79,6 +87,26 @@ class OneDragonService:
             except Exception as exc:
                 failures[name] = f"{type(exc).__name__}: {exc}"
         return dict(app_id=app_id, fields=values, failures=failures)
+
+    def describe_configuration(self, app_id: str) -> dict:
+        from .onedragon_config import ConfigurationStore
+        return ConfigurationStore(self).describe(app_id)
+
+    def save_configuration(self, app_id: str, values: dict, revision: str) -> dict:
+        from .onedragon_config import ConfigurationStore
+        return ConfigurationStore(self).save(app_id, values, revision)
+
+    def training_options(self) -> dict:
+        from .onedragon_config import ConfigurationStore
+        return ConfigurationStore(self).compendium()
+
+    def configuration_options(self) -> dict:
+        self._assert_idle()
+        from .onedragon_config import ConfigurationStore
+        from .run_lock import profile_lock
+        store = ConfigurationStore(self)
+        with profile_lock(self.data):
+            return store.options()
 
     def set_battle_options(self, values: dict) -> dict:
         self._assert_idle()
@@ -93,20 +121,10 @@ class OneDragonService:
                     raise ValueError("截图间隔必须在 0.01—1 秒之间。")
             elif type(value) is not expected:
                 raise ValueError(f"{key} 的配置类型错误。")
-        config = self.ctx.battle_assistant_config
-        if {"auto_battle_config", "use_merged_file"} & set(values):
-            name = values.get("auto_battle_config", config.auto_battle_config)
-            merged = values.get("use_merged_file", config.use_merged_file)
-            self._policy_path(name, merged)
-            self.policy_validate(name, merged)
-        # 先校验整批字段，再一次写入；避免前半部分成功而后半部分失败。
-        old = config.data.copy()
-        try:
-            config.data.update(values)
-            config.save()
-        except Exception:
-            config.data = old
-            raise
+        from .onedragon_config import ConfigurationStore
+        store = ConfigurationStore(self)
+        description = store.describe("battle_assistant")
+        store.save("battle_assistant", values, description["revision"])
         return self.configuration("battle_assistant")
 
     @staticmethod
@@ -148,6 +166,13 @@ class OneDragonService:
 
     def policy_validate(self, name: str, merged: bool = True) -> dict:
         self._assert_idle()
+        self.ctx
+        from .run_lock import profile_lock
+        with profile_lock(self.data):
+            return self._policy_validate(name,merged)
+
+    def _policy_validate(self, name: str, merged: bool = True) -> dict:
+        self._assert_idle()
         self._policy_path(name, merged)  # 上游会在缺失时回退；桥接层必须先拒绝错误名称。
         from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
         from one_dragon.base.conditional_operation.operator import ConditionalOperator
@@ -171,6 +196,13 @@ class OneDragonService:
 
     def policy_save(self, name: str, content: str) -> dict:
         self._assert_idle()
+        self.ctx
+        from .run_lock import profile_lock
+        with profile_lock(self.data):
+            return self._policy_save(name, content)
+
+    def _policy_save(self, name: str, content: str) -> dict:
+        self._assert_idle()
         name = self._name(name)
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
@@ -184,7 +216,7 @@ class OneDragonService:
             raise ValueError("策略文件路径指向数据目录外。")
         temporary.write_text(content, encoding="utf-8")
         try:
-            validation = self.policy_validate(temporary_name, merged=False)
+            validation = self._policy_validate(temporary_name, merged=False)
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
@@ -193,6 +225,13 @@ class OneDragonService:
 
     def policy_check(self, content: str) -> dict:
         self._assert_idle()
+        self.ctx
+        from .run_lock import profile_lock
+        with profile_lock(self.data):
+            return self._policy_check(content)
+
+    def _policy_check(self, content: str) -> dict:
+        self._assert_idle()
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
         directory = self.data / "config" / "auto_battle"
@@ -200,7 +239,7 @@ class OneDragonService:
         temporary = directory / (name + ".yml")
         temporary.write_text(content, encoding="utf-8")
         try:
-            result = self.policy_validate(name, merged=False)
+            result = self._policy_validate(name, merged=False)
             result["name"] = "草稿"
             return result
         finally:
@@ -271,4 +310,5 @@ class OneDragonService:
 
 METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_validate",
            "policy_save", "policy_check", "set_battle_options", "initialize_execution",
-           "execution_status", "pause_execution", "stop_execution", "runtime_probe"}
+           "execution_status", "pause_execution", "stop_execution", "runtime_probe",
+           "describe_configuration", "save_configuration", "training_options", "configuration_options"}

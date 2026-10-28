@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
+from pathlib import Path
 
 RUN_MUTEX_NAME = "Local\\AutoZZZ.DailyRunner"
+
+
+def profile_lock(data: Path) -> RunLock:
+    identity = hashlib.sha256(str(Path(data).resolve()).casefold().encode("utf-8")).hexdigest()[:32]
+    return RunLock("Local\\AutoZZZ.OneDragon.Profile." + identity)
 
 
 class RunLock:

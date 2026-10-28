@@ -326,6 +326,18 @@ class ManagedZContext(ZContext):
             result.append((plugins, PluginSource.THIRD_PARTY))
         return result
 
+    def register_application_factory(self) -> None:
+        super().register_application_factory()
+        factory = self.run_context._application_factory_map.get("commission_assistant")
+        if factory is not None:
+            # 上游构造函数误用了截图助手的 APP_ID；仅覆盖工厂创建，避免两个应用共用文件。
+            from zzz_od.application.commission_assistant.commission_assistant_config import CommissionAssistantConfig
+            from one_dragon.base.operation.application.application_config import ApplicationConfig
+            class ManagedCommissionConfig(CommissionAssistantConfig):
+                def __init__(self, instance_idx: int, group_id: str):
+                    ApplicationConfig.__init__(self, "commission_assistant", instance_idx, group_id)
+            factory.create_config = lambda instance_idx, group_id: ManagedCommissionConfig(instance_idx, group_id)
+
     def init_controller(self) -> None:
         if self.execution_control is None:
             raise ValueError("未安装 AutoZZZ 执行控制器。")
