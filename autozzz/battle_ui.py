@@ -41,9 +41,9 @@ class BattlePanel:
         if path.exists():self.catalog=json.loads(path.read_text(encoding="utf-8"))
         groups = (
             ("副本与队伍", (("category", "训练模式"), ("subcategory", "训练项目"),
-                ("stage", "目标副本"), ("team", "游戏内预编队名"), ("expected_roster", "角色顺序（逗号分隔）"),
+                ("stage", "目标副本"), ("team", "游戏内预编队名"), ("expected_roster", "角色顺序（逗号，选填）"),
                 ("battles", "场次 · 1—15"), ("energy_budget", "总电量上限 · 20—300"), ("max_energy", "每场电量上限"))),
-            ("战斗策略", (("strategy_file", "策略文件（选填）"), ("script", "动作序列"),
+            ("JSON 预输入策略", (("strategy_file", "JSON 文件（选填）"), ("script", "动作序列"),
                 ("hold_unit", "长按单位（秒）"), ("intro_wait", "转场等待（秒）"),
                 ("cycles", "每场脚本轮数"), ("timeout", "结算超时（秒）"))))
         for col, (title, fields) in enumerate(groups):
@@ -71,22 +71,24 @@ class BattlePanel:
         self.controls["subcategory"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("subcategory"))
         self.refresh_choices()
         self.strategy_hint = tk.StringVar(ui.root)
-        theme.wrapped_label(page, textvariable=self.strategy_hint, style="Hint.TLabel").grid(row=2, column=0, sticky="ew", pady=(d(8), d(3)))
+        self.strategy_hint_label=theme.wrapped_label(page, textvariable=self.strategy_hint, style="Hint.TLabel")
+        self.strategy_hint_label.grid(row=2, column=0, sticky="ew", pady=(d(8), d(3)))
         self.vars["strategy_file"].trace_add("write", self.refresh_strategy_hint)
         self.refresh_strategy_hint()
-        theme.wrapped_label(page, text="A 鼠标普攻 · E / Q 技能 · Space 换人 · h 长按单位 · - 换人标记 · | 轮末", style="Hint.TLabel").grid(row=3, column=0, sticky="ew", pady=(0, d(10)))
+        theme.wrapped_label(page, text="A 鼠标普攻 · E / Q 技能 · Space 换人 · h 长按单位 · - 换人标记 · | 轮末", style="Hint.TLabel").grid(row=3, column=0, sticky="ew", pady=(d(8), d(10)))
         buttons=ttk.Frame(page);buttons.grid(row=4,column=0,sticky="w")
         for label,command in (("保存方案",self.save),("读取副本目录",lambda:ui._start("battle_catalog")),("准备队伍（不出战）",lambda:ui._start("battle_prepare")),("开始战斗",lambda:ui._start("battle"))):
             button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
         from .onedragon_ui import open_strategies
-        self.condition_button = ttk.Button(buttons, text="条件策略…", command=lambda: open_strategies(ui))
+        self.condition_button = ttk.Button(buttons, text="YAML 条件策略…", command=lambda: open_strategies(ui))
         self.condition_button.pack(side="left", padx=(d(12), 0))
         ui.setting_controls.append(self.condition_button)
 
     def refresh_strategy_hint(self, *_args):
         selected = bool(self.vars["strategy_file"].get().strip())
-        self.strategy_hint.set("文件覆盖队名、角色顺序及策略参数；电量上限沿用左侧设置。" if selected else
-                               "角色顺序可留空；策略文件留空时使用当前表单。")
+        self.strategy_hint.set("文件覆盖队名、角色顺序及策略参数；电量上限沿用左侧设置。" if selected else "")
+        if selected:self.strategy_hint_label.grid()
+        else:self.strategy_hint_label.grid_remove()
 
     def refresh_choices(self, changed=None):
         group=self.catalog.get(self.vars["category"].get(),{})

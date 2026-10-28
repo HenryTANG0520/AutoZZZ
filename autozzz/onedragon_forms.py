@@ -67,11 +67,12 @@ class ScalarForm:
             line.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0,d(14)))
             line.columnconfigure(0, minsize=d(205))
             line.columnconfigure(1, weight=1)
-            label = ttk.Label(line, text=field["label"], style="Config.TLabel", wraplength=d(195))
-            label.grid(row=0, column=0, sticky="nw", padx=(0,d(14)), pady=d(4))
+            if kind != "bool":
+                label = ttk.Label(line, text=field["label"], style="Config.TLabel", wraplength=d(195))
+                label.grid(row=0, column=0, sticky="nw", padx=(0,d(14)), pady=d(4))
             if kind == "bool":
                 variable = tk.BooleanVar(line, bool(value))
-                widget = ttk.Checkbutton(line, variable=variable, text="启用",style="Config.TCheckbutton")
+                widget = ttk.Checkbutton(line, variable=variable, text=field["label"],style="Config.TCheckbutton")
                 reader = variable.get
             elif kind in ("enum", "agent", "suggestion"):
                 choice = Choice(line, field["options"], value, editable=kind in ("agent","suggestion"),custom=kind=="suggestion")
@@ -130,18 +131,18 @@ class ScalarForm:
                     ttk.Button(add,text="添加",command=append).pack(side="left",padx=(d(6),0))
                 widget=container
                 variable = None
-                ttk.Label(line,text="每行一项，按优先顺序排列。",style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
+                ttk.Label(line,text="每行一项 · 从上到下优先",style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
             else:
                 variable = tk.StringVar(line,str(value or "") if kind=="str" else str(value))
                 widget = ttk.Entry(line,textvariable=variable,width=24)
                 if kind=="secret":widget.configure(show="●")
-                def reader(variable=variable, kind=kind, label=field["label"]):
+                def reader(variable=variable, kind=kind):
                     text = variable.get()
                     try: return int(text) if kind=="int" else float(text) if kind=="float" else text
-                    except ValueError: raise ValueError(label+"：请输入"+("整数。" if kind=="int" else "数字。")) from None
+                    except ValueError: raise ValueError("请输入"+("整数。" if kind=="int" else "数字。")) from None
                 if "minimum" in field and "maximum" in field:
                     ttk.Label(line,text=f"{field['minimum']}—{field['maximum']}",style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
-            widget.grid(row=0,column=1,sticky="ew")
+            widget.grid(row=0,column=0 if kind=="bool" else 1,columnspan=2 if kind=="bool" else 1,sticky="w" if kind=="bool" else "ew")
             if variable is not None:
                 token=variable.trace_add("write",lambda *_: self.ready and changed())
                 self.traces.append((variable,token))
@@ -269,9 +270,7 @@ class RecordDialog:
             self.form = ScalarForm(content,fields,lambda:None,scale)
             if kind=="teams": self.form.controls["idx"].widget.state(["disabled"])
         self.form.frame.pack(fill="x")
-        if kind=="teams":
-            theme.wrapped_label(content,text="队名须与游戏内一致；角色按出场顺序填写。",style="Hint.TLabel").pack(fill="x",pady=(d(12),0))
-        elif kind=="defense_teams":
+        if kind=="defense_teams":
             group = ttk.LabelFrame(content,text="适用弱点",padding=d(10))
             group.pack(fill="x",pady=(d(12),0))
             for i,option in enumerate(options["weaknesses"]):
@@ -337,6 +336,7 @@ class Records:
             button.pack(side="left",padx=(0,d(6)))
             self.buttons[label] = button
         self.table.bind("<Double-1>",lambda _:self.toggle() if self.kind=="applications" else self.edit())
+        self.table.bind("<<TreeviewSelect>>",lambda _:self.update_action_label())
         self.dialog = None
         self.refresh()
 
@@ -360,6 +360,13 @@ class Records:
             selected = max(0,min(selected,len(self.rows)-1))
             self.table.selection_set(str(selected))
             self.table.see(str(selected))
+        self.update_action_label()
+
+    def update_action_label(self):
+        if self.kind!="applications":return
+        idx=self.selected()
+        enabled=idx is not None and self.rows[idx]["enabled"]
+        self.buttons["启用 / 停用"].configure(text="停用此应用" if enabled else "启用此应用")
 
     def selected(self):
         selection = self.table.selection()

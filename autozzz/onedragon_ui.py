@@ -69,7 +69,7 @@ class StrategyWindow:
         footer = ttk.Frame(self.window, padding=16)
         footer.grid(row=3, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
-        theme.wrapped_label(footer, text="YAML 条件策略；内置策略需改名另存，并保留作者信息。", style="Hint.TLabel").grid(row=0, column=0, sticky="ew")
+        theme.wrapped_label(footer, text="内置策略需改名另存，保留作者信息。", style="Hint.TLabel").grid(row=0, column=0, sticky="ew")
         theme.wrapped_label(footer, textvariable=self.status, style="Hint.TLabel").grid(row=1, column=0, sticky="ew", pady=(6, 12))
         buttons = ttk.Frame(footer)
         buttons.grid(row=2, column=0, sticky="w")

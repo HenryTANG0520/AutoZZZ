@@ -1,5 +1,6 @@
 """Capture shareable, offline UI previews without user configuration or history."""
 from pathlib import Path
+import argparse
 import sys
 import tempfile
 import tkinter as tk
@@ -13,7 +14,9 @@ from PIL import ImageGrab
 
 
 def main():
-    output = Path(__file__).resolve().parents[1] / "docs" / "images"
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--output",type=Path,default=Path(__file__).resolve().parents[1]/"docs"/"images")
+    output=parser.parse_args().output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as directory:
         config = Path(directory) / "preview.json"

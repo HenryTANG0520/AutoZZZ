@@ -118,6 +118,16 @@ class AutoZZZWindow:
             else:
                 page.grid_remove()
             self.nav_buttons[key].configure(style="Selected.Nav.TButton" if key == name else "Nav.TButton")
+        self._sync_footer()
+
+    def _sync_footer(self) -> None:
+        if not hasattr(self,"footer"):return
+        # 应用有独立的运行窗口；旧任务仍在工作时保留其状态和紧急控制。
+        if self.current_page=="applications" and not self.busy and self.worker is None:self.footer.grid_remove()
+        else:self.footer.grid()
+        for group in (self.footer_daily,self.footer_save):
+            if self.current_page in ("applications","combat"):group.grid_remove()
+            else:group.grid()
 
     def _overlay_status(self, *_args: Any) -> None:
         if getattr(self, "overlay", None):
@@ -223,6 +233,7 @@ class AutoZZZWindow:
         self.events.put(event)
 
     def _refresh_controls(self) -> None:
+        self._sync_footer()
         for control in self.setting_controls:
             control.configure(state="disabled" if self.busy else ("readonly" if control is self.server_combo else "normal"))
         for button in (self.start_button, self.check_button, self.launch_button):

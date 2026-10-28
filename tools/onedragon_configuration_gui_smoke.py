@@ -57,7 +57,7 @@ def main():
         config = base/"config.json"
         Settings().save(config)
         original = config.read_bytes()
-        with patch("autozzz.onedragon_apps_ui.RuntimePaths.discover",return_value=paths):
+        with patch("autozzz.onedragon_apps_ui.RuntimePaths.discover",return_value=paths),patch("autozzz.gui.AutoZZZWindow._discover_report"):
             for scale in (1.,1.5,2.):
                 root = tk.Tk()
                 root.tk.call("tk","scaling",scale*96/72)
@@ -87,6 +87,7 @@ def main():
                             if panel.form is not None:
                                 try: panel.form.values()
                                 except ValueError as exc: raise AssertionError((key,str(exc))) from exc
+                            assert bool(panel.note_label.winfo_ismapped())==bool(panel.note.get())
                             layout(root)
                             cases+=1
                         for key,field_name in (("charge_plan","plan_list"),("teams","team_list"),("shiyu_defense","team_list"),("redemption_code","codes")):
@@ -135,6 +136,7 @@ def main():
                         panel.select()
                         root.update()
                         control = panel.form.controls["run_charge_plan_afterwards"]
+                        assert control.cget("text")==next(f["label"] for f in panel.description["fields"] if f["name"]=="run_charge_plan_afterwards")
                         control.invoke()
                         root.update()
                         assert panel.dirty and panel.save_button.instate(["!disabled"])
@@ -161,6 +163,20 @@ def main():
                             panel.reload_button.invoke()
                         pump(root,lambda:not panel.busy)
                         assert not panel.dirty
+                        # 错误需要字段与原因各出现一次，格式和数值范围仍可追溯。
+                        panel.tree.selection_set("battle_assistant")
+                        panel.select()
+                        root.update()
+                        numeric=next(f for f in panel.description["fields"] if f["kind"] in ("int","float"))
+                        entry=panel.form.controls[numeric["name"]]
+                        entry.delete(0,"end")
+                        entry.insert(0,"invalid")
+                        try:panel.form.values()
+                        except ValueError as exc:
+                            assert str(exc).count(numeric["label"])==1,str(exc)
+                            assert "请输入" in str(exc)
+                        else:raise AssertionError("无效数字必须给出字段错误")
+                        panel.dirty=False
                     assert not errors,errors
                     assert config.read_bytes()==original,"legacy daily settings changed"
                     if scale==2.:

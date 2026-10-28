@@ -59,6 +59,16 @@ def main():
                         except AssertionError as exc:
                             raise AssertionError((scale, size, name, exc.args)) from exc
                         cases.append(dict(dpi=round(scale * 100), size=size, page=name))
+                        if name == "combat":
+                            # 文件生效时显示覆盖范围；未选择文件时不保留空提示区域。
+                            selector=ui.combat_panel.vars["strategy_file"]
+                            original_strategy=selector.get()
+                            for value in ("","fixture.json"):
+                                selector.set(value)
+                                root.update()
+                                assert bool(ui.combat_panel.strategy_hint_label.winfo_ismapped())==bool(value)
+                                check_layout(root)
+                            selector.set(original_strategy)
                         if name == "settings":
                             for section in ("run", "recognition"):
                                 ui.show_settings_section(section)

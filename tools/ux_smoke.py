@@ -117,7 +117,17 @@ def main():
                 ui._show_page(key)
                 pump(root)
                 layout(root)
-                check('persistent_controls_' + key, all(w.winfo_ismapped() for w in (ui.start_button, ui.pause_button, ui.stop_button)))
+                if key=='applications':
+                    check('application_has_its_own_actions',not ui.footer.winfo_ismapped())
+                    ui.busy=True
+                    ui._refresh_controls()
+                    pump(root)
+                    check('running_legacy_task_keeps_emergency_controls',all(w.winfo_ismapped() for w in (ui.pause_button,ui.stop_button)))
+                    ui.busy=False
+                    ui._refresh_controls()
+                else:
+                    check('persistent_controls_' + key, all(w.winfo_ismapped() for w in (ui.pause_button,ui.stop_button)))
+                    check('daily_actions_scoped_' + key, bool(ui.start_button.winfo_ismapped())==(key!='combat'))
                 ImageGrab.grab(window=root.winfo_id()).save(OUT / ('page-' + key + '.png'))
             ui._show_page('home')
             for value in ui.tasks.values():
@@ -169,6 +179,10 @@ def main():
             ui._stop()
             pump(root, lambda: not ui.busy)
             check('stop_does_not_save', config.read_bytes() == original)
+            ui._show_page('applications')
+            pump(root)
+            check('legacy_result_kept_after_stopping_from_another_page',ui.footer.winfo_ismapped() and not ui.start_button.winfo_ismapped())
+            ui._show_page('home')
             # Reward-only snapshot: do not persist or restart a battle.
             ui._reward_only()
             pump(root, lambda: ui.runner is not None)

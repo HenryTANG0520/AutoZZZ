@@ -43,7 +43,7 @@ class BudgetWindow:
         footer=ttk.Frame(self.window,padding=d(16))
         footer.grid(row=2,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
-        theme.wrapped_label(footer,text="中断后的实际消耗未知。按预留上限计入后，已预留电量仍计入预算，战斗结果保留为未知。",style="Hint.TLabel").grid(row=0,column=0,sticky="ew")
+        theme.wrapped_label(footer,text="实际消耗与战斗结果未知；计入后，预留电量额度不退回。",style="Hint.TLabel").grid(row=0,column=0,sticky="ew")
         self.status=tk.StringVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=1,column=0,sticky="ew",pady=(d(8),d(12)))
         actions=ttk.Frame(footer)

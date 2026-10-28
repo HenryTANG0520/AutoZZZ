@@ -73,6 +73,7 @@ def main():
                 ui.execution_window=window
                 try:
                     pump(root,lambda:window.connected and not window.loading_account)
+                    assert window.prepare_button.cget('style')=='Accent.TButton'
                     for size in ('default','minimum'):
                         if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
                         root.update()
@@ -80,6 +81,8 @@ def main():
                         cases.append([scale,size])
                     window.prepare_button.invoke()
                     pump(root,lambda:window.prepared)
+                    assert window.start_button.cget('style')=='Accent.TButton'
+                    assert window.prepare_button.cget('style')=='TButton'
                     window.allowance.set('40')
                     window.rounds.set('2')
                     window.auto_launch.set(False)
@@ -114,6 +117,18 @@ def main():
                     assert not errors,errors
                     window.close()
                     assert not window.closed and window.worker.is_alive()
+                    pump(root,lambda:window.closed)
+                    window.worker.join(1)
+                    # 国际服增加了时区选择，收拢时限说明后也必须在最小窗口完整显示。
+                    window=ExecutionWindow(ui,'charge_plan','体力刷本','global')
+                    ui.execution_window=window
+                    pump(root,lambda:window.connected and not window.loading_account)
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update()
+                        layout(window.window)
+                        cases.append([scale,size,'global'])
+                    window.close()
                     pump(root,lambda:window.closed)
                     window.worker.join(1)
                 finally:

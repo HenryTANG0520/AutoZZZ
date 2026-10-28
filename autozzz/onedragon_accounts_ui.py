@@ -50,8 +50,8 @@ class AccountsWindow:
         actions=ttk.Frame(table_area)
         actions.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(d(10),d(16)))
         self.actions=[]
-        for col,(label,command) in enumerate((("新增",self.create),("重命名",self.rename),("设为当前",lambda:self.action("activate")),
-                                             ("参与 / 不参与",self.toggle_enabled),("重新登录 / 保持",self.toggle_login),("移除配置",self.archive))):
+        for col,(label,command) in enumerate((("新增",self.create),("重命名",self.rename),("使用此配置",lambda:self.action("activate")),
+                                             ("加入一条龙",self.toggle_enabled),("切换前重新登录",self.toggle_login),("归档配置…",self.archive))):
             button=ttk.Button(actions,text=label,command=command)
             button.grid(row=col//3,column=col%3,padx=(0,d(8)),pady=(0,d(5)),sticky="w")
             self.actions.append(button)
@@ -128,6 +128,7 @@ class AccountsWindow:
         self.request("account_describe",self.show_account,idx=idx,server=self.profile)
 
     def show_account(self,result):
+        d=lambda value:round(value*self.ui.ui_scale)
         for child in self.content.winfo_children():child.destroy()
         self.form=None
         self.description=result
@@ -145,11 +146,11 @@ class AccountsWindow:
                        dict(name="clear_password",label="清除本地密码",kind="bool",value=False,options=[],group="登录凭据")])
         self.form=ScalarForm(self.content,fields,self.changed,self.ui.ui_scale)
         self.form.frame.pack(fill="x")
-        line=ttk.Frame(self.content)
-        line.pack(fill="x",pady=(0,10))
-        self.browse_button=ttk.Button(line,text="选择游戏程序…",command=self.browse)
-        self.browse_button.pack(side="left")
-        theme.wrapped_label(self.content,text="密码以明文保存在本机配置；不会显示在运行报告中。",style="Hint.TLabel").pack(fill="x",pady=(0,10))
+        path_row=self.form.controls["game_path"].master
+        self.browse_button=ttk.Button(path_row,text="浏览…",command=self.browse)
+        self.browse_button.grid(row=0,column=2,padx=(d(8),0))
+        password_row=self.form.controls["password"].master
+        theme.wrapped_label(password_row,text="密码以明文保存在本机。",style="Hint.TLabel").grid(row=1,column=1,sticky="ew",pady=(d(5),0))
         enable_scroll(self.canvas,self.content)
         self.dirty=False
         self.status.set("已设置密码" if result["password_set"] else "未设置密码 · 可使用游戏保存的登录状态")
@@ -201,7 +202,7 @@ class AccountsWindow:
         if row:self.action("options",enabled=row["enabled"],force_login=not row["force_login"])
 
     def archive(self):
-        if self.row() is not None and messagebox.askokcancel("移除账号配置","移除本机配置并保留归档，不删除游戏账号。",parent=self.window):self.action("archive")
+        if self.row() is not None and messagebox.askokcancel("归档账号配置","从账号清单移除，并保留本机配置归档。",parent=self.window):self.action("archive")
 
     def update_buttons(self):
         locked=self.busy or self.closing or not self.connected
@@ -254,7 +255,7 @@ class AccountsWindow:
         if self.closing:return True
         if not self.allow_leave():return False
         self.closing=True
-        self.status.set("正在等待原进程退出…")
+        self.status.set("正在关闭…")
         self.session.close()
         self.update_buttons()
         if not self.worker.is_alive():

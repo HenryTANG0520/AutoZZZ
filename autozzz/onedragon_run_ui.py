@@ -66,10 +66,9 @@ class ExecutionWindow:
         row.grid(row=1,column=0,columnspan=3,sticky="ew",pady=(d(12),0))
         launch=ttk.Checkbutton(row,text="自动进入游戏",variable=self.auto_launch,style="Config.TCheckbutton")
         launch.pack(side="left",padx=(0,d(18)))
-        ttk.Label(row,text="运行时限（秒）").pack(side="left",padx=(0,d(8)))
+        ttk.Label(row,text="时限（秒，暂停不计）").pack(side="left",padx=(0,d(8)))
         timeout=ttk.Entry(row,textvariable=self.timeout,width=7)
         timeout.pack(side="left")
-        ttk.Label(row,text="暂停不计时",style="Hint.TLabel").pack(side="left",padx=d(10))
         self.settings_controls=[path,browse,launch,timeout]
         if profile=="global":
             region=ttk.Combobox(row,textvariable=self.region,values=("asia","us","eu","twhkmo"),state="readonly",width=8)
@@ -110,11 +109,12 @@ class ExecutionWindow:
         self.close_button=ttk.Button(actions,text="关闭",command=self.close)
         self.report_button=ttk.Button(actions,text="报告",command=lambda:ui._open_path(self.last_report))
         for button in (self.prepare_button,self.start_button,self.pause_button,self.stop_button,self.report_button,self.close_button):button.pack(side="left",padx=(0,d(8)))
+        self.pause_button.pack_configure(padx=(d(12),d(8)))
+        self.report_button.pack_configure(padx=(d(12),d(8)))
         self.window.protocol("WM_DELETE_WINDOW",self.close)
         self.window.bind("<F10>",lambda _:self.stop())
         if app_id in ("auto_battle","dodge_assistant"):
             self.write("战斗助手需先在游戏中进入战斗；自动选本请使用体力刷本。")
-        if app_id=="one_dragon":self.write("本次运行当前账号配置的默认应用组。")
         self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
         self.worker=self.session.worker
         self.update_buttons()
@@ -148,6 +148,8 @@ class ExecutionWindow:
         self.log.configure(state="disabled")
 
     def update_buttons(self):
+        self.prepare_button.configure(style="TButton" if self.prepared else "Accent.TButton")
+        self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
         self.start_button.state(["!disabled"] if self.connected and self.prepared and not self.busy and not self.closing else ["disabled"])
         self.pause_button.state(["!disabled"] if self.busy and (self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
@@ -193,7 +195,7 @@ class ExecutionWindow:
 
     def stop(self):
         self.session.stop()
-        self.status.set("正在停止原任务…")
+        self.status.set("正在停止…")
 
     def poll(self):
         self.poll_token=None
@@ -253,7 +255,7 @@ class ExecutionWindow:
                     self.uses_charge=state.get("uses_charge",False)
                     control=state.get("control",{})
                     self.paused=control.get("manual_paused",False)
-                    name={"ready":"运行环境已就绪","prepared":"已准备，可开始运行","running":"正在运行","initializing":"正在初始化",
+                    name={"ready":"运行环境已就绪","prepared":"已准备","running":"正在运行","initializing":"正在初始化",
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
                     if control.get("focus_waiting"):name="等待游戏恢复焦点"
                     if self.paused:name="已暂停"
@@ -290,7 +292,7 @@ class ExecutionWindow:
     def close(self):
         if not self.closing:
             self.closing=True
-            self.status.set("正在停止并等待原进程退出…")
+            self.status.set("正在停止并关闭…")
             self.session.close()
             self.update_buttons()
             if not self.worker.is_alive():

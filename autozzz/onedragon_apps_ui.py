@@ -22,12 +22,11 @@ GROUPS = (
     ("辅助工具", ("drive_disc_dismantle","commission_assistant","predefined_team_checker","mouse_sensitivity_checker","operation_debug","screenshot_helper","notify")),
 )
 NOTES = {
-    "charge_plan":"刷本会消耗电量；补充方式在下方设置。",
+    "charge_plan":"刷本消耗电量。",
     "notorious_hunt":"每周免费次数与后续电量消耗以游戏为准。",
     "drive_disc_dismantle":"拆解后的驱动盘无法恢复。",
     "suibian_temple":"采购等选项会消耗丁尼、观行币等资源。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",
-    "battle_assistant":"条件战斗与原 JSON 预输入策略分别保存。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 
@@ -86,7 +85,9 @@ class ApplicationsPanel:
         right.columnconfigure(0,weight=1)
         right.rowconfigure(2,weight=1)
         theme.wrapped_label(right,textvariable=self.title,style="ConfigTitle.TLabel").grid(row=0,column=0,sticky="ew",pady=(d(8),d(12)))
-        theme.wrapped_label(right,textvariable=self.note,style="Hint.TLabel").grid(row=1,column=0,sticky="ew",pady=(0,d(14)))
+        self.note_label=theme.wrapped_label(right,textvariable=self.note,style="Hint.TLabel")
+        self.note_label.grid(row=1,column=0,sticky="ew",pady=(0,d(14)))
+        self.note_label.grid_remove()
         self.canvas = tk.Canvas(right,background=theme.PANEL,highlightthickness=0)
         self.scroll = ttk.Scrollbar(right,command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
@@ -169,6 +170,9 @@ class ApplicationsPanel:
         self.reload_button.state(["!disabled"] if self.description is not None and not self.busy else ["disabled"])
         target="one_dragon" if self.current_id=="_group" else self.current_id
         self.run_button.configure(text="运行应用组…" if target=="one_dragon" else "运行应用…")
+        # 草稿保存与已保存配置运行分别突出当前可执行的主要动作。
+        self.save_button.configure(style="Accent.TButton" if self.dirty else "TButton")
+        self.run_button.configure(style="Accent.TButton" if not self.dirty and target in EXECUTABLE_APPLICATIONS else "TButton")
         self.run_button.state(["!disabled"] if target in EXECUTABLE_APPLICATIONS and not self.busy and not self.dirty else ["disabled"])
 
     def run(self):
@@ -269,18 +273,18 @@ class ApplicationsPanel:
         self.dirty = False
         self.title.set("应用配置")
         self.note.set("")
+        self.note_label.grid_remove()
         self._buttons()
 
     def render(self,description):
         self._clear()
         self.title.set(self.apps[self.current_id]["name"])
         self.note.set(NOTES.get(self.current_id,""))
+        if self.note.get():self.note_label.grid()
         self.description = copy.deepcopy(description)
         if description is None:
-            text="无需单独配置。" if self.current_id in EXECUTABLE_APPLICATIONS else "该应用的专用设置尚在接入。"
             if self.current_id=="one_dragon":
                 ttk.Button(self.content,text="编辑执行顺序",command=lambda:self.tree.selection_set("_group")).grid(row=0,column=0,sticky="w")
-            else:ttk.Label(self.content,text=text,style="Hint.TLabel").grid(row=0,column=0,sticky="w")
         else:
             simple = [f for f in description["fields"] if f["kind"] not in COLLECTIONS]
             records = [f for f in description["fields"] if f["kind"] in COLLECTIONS]
@@ -301,7 +305,8 @@ class ApplicationsPanel:
                 row += 1
         enable_scroll(self.canvas,self.content)
         self.canvas.yview_moveto(0)
-        self.status.set(self.profile.get()+" · 已读取" if description is not None else "配置暂未开放")
+        self.status.set(self.profile.get()+" · 已读取" if description is not None else
+                        "无需单独配置" if self.current_id in EXECUTABLE_APPLICATIONS else "配置暂未开放")
         self._buttons()
 
     def changed(self):
