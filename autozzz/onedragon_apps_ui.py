@@ -23,7 +23,7 @@ GROUPS = (
 )
 NOTES = {
     "charge_plan":"刷本消耗电量。",
-    "notorious_hunt":"每周免费次数与后续电量消耗以游戏为准。",
+    "notorious_hunt":"此入口只跑每周免费次数；深度追猎在体力刷本中运行。",
     "drive_disc_dismantle":"拆解后的驱动盘无法恢复。",
     "suibian_temple":"面向满级随便观；手动经营消耗材料，采购消耗云纹徽。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",

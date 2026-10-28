@@ -141,6 +141,30 @@ def main():
                     window.close()
                     pump(root,lambda:window.closed)
                     window.worker.join(1)
+                    window=ExecutionWindow(ui,'notorious_hunt','恶名狩猎','cn')
+                    ui.execution_window=window
+                    pump(root,lambda:window.connected and not window.loading_account)
+                    assert window.auto_launch.get()
+                    window.session.state.update(state='prepared',busy=False,prepared_app='notorious_hunt',uses_charge=False,hunt={})
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.prepared)
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update()
+                        layout(window.window)
+                        cases.append([scale,size,'weekly-hunt'])
+                    assert not window.budget_frame.winfo_ismapped()
+                    window.auto_launch.set(False)
+                    window.start_button.invoke()
+                    pump(root,lambda:window.busy)
+                    assert window.session.commands[-1][1]['budget'] is None
+                    window.session.state.update(state='success',busy=False,hunt=dict(free_completed=3,paid_completed=0))
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'免费 3 场' in window.status.get())
+                    assert not errors,errors
+                    window.close()
+                    pump(root,lambda:window.closed)
+                    window.worker.join(1)
                     window=ExecutionWindow(ui,'one_dragon','一条龙资源确认','cn')
                     ui.execution_window=window
                     pump(root,lambda:window.connected and not window.loading_account)

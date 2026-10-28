@@ -141,6 +141,8 @@ class ExecutionWindow:
         self.window.bind("<F10>",lambda _:self.stop())
         if app_id in ("auto_battle","dodge_assistant"):
             self.write("战斗助手需先在游戏中进入战斗；自动选本请使用体力刷本。")
+        if app_id=="notorious_hunt":
+            self.write("每周免费挑战；不自动切换深度追猎。")
         self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
         self.worker=self.session.worker
         self.update_buttons()
@@ -336,7 +338,15 @@ class ExecutionWindow:
                     if self.paused:name="已暂停"
                     if state.get("time_limited"):name="已达到运行时限"
                     if state.get("budget",{}).get("limited"):name="已达到本轮预算"
+                    hunt=state.get("hunt",{})
+                    fights=[]
+                    if hunt.get("free_completed"):fights.append(f"免费 {hunt['free_completed']} 场")
+                    if hunt.get("paid_completed"):fights.append(f"深度追猎 {hunt['paid_completed']} 场")
+                    if fights:name+=" · "+"，".join(fights)
                     detail=state.get("error") or state.get("preparation_step") or state.get("run",{}).get("last_status","")
+                    if state["state"]=="success" and not fights and hunt.get("skipped"):
+                        name="计划已跳过"
+                        detail=hunt["skipped"][-1]["status"]
                     self.status.set(name+(" · "+detail[:100] if detail else ""))
                     if not self.busy and state["state"] not in ("ready","prepared"):
                         self.prepared=False

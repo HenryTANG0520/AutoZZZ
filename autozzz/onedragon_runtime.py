@@ -19,7 +19,7 @@ MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 EXECUTABLE_APPLICATIONS = frozenset({"daily_signin","scratch_card","hou_hou_bakery","random_play","engagement_reward","ridu_weekly","city_fund",
     "email","coffee","trigrams_collection","predefined_team_checker","mouse_sensitivity_checker","auto_battle","dodge_assistant","screenshot_helper","charge_plan","one_dragon",
     "intel_board","lost_void","withered_domain","shiyu_defense","world_patrol",
-    "redemption_code","commission_assistant","operation_debug","life_on_line","suibian_temple","drive_disc_dismantle"})
+    "redemption_code","commission_assistant","operation_debug","life_on_line","suibian_temple","drive_disc_dismantle","notorious_hunt"})
 
 
 class RuntimeUnavailable(RuntimeError):

@@ -22,6 +22,7 @@ class ApplicationRequirements:
         self.resource_actions: list[dict] = []
         self.resource_settings: dict[str, str] = {}
         self.uses_charge = False
+        self.uses_hunt = False
 
     def policy(self, name: str, directory: str = "auto_battle") -> None:
         from .onedragon_service import OneDragonService
@@ -107,6 +108,20 @@ class ApplicationRequirements:
                 self.scripts.append(dict(kind="key_sim",name="真拿命验收",app_id=app_id))
             elif app_id == "operation_debug":
                 self.scripts.append(dict(kind="operation_template",name=self.store.get(app_id).operation_template))
+            elif app_id == "notorious_hunt":
+                from zzz_od.application.charge_plan.charge_plan_config import ChargePlanConfig
+                config = self.store.get(app_id)
+                if not config.plan_list or not any(plan.plan_times > 0 for plan in config.plan_list):
+                    raise ValueError("请先添加恶名狩猎计划并设置挑战次数。")
+                for field in self.store._describe(app_id, config)["fields"]:
+                    if field["kind"] != "plans":self.store._validate_scalar(field, field["value"])
+                for plan in config.plan_list:
+                    error = ChargePlanConfig.validate_item(self.ctx, plan)
+                    if error:raise ValueError(error)
+                    if plan.category_name != "恶名狩猎":raise ValueError("每周计划须选择恶名狩猎副本。")
+                    self.team_policy(plan.predefined_team_idx, plan.auto_battle_config)
+                self.uses_hunt = True
+                self.models.add("lost_void_det")
             elif app_id in ("suibian_temple", "drive_disc_dismantle"):
                 from .onedragon_resources import resource_actions, resource_fingerprint
                 config = self.store.get(app_id)
@@ -133,6 +148,9 @@ class ApplicationRequirements:
             if error:
                 raise ValueError(error)
             self.team_policy(plan.predefined_team_idx, plan.auto_battle_config)
+            if plan.category_name == "恶名狩猎":
+                self.uses_hunt = True
+                self.models.add("lost_void_det")
 
     def _world_patrol(self, config: Any) -> None:
         from zzz_od.application.world_patrol.world_patrol_route_list import RouteListType
@@ -200,4 +218,4 @@ class ApplicationRequirements:
         return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
                     models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
                     challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts),
-                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings))
+                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings), uses_hunt=self.uses_hunt)

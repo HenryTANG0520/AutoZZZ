@@ -11,7 +11,7 @@ from .onedragon_control import ExecutionStopped
 
 
 class ChargeBudgetControl:
-    CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40}
+    CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60}
 
     def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
@@ -47,7 +47,8 @@ class ChargeBudgetControl:
                 results.append(tuple(map(int,parsed.groups())))
         if len(results)!=1:raise ValueError("未能唯一核实画面中的“剩余电量 / 需要电量”。")
         available,cost=results[0]
-        category = operation.plan.category_name
+        category = {"CombatSimulation":"实战模拟室", "AreaPatrol":"区域巡防", "ExpertChallenge":"专业挑战室",
+                    "NotoriousHunt":"恶名狩猎"}.get(type(operation).__name__, operation.plan.category_name)
         if category not in self.CATEGORIES:raise ValueError("该副本的预算适配尚未完成。")
         if category=="实战模拟室":
             allowed = {20,40,60,80,100}
@@ -75,15 +76,23 @@ class ChargeBudgetControl:
         from zzz_od.operation.compendium.combat_simulation import CombatSimulation
         from zzz_od.operation.compendium.area_patrol import AreaPatrol
         from zzz_od.operation.compendium.expert_challenge import ExpertChallenge
+        from zzz_od.operation.compendium.notorious_hunt import NotoriousHunt
         from zzz_od.operation.challenge_mission.check_next_after_battle import ChooseNextOrFinishAfterBattle
         from zzz_od.application.charge_plan.charge_plan_app import ChargePlanApp
         from zzz_od.operation.restore_charge import RestoreCharge
         from zzz_od.operation.exchange_ether_battery import ExchangeEtherBattery
 
         def before_next(operation,original):
+            if isinstance(operation, NotoriousHunt) and not operation.use_charge_power:
+                return original(operation)
             screen=operation.last_screenshot
             deploying=operation.round_by_find_area(screen,"实战模拟室","出战").is_success
             next_button=operation.round_by_find_area(screen,"实战模拟室","下一步").is_success
+            if deploying:
+                if self.owner is not operation or self.reservation is None:
+                    self._block("缺少本场出战预算，请从副本选择画面重新开始。")
+            elif not next_button:
+                return operation.round_retry("等待可核实消耗的副本选择画面",wait=.5)
             if next_button and not deploying:
                 try:_,cost=self._read_cost(operation)
                 except ValueError as exc:return operation.round_retry(str(exc),wait=.5)
@@ -91,6 +100,8 @@ class ChargeBudgetControl:
             return original(operation)
 
         def after_battle(operation,original):
+            if isinstance(operation, NotoriousHunt) and not operation.use_charge_power:
+                return original(operation)
             self.control.checkpoint(require_frame=True)
             if self.ctx.auto_battle_context.last_check_end_result!="普通战斗-完成":
                 self._block("未核实胜利结算，预算保持待核对。")
@@ -102,6 +113,10 @@ class ChargeBudgetControl:
             return result
 
         def repeat(operation,original):
+            from .onedragon_hunt import current_hunt
+            hunt = current_hunt()
+            if hunt is not None and not hunt.use_charge_power:
+                return original(operation)
             if operation.try_next:
                 if operation.is_agent_plan and operation.round_by_find_area(operation.last_screenshot,"战斗画面","战斗结果-已达成").is_success:
                     return original(operation)
@@ -119,7 +134,7 @@ class ChargeBudgetControl:
                 return operation.round_success(ChargePlanApp.STATUS_ROUND_FINISHED)
             return original(operation)
 
-        for cls in (CombatSimulation,AreaPatrol,ExpertChallenge):
+        for cls in (CombatSimulation,AreaPatrol,ExpertChallenge,NotoriousHunt):
             self._patch_node(cls,"click_next",before_next)
             self._patch_node(cls,"after_battle",after_battle)
         self._patch_node(ChooseNextOrFinishAfterBattle,"check_next",repeat)

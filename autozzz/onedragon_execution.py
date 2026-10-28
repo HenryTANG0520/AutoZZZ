@@ -42,6 +42,7 @@ class OneDragonExecution:
         from .onedragon_resources import ResourceConfirmation
         self.resource_confirmation = ResourceConfirmation()
         self.resource_control = None
+        self.hunt_control = None
         self.prepared_app = self.prepared_hash = ""
         self.prepared_applications=[]
         self.prepared_requirements={}
@@ -133,6 +134,7 @@ class OneDragonExecution:
             self.redemption_control.reset()
             self.resource_confirmation.prepare([], "")
             self.resource_control = None
+            self.hunt_control = None
             self.ctx.ready_for_application = False
             self.backend._refresh_runtime_config()
             if instance_idx is not None and self.ctx.current_instance_idx!=instance_idx:
@@ -176,6 +178,7 @@ class OneDragonExecution:
             self.charge_control=self.group_control=None
             self.resource_confirmation.prepare([], "")
             self.resource_control = None
+            self.hunt_control = None
             self.backend._refresh_runtime_config()
             current=self.ctx.game_account_config
             if self.connection is not None and self.connection!=(self.ctx.current_instance_idx,current.game_path,current.game_region,current.game_language):
@@ -233,6 +236,7 @@ class OneDragonExecution:
                 self.redemption_control.reset()
                 self.charge_control=None
                 self.group_control=None
+                self.hunt_control=None
                 try:
                     fingerprints = self.prepared_requirements.get("resource_settings", {})
                     if fingerprints:
@@ -250,12 +254,17 @@ class OneDragonExecution:
                         ledger=BattleBudget(budget_directory(),budget["id"],server,budget["allowance"],budget["battle_limit"])
                         self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"])
                         self.charge_control.install()
+                    if self.prepared_requirements.get("uses_hunt"):
+                        from .onedragon_hunt import NotoriousHuntControl
+                        self.hunt_control=NotoriousHuntControl(self.ctx,self.control)
+                        self.hunt_control.install()
                     self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
                     self._run_bound_app(app_id)
                 finally:
-                    if self.resource_control is not None:self.resource_control.close()
+                    if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
                     if self.group_control is not None:self.group_control.close()
+                    if self.resource_control is not None:self.resource_control.close()
         return self._submit("running", run)
 
     def _run_bound_app(self,app_id:str) -> None:
@@ -324,6 +333,7 @@ class OneDragonExecution:
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts))
             result["resources"] = self.resource_confirmation.status()
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
+            result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
