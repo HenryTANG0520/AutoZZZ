@@ -47,6 +47,8 @@ class AccountStore:
         self.ctx.ready_for_application=False
         if self.service._execution is not None:
             self.service._execution.prepared_app=self.service._execution.prepared_hash=""
+            self.service._execution.prepared_requirements={}
+            self.service._execution.prepared_applications=[]
         if self.ctx.controller is not None:self.ctx.controller.game_win.clear_binding()
 
     def action(self,action:str,revision:str,idx:int|None=None,name:str|None=None,enabled:bool|None=None,force_login:bool|None=None):

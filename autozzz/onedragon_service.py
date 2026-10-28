@@ -306,9 +306,17 @@ class OneDragonService:
         model=self.ctx.auto_battle_context.dodge_context._flash_model
         flash=None if model is None else dict(name=model.model_name,providers=model.session.get_providers(),
                                               class_idx=int(model.run(image).class_idx))
+        detectors={}
+        lost=self.ctx.__dict__.get("lost_void")
+        withered=self.ctx.__dict__.get("withered_domain")
+        for key,detector in (("lost_void_det",None if lost is None else lost.detector),
+                             ("hollow_zero_event",None if withered is None else withered.map_service.event_model)):
+            if detector is not None:
+                result=detector.run(np.zeros((1080,1920,3),dtype=np.uint8))
+                detectors[key]=dict(name=detector.model_name,providers=detector.session.get_providers(),objects=len(result.results))
         return dict(ocr_text=text, controller=type(self.ctx.controller).__name__,
                     window_bound=self.ctx.controller.game_win.bound is not None,
-                    upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash)
+                    upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
         if self._execution is not None:

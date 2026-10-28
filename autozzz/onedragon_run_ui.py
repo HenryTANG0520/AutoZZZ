@@ -252,6 +252,10 @@ class ExecutionWindow:
                     self.prepared=state["state"]=="prepared"
                     if self.prepared and self.app_id=="one_dragon":
                         self.write("执行顺序："+" → ".join(item["name"] for item in state.get("prepared_applications",[])))
+                    if self.prepared:
+                        requirements=state.get("prepared_requirements",{})
+                        for policy in requirements.get("policies",[]):self.write("已准备策略："+policy["name"])
+                        if requirements.get("routes"):self.write(f"已准备路线：{len(requirements['routes'])} 条")
                     self.uses_charge=state.get("uses_charge",False)
                     control=state.get("control",{})
                     self.paused=control.get("manual_paused",False)
@@ -261,7 +265,7 @@ class ExecutionWindow:
                     if self.paused:name="已暂停"
                     if state.get("time_limited"):name="已达到运行时限"
                     if state.get("budget",{}).get("limited"):name="已达到本轮预算"
-                    detail=state.get("error") or state.get("run",{}).get("last_status","")
+                    detail=state.get("error") or state.get("preparation_step") or state.get("run",{}).get("last_status","")
                     self.status.set(name+(" · "+detail[:100] if detail else ""))
                     if not self.busy and state["state"] not in ("ready","prepared"):
                         self.prepared=False

@@ -347,6 +347,9 @@ class ManagedZContext(ZContext):
         return result
 
     def register_application_factory(self) -> None:
+        # 初始化和显式刷新都可能再次扫描；上游注册会追加入口列表，须先清空旧注册。
+        self.run_context.clear_applications()
+        self.app_group_manager.clear_config_cache()
         super().register_application_factory()
         factory = self.run_context._application_factory_map.get("commission_assistant")
         if factory is not None:

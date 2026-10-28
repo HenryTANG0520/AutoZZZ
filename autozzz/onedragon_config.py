@@ -226,7 +226,8 @@ class ConfigurationStore:
         if app_id == "teams":
             fields.append(dict(name="team_list", label="游戏内预编队伍", kind="teams", value=_plain(config.team_list), options=[]))
         if app_id == "shiyu_defense":
-            fields.append(dict(name="team_list", label="防卫战候选队伍", kind="defense_teams", value=_plain(config.team_list), options=[]))
+            # 保留旧数据的读写兼容；当前上游按游戏扫描结果选队，不使用此列表。
+            fields.append(dict(name="team_list", label="防卫战候选队伍", kind="defense_teams", value=_plain(config.team_list), options=[],supported_in_runtime=False))
         if app_id == "_group":
             fields.append(dict(name="app_list", label="执行顺序", kind="applications", options=[],
                                value=[dict(app_id=i.app_id, name=i.app_name, enabled=i.enabled) for i in config.app_list]))

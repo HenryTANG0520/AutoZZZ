@@ -1,0 +1,162 @@
+"""从实际上游配置收集应用依赖，在绑定游戏前验证并加载。"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+
+
+class PreparationCancelled(RuntimeError):
+    pass
+
+
+class ApplicationRequirements:
+    def __init__(self, ctx: Any, data: Path, store: Any):
+        self.ctx, self.data, self.store = ctx, Path(data), store
+        self.policies: set[tuple[str, str]] = set()
+        self.models: set[str] = set()
+        self.contexts: set[str] = set()
+        self.challenges: dict[str, str] = {}
+        self.routes: list[str] = []
+        self.uses_charge = False
+
+    def policy(self, name: str, directory: str = "auto_battle") -> None:
+        from .onedragon_service import OneDragonService
+        self.policies.add((directory, OneDragonService._name(name)))
+
+    def team_policy(self, index: int, fallback: str | None = None) -> None:
+        if index == -1 and fallback is not None:
+            self.policy(fallback)
+            return
+        teams = self.ctx.team_config.team_list
+        if type(index) is not int or not 0 <= index < len(teams):
+            raise ValueError("预编队伍位置无效。")
+        self.policy(teams[index].auto_battle)
+
+    def all_team_policies(self) -> None:
+        for index in range(len(self.ctx.team_config.team_list)):
+            self.team_policy(index)
+
+    def challenge(self, directory: str, name: str) -> Any:
+        from .onedragon_service import OneDragonService
+        OneDragonService._name(name)
+        folder = self.data / "config" / directory
+        if not any((folder / (name + suffix)).is_file() for suffix in (".yml", ".sample.yml")):
+            raise ValueError("挑战方案不存在：" + name)
+        self.challenges[directory] = name
+        return self.store.get(directory + ":" + name)
+
+    def collect(self, applications: list[str]) -> None:
+        self.uses_charge = "charge_plan" in applications or (
+            "coffee" in applications and self.store.get("coffee").run_charge_plan_afterwards)
+        if self.uses_charge:
+            self._charge()
+        for app_id in applications:
+            if app_id == "auto_battle":
+                self.policy(self.ctx.battle_assistant_config.auto_battle_config)
+            elif app_id == "dodge_assistant":
+                self.policy(self.ctx.battle_assistant_config.dodge_assistant_config, "dodge")
+            elif app_id == "intel_board":
+                config = self.store.get(app_id)
+                self.team_policy(config.predefined_team_idx, config.auto_battle_config)
+                self.models.add("lost_void_det")
+            elif app_id == "lost_void":
+                config = self.store.get(app_id)
+                challenge = self.challenge("lost_void_challenge", config.challenge_config)
+                if config.mission_name == "矩阵行动":
+                    self.team_policy(0 if challenge.predefined_team_idx == -1 else challenge.predefined_team_idx)
+                else:
+                    self.team_policy(challenge.predefined_team_idx, challenge.auto_battle)
+                    if config.mission_name == "特遣调查" and challenge.choose_team_by_priority:
+                        self.all_team_policies()
+                self.contexts.add(app_id)
+                self.models.add("lost_void_det")
+            elif app_id == "withered_domain":
+                config = self.store.get(app_id)
+                challenge = self.challenge("hollow_zero_challenge", config.challenge_config)
+                self.policy(challenge.auto_battle)
+                self.contexts.add(app_id)
+                self.models.add("hollow_zero_event")
+            elif app_id == "shiyu_defense":
+                # 固定版本会扫描全编队并按弱点选队，不读取旧版 team_list 筛选。
+                self.all_team_policies()
+            elif app_id == "world_patrol":
+                config = self.store.get(app_id)
+                self.policy(config.auto_battle)
+                self._world_patrol(config)
+
+    def _charge(self) -> None:
+        from .onedragon_charge import ChargeBudgetControl
+        from zzz_od.application.charge_plan.charge_plan_config import ChargePlanConfig
+        config = self.store.get("charge_plan")
+        if config.restore_charge != "不使用":
+            raise ValueError("本轮仅使用现有电量，请将补充电量方式设为“不使用”。")
+        plans = config.plan_list + ([config.combat_simulation_double_reward_config] if config.double_reward else [])
+        if not plans:
+            raise ValueError("请先添加刷本计划。")
+        self.ctx.compendium_service.reload()
+        for plan in plans:
+            if plan.category_name not in ChargeBudgetControl.CATEGORIES:
+                raise ValueError("该训练模式的预算适配尚未完成。")
+            error = ChargePlanConfig.validate_item(self.ctx, plan)
+            if error:
+                raise ValueError(error)
+            self.team_policy(plan.predefined_team_idx, plan.auto_battle_config)
+
+    def _world_patrol(self, config: Any) -> None:
+        from zzz_od.application.world_patrol.world_patrol_route_list import RouteListType
+        service = self.ctx.world_patrol_service
+        service.load_data()
+        routes = [route for area in service.area_list for route in service.get_world_patrol_routes_by_area(area)]
+        if config.route_list:
+            selected = next((item for item in service.get_world_patrol_route_lists() if item.name == config.route_list), None)
+            if selected is None:
+                raise ValueError("路线列表不存在：" + config.route_list)
+            if selected.list_type not in (RouteListType.WHITELIST, RouteListType.BLACKLIST):
+                raise ValueError("路线列表类型无效。")
+            missing = set(selected.route_items) - {route.full_id for route in routes}
+            if missing:
+                raise ValueError("路线列表包含不存在的路线：" + "、".join(sorted(missing)))
+            routes = [route for route in routes if (route.full_id in selected.route_items) == (selected.list_type == RouteListType.WHITELIST)]
+        if not routes:
+            raise ValueError("所选路线列表没有可运行的路线。")
+        self.routes = [route.full_id for route in routes]
+
+    def load(self, cancelled: Callable[[], bool], progress: Callable[[str], None]) -> None:
+        from one_dragon.base.conditional_operation.loader import ConditionalOperatorLoader
+        if cancelled():raise PreparationCancelled("应用准备已取消。")
+        def step(label: str, action: Callable[[], None]) -> None:
+            if cancelled():raise PreparationCancelled("应用准备已取消。")
+            progress(label)
+            action()
+            if cancelled():raise PreparationCancelled("应用准备已取消。")
+
+        # 先核实所有策略文件，避免下载完模型才发现队伍指向无效策略。
+        for directory, name in sorted(self.policies):
+            selected = ConditionalOperatorLoader.get_yaml_file_path([directory], name, self.ctx.battle_assistant_config.use_merged_file)
+            if not selected:raise ValueError("战斗策略不存在：" + name)
+            path = Path(selected).resolve()
+            if path.parent != (self.data / "config" / directory).resolve() or not path.is_file():
+                raise ValueError("战斗策略不存在：" + name)
+        if "lost_void" in self.contexts:
+            step("迷失之地 · 挑战方案与鸣徽", self.ctx.lost_void.init_before_run)
+        elif "lost_void_det" in self.models:
+            step("目标识别模型", self.ctx.lost_void.init_lost_void_det_model)
+        if "withered_domain" in self.contexts:
+            step("枯萎之都 · 挑战方案与事件", self.ctx.withered_domain.init_before_run)
+            step("空洞事件模型", self.ctx.withered_domain.map_service.init_event_yolo)
+        if self.policies:
+            battle=self.ctx.auto_battle_context
+            old={id(operator):operator for operator in battle._op_cache.values()}
+            if battle.auto_op is not None:old[id(battle.auto_op)]=battle.auto_op
+            for operator in old.values():operator.dispose()
+            battle.auto_op=None
+            battle._op_cache.clear()
+        for directory, name in sorted(self.policies):
+            step("战斗策略 · " + name, lambda directory=directory, name=name: self.ctx.auto_battle_context.init_auto_op(name, directory))
+        if cancelled():raise PreparationCancelled("应用准备已取消。")
+        progress("")
+
+    def summary(self) -> dict:
+        return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
+                    models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
+                    challenges=dict(self.challenges), routes=list(self.routes))

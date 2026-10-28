@@ -27,6 +27,7 @@ NOTES = {
     "drive_disc_dismantle":"拆解后的驱动盘无法恢复。",
     "suibian_temple":"采购等选项会消耗丁尼、观行币等资源。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",
+    "shiyu_defense":"自动扫描游戏内编队并按弱点配队。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 
@@ -286,9 +287,13 @@ class ApplicationsPanel:
             if self.current_id=="one_dragon":
                 ttk.Button(self.content,text="编辑执行顺序",command=lambda:self.tree.selection_set("_group")).grid(row=0,column=0,sticky="w")
         else:
-            simple = [f for f in description["fields"] if f["kind"] not in COLLECTIONS]
-            records = [f for f in description["fields"] if f["kind"] in COLLECTIONS]
+            fields=[field for field in description["fields"] if field.get("supported_in_runtime",True)]
+            simple = [f for f in fields if f["kind"] not in COLLECTIONS]
+            records = [f for f in fields if f["kind"] in COLLECTIONS]
             row = 0
+            if self.current_id=="shiyu_defense":
+                ttk.Button(self.content,text="编队与策略…",command=lambda:self.tree.selection_set("teams")).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
+                row+=1
             # 主计划放在前面；辅助的双倍活动计划放在普通选项后面。
             for field in [f for f in records if f["kind"]!="plan"]:
                 editor = Records(self.content,field,self.options,self.current_id,self.changed,self.scale)

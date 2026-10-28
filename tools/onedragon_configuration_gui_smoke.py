@@ -90,7 +90,7 @@ def main():
                             assert bool(panel.note_label.winfo_ismapped())==bool(panel.note.get())
                             layout(root)
                             cases+=1
-                        for key,field_name in (("charge_plan","plan_list"),("teams","team_list"),("shiyu_defense","team_list"),("redemption_code","codes")):
+                        for key,field_name in (("charge_plan","plan_list"),("teams","team_list"),("redemption_code","codes")):
                             panel.tree.selection_set(key)
                             panel.select()
                             root.update()
@@ -103,6 +103,14 @@ def main():
                             dialog.form.values()
                             dialog.window.destroy()
                             dialogs+=1
+                        panel.tree.selection_set("shiyu_defense")
+                        panel.select()
+                        root.update()
+                        assert "team_list" not in panel.collections
+                        shortcut=next(child for child in panel.content.winfo_children() if isinstance(child,ttk.Button))
+                        shortcut.invoke()
+                        root.update()
+                        assert panel.current_id=="teams"
                     if scale==1.:
                         panel.tree.selection_set("charge_plan")
                         panel.select()
