@@ -1,4 +1,4 @@
-"""在上游解释器内查询应用并管理条件策略；不发送游戏输入。"""
+"""在上游解释器内管理应用配置、条件策略和受控执行。"""
 from __future__ import annotations
 
 import inspect
@@ -260,6 +260,14 @@ class OneDragonService:
             return dict(state="idle", busy=False, ready=False, job_id="", error="")
         return self._execution.status()
 
+    def prepare_application(self,app_id:str) -> dict:
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.prepare_application(app_id)
+
+    def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600) -> dict:
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds)
+
     def pause_execution(self, paused: bool) -> dict:
         if self._execution is None:
             raise RuntimeError("当前没有一条龙执行任务。")
@@ -279,9 +287,12 @@ class OneDragonService:
         image = np.full((100, 320, 3), 255, dtype=np.uint8)
         cv2.putText(image, "400", (25, 72), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 3, cv2.LINE_AA)
         text = self.ctx.ocr.run_ocr_single_line(image)
+        model=self.ctx.auto_battle_context.dodge_context._flash_model
+        flash=None if model is None else dict(name=model.model_name,providers=model.session.get_providers(),
+                                              class_idx=int(model.run(image).class_idx))
         return dict(ocr_text=text, controller=type(self.ctx.controller).__name__,
                     window_bound=self.ctx.controller.game_win.bound is not None,
-                    upstream_hotkeys_started=self.ctx._btn_listener_started, game_input_sent=False)
+                    upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash)
 
     def close(self) -> None:
         if self._execution is not None:
@@ -311,4 +322,5 @@ class OneDragonService:
 METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_validate",
            "policy_save", "policy_check", "set_battle_options", "initialize_execution",
            "execution_status", "pause_execution", "stop_execution", "runtime_probe",
-           "describe_configuration", "save_configuration", "training_options", "configuration_options"}
+           "describe_configuration", "save_configuration", "training_options", "configuration_options",
+           "prepare_application", "start_application"}

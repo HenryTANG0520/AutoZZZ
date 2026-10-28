@@ -21,6 +21,26 @@ from zzz_od.context.zzz_context import ZContext
 from .onedragon_control import ExecutionControl, WindowState
 
 
+class RelativeMouse:
+    """保留鼠标按钮和绝对坐标行为，相机转向发送真正的相对输入。"""
+    def __init__(self,raw:Any):self.raw=raw
+
+    def __getattr__(self,name):return getattr(self.raw,name)
+
+    @property
+    def position(self):return self.raw.position
+
+    @position.setter
+    def position(self,value):self.raw.position=value
+
+    def move(self,dx:float,dy:float) -> None:
+        if not all(math.isfinite(v) and -(2**31)<=v<2**31 for v in (dx,dy)):
+            raise ValueError("相对鼠标位移无效。")
+        event=win32_io.INPUT(type=0,mi=win32_io.MOUSEINPUT(int(dx),int(dy),0,1,0,0))
+        if win32_io.user32.SendInput(1,win32_io.C.byref(event),win32_io.C.sizeof(event))!=1:
+            raise RuntimeError("相机输入被 Windows 拒绝，请检查助手权限。")
+
+
 class ControlledDevice:
     """记录本进程按下的键；不允许恢复旧任务的设备调用。"""
     def __init__(self, raw: Any, control: ExecutionControl):
@@ -76,7 +96,7 @@ class ControlledKeyboard(KeyboardMouseController):
         super().__init__()
         self.control = control
         self.keyboard = ControlledDevice(self.keyboard, control)
-        self.mouse = ControlledDevice(self.mouse, control)
+        self.mouse = ControlledDevice(RelativeMouse(self.mouse), control)
 
     def tap(self, key: str) -> None:
         self.press(key, .03)

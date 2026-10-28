@@ -11,7 +11,7 @@ from typing import Any, Callable
 from . import theme
 from .config import ROOT
 from .onedragon_forms import Records, ScalarForm, enable_scroll
-from .onedragon_runtime import OneDragonClient, RequestPending, RuntimePaths
+from .onedragon_runtime import OneDragonClient, RequestPending, RuntimePaths,EXECUTABLE_APPLICATIONS
 
 
 GROUPS = (
@@ -58,7 +58,7 @@ class ApplicationsPanel:
         heading.grid(row=0,column=0,sticky="ew",pady=(0,d(15)))
         heading.columnconfigure(0,weight=1)
         ttk.Label(heading,text="一条龙应用",style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
-        ttk.Label(heading,text="开发中 · 仅配置",style="Hint.TLabel").grid(row=0,column=1,sticky="e",padx=d(18))
+        ttk.Label(heading,text="试验功能",style="Hint.TLabel").grid(row=0,column=1,sticky="e",padx=d(18))
         self.profile_box = ttk.Combobox(heading,textvariable=self.profile,values=["国服","国际服"],state="readonly",width=8)
         self.profile_box.grid(row=0,column=2,sticky="e")
         self.profile_box.bind("<<ComboboxSelected>>",self.change_profile)
@@ -103,7 +103,9 @@ class ApplicationsPanel:
         self.save_button.grid(row=0,column=1,sticky="e")
         self.reload_button = ttk.Button(footer,text="重新读取",command=self.reload)
         self.reload_button.grid(row=0,column=2,padx=(d(8),0))
-        self.controls += [self.save_button,self.reload_button]
+        self.run_button=ttk.Button(footer,text="运行应用…",command=self.run)
+        self.run_button.grid(row=0,column=3,padx=(d(12),0))
+        self.controls += [self.save_button,self.reload_button,self.run_button]
         self._buttons()
         self.root.after(80,self._poll)
 
@@ -163,6 +165,13 @@ class ApplicationsPanel:
         for widget in self.controls: widget.state(["disabled"] if self.busy else ["!disabled"])
         self.save_button.state(["!disabled"] if self.dirty and not self.busy and self.description is not None else ["disabled"])
         self.reload_button.state(["!disabled"] if self.description is not None and not self.busy else ["disabled"])
+        self.run_button.state(["!disabled"] if self.current_id in EXECUTABLE_APPLICATIONS and not self.busy and not self.dirty else ["disabled"])
+
+    def run(self):
+        if self.busy or self.dirty or self.current_id not in EXECUTABLE_APPLICATIONS:return
+        from .onedragon_run_ui import open_execution
+        profile="global" if self.profile.get()=="国际服" else "cn"
+        open_execution(self.ui,self.current_id,self.apps[self.current_id]["name"],profile)
 
     def _freeze(self):
         def visit(widget):
@@ -256,7 +265,8 @@ class ApplicationsPanel:
         self.note.set(NOTES.get(self.current_id,""))
         self.description = copy.deepcopy(description)
         if description is None:
-            ttk.Label(self.content,text="该应用的专用设置尚在接入。",style="Hint.TLabel").grid(row=0,column=0,sticky="w")
+            text="无需单独配置。" if self.current_id in EXECUTABLE_APPLICATIONS else "该应用的专用设置尚在接入。"
+            ttk.Label(self.content,text=text,style="Hint.TLabel").grid(row=0,column=0,sticky="w")
         else:
             simple = [f for f in description["fields"] if f["kind"] not in COLLECTIONS]
             records = [f for f in description["fields"] if f["kind"] in COLLECTIONS]

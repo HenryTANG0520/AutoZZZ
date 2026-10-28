@@ -1,4 +1,4 @@
-"""AutoZZZ 原生条件策略编辑窗口；执行入口在运行控制接入后提供。"""
+"""AutoZZZ 原生条件策略编辑窗口。"""
 from __future__ import annotations
 
 import queue
@@ -42,7 +42,7 @@ class StrategyWindow:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
         ttk.Label(header, text="条件策略", style="PageTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(header, text="开发中 · 尚未接入出战", style="Hint.TLabel").grid(row=0, column=1, sticky="e")
+        ttk.Label(header, text="国服" if server=="cn" else "国际服", style="Hint.TLabel").grid(row=0, column=1, sticky="e")
         form = ttk.Frame(self.window, padding=(16, 0, 16, 12))
         form.grid(row=1, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)

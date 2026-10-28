@@ -634,8 +634,10 @@ class AutoZZZWindow:
         strategy_worker_alive = strategies is not None and strategies.worker is not None and strategies.worker.is_alive()
         application_worker = getattr(getattr(self,"onedragon_panel",None),"worker",None)
         application_worker_alive = application_worker is not None and application_worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive:
-            self.root.destroy()
+        execution=getattr(self,"execution_window",None)
+        execution_worker_alive=execution is not None and execution.worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive:
+            self._destroy_root()
             return
         self.root.after(80, self._drain)
 
@@ -654,6 +656,8 @@ class AutoZZZWindow:
             return
         if applications is not None:
             applications.close(discard=True)
+        execution=getattr(self,"execution_window",None)
+        if execution is not None and not execution.closed:execution.close()
         self.closing = True
         if getattr(self, "overlay", None):
             self.overlay.close()
@@ -661,8 +665,15 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()):
-            self.root.destroy()
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()):
+            self._destroy_root()
+
+    def _destroy_root(self):
+        # 所有工作线程结束后，先取消各窗口定时器，再由所属控件释放 Tcl 命令。
+        # root.after_cancel 会用 root 释放其他窗口拥有的命令，导致销毁时重复删除。
+        for token in self.root.tk.splitlist(self.root.tk.call("after","info")):
+            self.root.tk.call("after","cancel",token)
+        self.root.destroy()
 
 
 def main(config_path: Path = CONFIG_PATH, *, server: str | None = None, game_path: str | None = None) -> None:

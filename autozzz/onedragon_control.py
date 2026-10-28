@@ -44,6 +44,7 @@ class ExecutionControl:
         self.backend_paused = False
         self.error = ""
         self.changed = threading.Event()
+        self.input_validator: Callable[[], None] | None = None
 
     @property
     def task_epoch(self) -> int:
@@ -184,6 +185,7 @@ class ExecutionControl:
             # 短小的物理输入与代次变更互斥，不能在检查后由另一线程恢复旧输入。
             if self.stopped or self.manual_paused or self.focus_waiting or self.task_epoch != self.epoch:
                 raise ObservationExpired("输入前状态发生变化。")
+            if self.input_validator is not None:self.input_validator()
             return action()
 
     def hold(self, seconds: float) -> bool:
@@ -195,6 +197,9 @@ class ExecutionControl:
             with self.lock:
                 if self.stopped or self.manual_paused or self.focus_waiting or epoch != self.epoch:
                     return False
+                if self.input_validator is not None:
+                    try:self.input_validator()
+                    except ObservationExpired:return False
             self.changed.wait(min(.01, max(0, deadline - time.monotonic())))
             self.changed.clear()
         return True

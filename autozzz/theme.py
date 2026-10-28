@@ -358,5 +358,5 @@ def card(parent, scale, *, padding=16):
 
 def wrapped_label(parent, *, text=None, textvariable=None, style="CardHint.TLabel", **kwargs):
     label = ttk.Label(parent, text=text, textvariable=textvariable, style=style, **kwargs)
-    label.bind("<Configure>", lambda event: label.configure(wraplength=max(80, event.width)))
+    label.bind("<Configure>", lambda event: label.configure(wraplength=max(80, event.width - 8)))
     return label

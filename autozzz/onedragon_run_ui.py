@@ -1,0 +1,280 @@
+"""实际应用运行窗口；配置、资源预算和运行反馈沿用 AutoZZZ 交互。"""
+from __future__ import annotations
+
+import queue
+import tkinter as tk
+from tkinter import ttk,filedialog
+import uuid
+
+from . import theme
+from .config import GAME_PATHS,ROOT,Settings
+from .onedragon_runtime import RuntimePaths
+from .onedragon_session import RuntimeSession
+
+
+class ExecutionWindow:
+    def __init__(self,ui,app_id,app_name,profile):
+        self.ui,self.app_id,self.profile=ui,app_id,profile
+        self.closed=self.closing=self.busy=self.prepared=self.connected=False
+        self.paused=False
+        self.bootstrapping=False
+        self.last_state={}
+        self.last_report=None
+        self.poll_token=None
+        self.events=queue.Queue()
+        self.window=tk.Toplevel(ui.root)
+        self.window.title("AutoZZZ · "+app_name)
+        d=lambda n:round(n*ui.ui_scale)
+        width,height=min(d(960),ui.root.winfo_screenwidth()-d(50)),min(d(740),ui.root.winfo_screenheight()-d(90))
+        self.window.geometry(f"{width}x{height}")
+        self.window.minsize(min(d(780),width),min(d(620),height))
+        self.window.configure(background=theme.PANEL)
+        self.window.transient(ui.root)
+        self.window.columnconfigure(0,weight=1)
+        self.window.rowconfigure(3,weight=1)
+        self.status=tk.StringVar(self.window,"正在连接运行环境…")
+        same_profile=ui.server.get()==("国服" if profile=="cn" else "国际服")
+        self.game_path=tk.StringVar(self.window,ui.game_path.get() if same_profile else GAME_PATHS[profile])
+        self.region=tk.StringVar(self.window,"cn" if profile=="cn" else "asia")
+        self.traces=[(var,var.trace_add("write",self.connection_changed)) for var in (self.game_path,self.region)]
+        self.window.bind("<Destroy>",self.disposed,add="+")
+        self.auto_launch=tk.BooleanVar(self.window,True)
+        self.timeout=tk.StringVar(self.window,"600")
+        self.allowance=tk.StringVar(self.window,"20")
+        self.rounds=tk.StringVar(self.window,"1")
+        self.per_battle=tk.StringVar(self.window,"20")
+        self.uses_charge=app_id=="charge_plan"
+        header=ttk.Frame(self.window,padding=d(18))
+        header.grid(row=0,column=0,sticky="ew")
+        header.columnconfigure(0,weight=1)
+        ttk.Label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
+        ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel").grid(row=0,column=1,sticky="e")
+        settings=ttk.Frame(self.window,padding=(d(18),0,d(18),d(12)))
+        settings.grid(row=1,column=0,sticky="ew")
+        settings.columnconfigure(1,weight=1)
+        ttk.Label(settings,text="游戏程序").grid(row=0,column=0,sticky="w",padx=(0,d(14)))
+        path=ttk.Entry(settings,textvariable=self.game_path,width=24)
+        path.grid(row=0,column=1,sticky="ew")
+        browse=ttk.Button(settings,text="浏览",command=self.browse)
+        browse.grid(row=0,column=2,padx=(d(8),0))
+        row=ttk.Frame(settings)
+        row.grid(row=1,column=0,columnspan=3,sticky="ew",pady=(d(12),0))
+        launch=ttk.Checkbutton(row,text="自动进入游戏",variable=self.auto_launch,style="Config.TCheckbutton")
+        launch.pack(side="left",padx=(0,d(18)))
+        ttk.Label(row,text="运行时限（秒）").pack(side="left",padx=(0,d(8)))
+        timeout=ttk.Entry(row,textvariable=self.timeout,width=7)
+        timeout.pack(side="left")
+        ttk.Label(row,text="暂停不计时",style="Hint.TLabel").pack(side="left",padx=d(10))
+        self.settings_controls=[path,browse,launch,timeout]
+        if profile=="global":
+            region=ttk.Combobox(row,textvariable=self.region,values=("asia","us","eu","twhkmo"),state="readonly",width=8)
+            region.pack(side="right")
+            self.settings_controls.append(region)
+            ttk.Label(row,text="账号时区").pack(side="right",padx=d(8))
+        self.budget_frame=ttk.LabelFrame(self.window,text="本轮战斗预算",padding=d(12))
+        self.budget_frame.grid(row=2,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
+        for col,(name,var) in enumerate((("总电量上限",self.allowance),("最多场次",self.rounds),("每场电量上限",self.per_battle))):
+            ttk.Label(self.budget_frame,text=name).grid(row=0,column=col*2,sticky="w",padx=(0,d(8)))
+            entry=ttk.Entry(self.budget_frame,textvariable=var,width=6)
+            entry.grid(row=0,column=col*2+1,sticky="w",padx=(0,d(18)))
+            self.settings_controls.append(entry)
+        theme.wrapped_label(self.budget_frame,text="仅使用现有电量 · 不补充电量或合成电池",style="Hint.TLabel").grid(row=1,column=0,columnspan=5,sticky="ew",pady=(d(9),0))
+        self.budget_button=ttk.Button(self.budget_frame,text="预算记录…",command=self.budget_records)
+        self.budget_button.grid(row=1,column=5,sticky="e",pady=(d(9),0))
+        self.settings_controls.append(self.budget_button)
+        area=ttk.Frame(self.window,padding=(d(18),0))
+        area.grid(row=3,column=0,sticky="nsew")
+        area.columnconfigure(0,weight=1)
+        area.rowconfigure(0,weight=1)
+        self.log=tk.Text(area,wrap="word",font=("Microsoft YaHei UI",10),background=theme.FIELD,foreground=theme.TEXT,
+                         insertbackground=theme.ACCENT,borderwidth=0,padx=d(12),pady=d(12),state="disabled")
+        scroll=ttk.Scrollbar(area,command=self.log.yview)
+        self.log.configure(yscrollcommand=scroll.set)
+        self.log.grid(row=0,column=0,sticky="nsew")
+        scroll.grid(row=0,column=1,sticky="ns")
+        footer=ttk.Frame(self.window,padding=d(18))
+        footer.grid(row=4,column=0,sticky="ew")
+        footer.columnconfigure(0,weight=1)
+        theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=0,column=0,sticky="ew",pady=(0,d(12)))
+        actions=ttk.Frame(footer)
+        actions.grid(row=1,column=0,sticky="w")
+        self.prepare_button=ttk.Button(actions,text="准备运行",command=self.prepare)
+        self.start_button=ttk.Button(actions,text="开始运行",command=self.start,style="Accent.TButton")
+        self.pause_button=ttk.Button(actions,text="暂停 F9",command=self.pause)
+        self.stop_button=ttk.Button(actions,text="停止 F10",command=self.stop,style="Danger.TButton")
+        self.close_button=ttk.Button(actions,text="关闭",command=self.close)
+        self.report_button=ttk.Button(actions,text="报告",command=lambda:ui._open_path(self.last_report))
+        for button in (self.prepare_button,self.start_button,self.pause_button,self.stop_button,self.report_button,self.close_button):button.pack(side="left",padx=(0,d(8)))
+        self.window.protocol("WM_DELETE_WINDOW",self.close)
+        self.window.bind("<F10>",lambda _:self.stop())
+        if app_id in ("auto_battle","dodge_assistant"):
+            self.write("战斗助手需先在游戏中进入战斗；自动选本请使用体力刷本。")
+        self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
+        self.worker=self.session.worker
+        self.update_buttons()
+        self.poll_token=self.window.after(80,self.poll)
+
+    def browse(self):
+        path=filedialog.askopenfilename(parent=self.window,filetypes=[("绝区零程序","ZenlessZoneZero.exe")])
+        if path:self.game_path.set(path)
+
+    def budget_records(self):
+        from .budget_ui import BudgetWindow
+        BudgetWindow(self.window,self.profile,self.ui.ui_scale)
+
+    def connection_changed(self,*_):
+        self.prepared=False
+        if hasattr(self,"prepare_button"):self.update_buttons()
+
+    def disposed(self,event):
+        if event.widget is self.window:
+            if self.poll_token is not None:
+                self.window.after_cancel(self.poll_token)
+                self.poll_token=None
+            for variable,token in self.traces:variable.trace_remove("write",token)
+            self.traces.clear()
+
+    def write(self,message):
+        self.log.configure(state="normal")
+        self.log.insert("end",str(message)+"\n")
+        if int(self.log.index("end-1c").split(".")[0])>600:self.log.delete("1.0","100.0")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def update_buttons(self):
+        self.prepare_button.state(["!disabled"] if self.connected and not self.busy and not self.closing else ["disabled"])
+        self.start_button.state(["!disabled"] if self.connected and self.prepared and not self.busy and not self.closing else ["disabled"])
+        self.pause_button.state(["!disabled"] if self.busy and (self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
+        self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
+        self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
+        self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
+        for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing else ["!disabled"])
+        if self.uses_charge:self.budget_frame.grid()
+        else:self.budget_frame.grid_remove()
+
+    def prepare(self):
+        if self.busy or self.closing:return
+        try:Settings(server=self.profile,game_path=self.game_path.get()).validate("enter_game")
+        except (TypeError,ValueError) as exc:
+            self.status.set(str(exc))
+            return
+        self.busy=True
+        self.prepared=False
+        self.status.set("正在准备运行环境")
+        self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get())
+        self.update_buttons()
+
+    def start(self):
+        if not self.prepared or self.busy or self.closing:return
+        try:
+            timeout=int(self.timeout.get())
+            if not 30<=timeout<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+            budget=None
+            if self.uses_charge:
+                allowance,rounds,maximum=int(self.allowance.get()),int(self.rounds.get()),int(self.per_battle.get())
+                if not 1<=allowance<=300 or not 1<=rounds<=15 or not 20<=maximum<=100:raise ValueError("电量上限 1—300，场次 1—15，每场上限 20—100。")
+                budget=dict(id="onedragon-"+uuid.uuid4().hex,allowance=allowance,battle_limit=rounds,max_per_battle=maximum)
+        except ValueError as exc:
+            self.status.set(str(exc))
+            return
+        self.busy=True
+        self.status.set("正在开始运行")
+        self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get())
+        self.update_buttons()
+
+    def pause(self):
+        if self.busy:self.session.pause(not self.paused)
+
+    def stop(self):
+        self.session.stop()
+        self.status.set("正在停止原任务…")
+
+    def poll(self):
+        self.poll_token=None
+        if self.closed:return
+        try:
+            while True:
+                event=self.events.get_nowait()
+                kind=event["type"]
+                if kind=="connected":
+                    self.connected=True
+                    self.status.set("已连接 · 待准备")
+                elif kind=="window":self.ui.overlay_game_handle=event["handle"]
+                elif kind=="report":
+                    from pathlib import Path
+                    self.last_report=Path(event["path"])
+                elif kind=="log":
+                    self.write(event["message"])
+                    if self.busy and not self.ui.closing:self.ui.overlay.append(event["message"])
+                elif kind=="phase":
+                    self.bootstrapping=event.get("bootstrapping",self.bootstrapping)
+                    self.status.set(event["phase"])
+                    if event.get("minimize") and not self.ui.closing:
+                        self.ui.overlay.begin(event["phase"])
+                        self.ui.root.iconify()
+                elif kind=="bootstrap_paused":
+                    self.paused=event["paused"]
+                    self.status.set("已暂停" if self.paused else "正在进入游戏")
+                elif kind=="state":
+                    state=event["state"]
+                    self.last_state=state
+                    if state.get("window_handle") is not None:self.ui.overlay_game_handle=state["window_handle"]
+                    self.busy=state["busy"]
+                    self.bootstrapping=False
+                    self.prepared=state["state"]=="prepared"
+                    self.uses_charge=state.get("uses_charge",False)
+                    control=state.get("control",{})
+                    self.paused=control.get("manual_paused",False)
+                    name={"ready":"运行环境已就绪","prepared":"已准备，可开始运行","running":"正在运行","initializing":"正在初始化",
+                          "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
+                    if control.get("focus_waiting"):name="等待游戏恢复焦点"
+                    if self.paused:name="已暂停"
+                    if state.get("time_limited"):name="已达到运行时限"
+                    if state.get("budget",{}).get("limited"):name="已达到本轮预算"
+                    detail=state.get("error") or state.get("run",{}).get("last_status","")
+                    self.status.set(name+(" · "+detail[:100] if detail else ""))
+                    if not self.busy and state["state"] not in ("ready","prepared"):
+                        self.prepared=False
+                        if not self.ui.closing:self.ui.overlay.finish(name)
+                        if not self.closing:
+                            self.ui.root.deiconify()
+                            self.window.deiconify()
+                    if not self.ui.closing:self.ui.overlay.set_status(name)
+                elif kind=="error":
+                    self.busy=event.get("busy",False)
+                    if not self.busy:self.bootstrapping=False
+                    self.status.set(event["message"][:160])
+                    self.write(event["message"])
+                    if not self.busy and not self.closing:
+                        self.ui.root.deiconify()
+                        self.window.deiconify()
+                elif kind=="closed":
+                    self.connected=self.prepared=self.busy=self.bootstrapping=False
+                    if self.closing:
+                        self.closed=True
+                        self.window.destroy()
+                        return
+                self.update_buttons()
+        except queue.Empty:pass
+        self.poll_token=self.window.after(80,self.poll)
+
+    def close(self):
+        if not self.closing:
+            self.closing=True
+            self.status.set("正在停止并等待原进程退出…")
+            self.session.close()
+            self.update_buttons()
+            if not self.worker.is_alive():
+                self.closed=True
+                self.window.destroy()
+        return True
+
+
+def open_execution(ui,app_id,app_name,profile):
+    existing=getattr(ui,"execution_window",None)
+    if existing is not None and not existing.closed:
+        existing.window.deiconify()
+        existing.window.lift()
+        return existing
+    ui.execution_window=ExecutionWindow(ui,app_id,app_name,profile)
+    return ui.execution_window

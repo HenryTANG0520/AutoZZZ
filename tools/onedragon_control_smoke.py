@@ -38,7 +38,7 @@ def main():
     from autozzz.onedragon_service import OneDragonService
     from autozzz.onedragon_execution import OneDragonExecution
     from autozzz.onedragon_control import WindowState, ObservationExpired
-    from autozzz.onedragon_host import ControlledKeyboard
+    from autozzz.onedragon_host import ControlledKeyboard, ControlledDevice, RelativeMouse
     from autozzz.run_lock import RunLock
 
     service = OneDragonService(root / "vendor" / "onedragon", args.data)
@@ -168,6 +168,84 @@ def main():
         control.poll()
         checks.append("actual_finite_key_hold_releases_immediately_on_focus_loss")
 
+        # 真正的条件执行器和原子操作线程要同时满足新观察与战斗画面判断。
+        from one_dragon.base.conditional_operation.atomic_op import AtomicOp
+        from one_dragon.base.conditional_operation.operation_executor import OperationExecutor
+        class RecordedAttack(AtomicOp):
+            def __init__(self, duration=None):
+                super().__init__("测试普攻")
+                self.duration=duration
+            def execute(self):
+                if self.duration is None:controller.click()
+                else:keys.press("e",self.duration)
+        battle_control=manager.battle_control
+        control.reset()
+        with control.scope():controller.screenshot()
+        before=len(clicks)
+        with control.scope():assert not OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
+        assert len(clicks)==before
+        battle_control.allowed=True
+        battle_control.allowed_epoch=control.epoch
+        with control.scope():assert OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
+        assert len(clicks)==before+1
+        old_epoch=control.epoch
+        control.set_manual_pause(True)
+        control.set_manual_pause(False)
+        with control.scope():controller.screenshot()
+        with control.scope():assert not OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
+        assert len(clicks)==before+1, "普通新截图不能代替恢复后的战斗识别"
+        battle_control.allowed_epoch=control.epoch
+        events.clear()
+        with control.scope():future=OperationExecutor([RecordedAttack(30)],time.time()).run_async()
+        wait(lambda: any(event[0]=="down" for event in events))
+        with control.lock:battle_control.allowed=False
+        assert future.result(1)
+        assert [event[0] for event in events]==["down","up"],events
+        assert not keys.keyboard.pressed and not keys._pressed_keys
+        checks.append("actual_conditional_executor_requires_current_battle_classification_and_releases_hold_on_result")
+
+        battle=ctx.auto_battle_context
+        battle.last_check_end_result=None
+        battle.last_check_in_battle=False
+        with control.scope(old_epoch):
+            battle.last_check_end_result="普通战斗-完成"
+            battle.last_check_in_battle=True
+        assert battle.last_check_end_result is None and not battle.last_check_in_battle
+        with control.scope():
+            battle.last_check_end_result="普通战斗-完成"
+            battle.last_check_in_battle=True
+        assert battle.last_check_end_result=="普通战斗-完成" and battle.last_check_in_battle
+        battle.last_check_end_result=None
+        battle.last_check_in_battle=False
+        checks.append("raw_async_battle_result_and_hud_state_cannot_cross_pause_epoch")
+
+        # 截获 Win32 结构体，核实相机转向是相对鼠标位移；不发送系统输入。
+        from autozzz import windows
+        packets=[]
+        def record_packet(count,pointer,size):
+            event=windows.C.cast(pointer,windows.C.POINTER(windows.INPUT)).contents
+            packets.append((event.type,event.mi.dx,event.mi.dy,event.mi.dwFlags))
+            assert count==1 and size==windows.C.sizeof(windows.INPUT)
+            return 1
+        relative=ControlledDevice(RelativeMouse(SimpleNamespace()),control)
+        with patch.object(windows.user32,"SendInput",side_effect=record_packet):
+            with control.scope():relative.move(17,-23)
+            assert packets==[(0,17,-23,1)],packets
+            window[0]=WindowState(True,False,window[0].geometry)
+            try:
+                with control.scope():relative.move(10,0)
+                raise AssertionError("失焦时仍提交了相机位移")
+            except ObservationExpired:pass
+            assert len(packets)==1
+            for dx in (float("nan"),float("inf"),2**31):
+                try:
+                    relative.raw.move(dx,0)
+                    raise AssertionError("无效相对位移未被拒绝")
+                except ValueError:pass
+        window[0]=WindowState(True,True,window[0].geometry)
+        control.poll()
+        checks.append("relative_camera_packet_and_focus_guard_without_windows_input")
+
         ctx.run_context.registry_application([Factory()])
         name = "Local\\AutoZZZ.ControlSmoke." + uuid.uuid4().hex
         original_lock = RunLock
@@ -176,6 +254,8 @@ def main():
                 control.poll()
                 stop.wait(.01)
         manager._watch = watcher
+        manager.prepared_app="autozzz_fixture"
+        manager.prepared_hash=manager.configuration_digest()
         with patch("autozzz.onedragon_execution.RunLock", side_effect=lambda: original_lock(name)):
             started = manager.start_application("autozzz_fixture")
             assert entered.wait(3), manager.status()
@@ -209,6 +289,7 @@ def main():
         entered.clear()
         finish.clear()
         try:
+            manager.prepared_hash=manager.configuration_digest()
             with patch("autozzz.onedragon_execution.RunLock", side_effect=lambda: original_lock(name)):
                 manager.start_application("autozzz_fixture")
                 assert entered.wait(3)
