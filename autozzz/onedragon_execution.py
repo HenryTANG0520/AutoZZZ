@@ -39,6 +39,9 @@ class OneDragonExecution:
         self.assistant_control=AssistantModeControl(ctx,self.control)
         self.redemption_control=RedemptionControl(self.control)
         for adapter in (self.script_control,self.assistant_control,self.redemption_control):adapter.install()
+        from .onedragon_resources import ResourceConfirmation
+        self.resource_confirmation = ResourceConfirmation()
+        self.resource_control = None
         self.prepared_app = self.prepared_hash = ""
         self.prepared_applications=[]
         self.prepared_requirements={}
@@ -128,6 +131,8 @@ class OneDragonExecution:
             self.charge_control=self.group_control=None
             self.script_control.reset()
             self.redemption_control.reset()
+            self.resource_confirmation.prepare([], "")
+            self.resource_control = None
             self.ctx.ready_for_application = False
             self.backend._refresh_runtime_config()
             if instance_idx is not None and self.ctx.current_instance_idx!=instance_idx:
@@ -169,6 +174,8 @@ class OneDragonExecution:
             self.prepared_applications=[]
             self.uses_charge=False
             self.charge_control=self.group_control=None
+            self.resource_confirmation.prepare([], "")
+            self.resource_control = None
             self.backend._refresh_runtime_config()
             current=self.ctx.game_account_config
             if self.connection is not None and self.connection!=(self.ctx.current_instance_idx,current.game_path,current.game_region,current.game_language):
@@ -195,11 +202,13 @@ class OneDragonExecution:
             if digest!=self.configuration_digest():raise ValueError("准备期间配置发生变化，请重新准备。")
             self.prepared_requirements=requirements.summary()
             self.prepared_hash=digest
+            self.resource_confirmation.prepare(requirements.resource_actions, digest)
             self.prepared_app=app_id
             self.state="prepared"
         return self._submit("preparing",prepare)
 
-    def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600) -> dict:
+    def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
+                          resource_confirmation: str | None = None) -> dict:
         """通过已准备的配置启动实际上游应用，保留同一进程与任务锁。"""
         if not self.ctx.ready_for_application:
             raise RuntimeError("请先初始化一条龙运行环境。")
@@ -215,14 +224,21 @@ class OneDragonExecution:
             for name,maximum in (("allowance",300),("battle_limit",15),("max_per_battle",100)):
                 if type(budget[name])is not int or not (20 if name=="max_per_battle" else 1)<=budget[name]<=maximum:raise ValueError("战斗预算超出允许范围。")
         elif budget is not None:raise ValueError("当前应用不需要战斗预算。")
+        self.resource_confirmation.verify(resource_confirmation, self.prepared_hash)
         def run():
             with RunLock():
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
+                self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
                 self.script_control.reset()
                 self.redemption_control.reset()
                 self.charge_control=None
                 self.group_control=None
                 try:
+                    fingerprints = self.prepared_requirements.get("resource_settings", {})
+                    if fingerprints:
+                        from .onedragon_resources import ResourceActionControl
+                        self.resource_control = ResourceActionControl(self.ctx, self.control, fingerprints)
+                        self.resource_control.install()
                     if app_id=="one_dragon":
                         from .onedragon_group import GroupRunControl
                         self.group_control=GroupRunControl(self.ctx,self.control,self.prepared_applications)
@@ -237,6 +253,7 @@ class OneDragonExecution:
                     self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
                     self._run_bound_app(app_id)
                 finally:
+                    if self.resource_control is not None:self.resource_control.close()
                     if self.charge_control is not None:self.charge_control.close()
                     if self.group_control is not None:self.group_control.close()
         return self._submit("running", run)
@@ -305,6 +322,8 @@ class OneDragonExecution:
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts))
+            result["resources"] = self.resource_confirmation.status()
+            result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)

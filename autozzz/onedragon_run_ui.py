@@ -24,6 +24,8 @@ class ExecutionWindow:
         self.application_states={}
         self.last_state={}
         self.last_report=None
+        self.resource_confirmation_id=""
+        self.resource_required=False
         self.poll_token=None
         self.events=queue.Queue()
         self.window=tk.Toplevel(ui.root)
@@ -97,6 +99,19 @@ class ExecutionWindow:
         self.mode_selector=ttk.Combobox(self.assistant_frame,textvariable=self.mode,values=self.mode_labels,state="readonly",width=16)
         self.mode_selector.pack(side="left")
         self.mode_selector.bind("<<ComboboxSelected>>",self.set_assistant_mode)
+        self.resource_frame=ttk.LabelFrame(self.options,text="本轮资源操作",padding=d(12))
+        self.resource_frame.grid(row=2,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
+        self.resource_frame.columnconfigure(0,weight=1)
+        self.resource_text=tk.Text(self.resource_frame,height=4,wrap="word",font=("Microsoft YaHei UI",10),
+                                   background=theme.FIELD,foreground=theme.TEXT,borderwidth=0,padx=d(8),pady=d(6),state="disabled")
+        self.resource_text.grid(row=0,column=0,sticky="ew")
+        resource_scroll=ttk.Scrollbar(self.resource_frame,command=self.resource_text.yview)
+        self.resource_text.configure(yscrollcommand=resource_scroll.set)
+        resource_scroll.grid(row=0,column=1,sticky="ns")
+        self.resource_accepted=tk.BooleanVar(self.window,False)
+        self.resource_check=ttk.Checkbutton(self.resource_frame,text="允许本轮按以上配置消费或拆解",variable=self.resource_accepted,
+                                           style="Config.TCheckbutton",command=self.update_buttons)
+        self.resource_check.grid(row=1,column=0,columnspan=2,sticky="w",pady=(d(9),0))
         area=ttk.Frame(self.window,padding=(d(18),0))
         area.grid(row=3,column=0,sticky="nsew")
         area.columnconfigure(0,weight=1)
@@ -141,6 +156,7 @@ class ExecutionWindow:
 
     def connection_changed(self,*_):
         self.prepared=False
+        if hasattr(self,"resource_accepted"):self.resource_accepted.set(False)
         if hasattr(self,"prepare_button"):self.update_buttons()
 
     def disposed(self,event):
@@ -162,7 +178,8 @@ class ExecutionWindow:
         self.prepare_button.configure(style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
-        self.start_button.state(["!disabled"] if self.connected and self.prepared and not self.busy and not self.closing else ["disabled"])
+        confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))
+        self.start_button.state(["!disabled"] if self.connected and self.prepared and confirmed and not self.busy and not self.closing else ["disabled"])
         self.pause_button.state(["!disabled"] if self.busy and (self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
         self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
         self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
@@ -174,6 +191,11 @@ class ExecutionWindow:
         if self.app_id=="commission_assistant" or assistant.get("mode") is not None:self.assistant_frame.grid()
         else:self.assistant_frame.grid_remove()
         self.mode_selector.state(["!disabled"] if assistant.get("mode") is not None and self.busy and not self.closing else ["disabled"])
+        if self.last_state.get("resources",{}).get("actions"):self.resource_frame.grid()
+        else:self.resource_frame.grid_remove()
+        if self.resource_required:self.resource_check.grid()
+        else:self.resource_check.grid_remove()
+        self.resource_check.state(["!disabled"] if self.prepared and not self.busy and not self.closing else ["disabled"])
 
     def set_assistant_mode(self,_event=None):
         if self.mode_selector.instate(["disabled"]):return
@@ -188,12 +210,16 @@ class ExecutionWindow:
             return
         self.busy=True
         self.prepared=False
+        self.resource_accepted.set(False)
         self.status.set("正在准备运行环境")
         self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get(),instance_idx=self.instance_idx,instance_name=self.account_name)
         self.update_buttons()
 
     def start(self):
         if not self.prepared or self.busy or self.closing:return
+        if self.resource_required and (not self.resource_accepted.get() or not self.resource_confirmation_id):
+            self.status.set("请先确认本轮资源操作。")
+            return
         try:
             timeout=int(self.timeout.get())
             if not 30<=timeout<=7200:raise ValueError("运行时限须为 30—7200 秒。")
@@ -207,7 +233,8 @@ class ExecutionWindow:
             return
         self.busy=True
         self.status.set("正在开始运行")
-        self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get())
+        confirmation=self.resource_confirmation_id if self.resource_required else None
+        self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation)
         self.update_buttons()
 
     def pause(self):
@@ -263,6 +290,18 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    resources=state.get("resources",{})
+                    from .onedragon_resources import resource_confirmation_label
+                    self.resource_check.configure(text=resource_confirmation_label(resources.get("actions",[])))
+                    token=resources.get("confirmation_id","")
+                    if token!=self.resource_confirmation_id and state["state"]=="prepared":self.resource_accepted.set(False)
+                    self.resource_confirmation_id=token
+                    self.resource_required=resources.get("confirmation_required",False)
+                    if resources.get("confirmed"):self.resource_accepted.set(True)
+                    self.resource_text.configure(state="normal")
+                    self.resource_text.delete("1.0","end")
+                    self.resource_text.insert("end","\n".join("• "+item["text"] for item in resources.get("actions",[])))
+                    self.resource_text.configure(state="disabled")
                     assistant=state.get("assistant",{})
                     keys=assistant.get("keys") or state.get("prepared_requirements",{}).get("shortcuts",{})
                     self.mode_labels=["对话","闪避"+("（"+keys["dodge"]+"）" if keys.get("dodge") else ""),
@@ -291,6 +330,8 @@ class ExecutionWindow:
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
                     if state["state"]=="success" and state.get("redemption"):
                         name="流程结束 · 兑换奖励到账未核实"
+                    if state["state"]=="success" and any(not item["reward_verified"] for item in state.get("resource_results",[])):
+                        name="流程结束 · 拆解结果未核实"
                     if control.get("focus_waiting"):name="等待游戏恢复焦点"
                     if self.paused:name="已暂停"
                     if state.get("time_limited"):name="已达到运行时限"

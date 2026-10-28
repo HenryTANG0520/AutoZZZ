@@ -25,7 +25,7 @@ NOTES = {
     "charge_plan":"刷本消耗电量。",
     "notorious_hunt":"每周免费次数与后续电量消耗以游戏为准。",
     "drive_disc_dismantle":"拆解后的驱动盘无法恢复。",
-    "suibian_temple":"采购等选项会消耗丁尼、观行币等资源。",
+    "suibian_temple":"面向满级随便观；手动经营消耗材料，采购消耗云纹徽。",
     "teams":"队名与角色顺序须与游戏内预编队伍一致。",
     "shiyu_defense":"自动扫描游戏内编队并按弱点配队。",
     "commission_assistant":"模式快捷键使用单键；F9/F10 用于暂停和停止。",

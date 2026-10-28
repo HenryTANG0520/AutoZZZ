@@ -280,9 +280,9 @@ class OneDragonService:
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.prepare_application(app_id)
 
-    def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600) -> dict:
+    def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
-        return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds)
+        return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation)
 
     def pause_execution(self, paused: bool) -> dict:
         if self._execution is None:

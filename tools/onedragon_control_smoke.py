@@ -256,6 +256,7 @@ def main():
         manager._watch = watcher
         manager.prepared_app="autozzz_fixture"
         manager.prepared_hash=manager.configuration_digest()
+        manager.resource_confirmation.prepare([], manager.prepared_hash)
         with patch("autozzz.onedragon_execution.RunLock", side_effect=lambda: original_lock(name)):
             started = manager.start_application("autozzz_fixture")
             assert entered.wait(3), manager.status()
@@ -290,6 +291,7 @@ def main():
         finish.clear()
         try:
             manager.prepared_hash=manager.configuration_digest()
+            manager.resource_confirmation.prepare([], manager.prepared_hash)
             with patch("autozzz.onedragon_execution.RunLock", side_effect=lambda: original_lock(name)):
                 manager.start_application("autozzz_fixture")
                 assert entered.wait(3)

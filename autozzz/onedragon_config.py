@@ -19,7 +19,7 @@ LABELS = {
     "combat_simulation_double_reward_config": "双倍活动计划", "restore_charge": "补充电量方式",
     "transport_point": "传送地点", "run_charge_plan_afterwards": "饮品后运行体力计划",
     "agent_name_1": "宣传员首选", "agent_name_2": "宣传员备选", "selected_sign": "签到地点",
-    "dismantle_level": "拆解品质上限", "dismantle_abandon": "包含已弃置驱动盘",
+    "dismantle_level": "拆解品质上限", "dismantle_abandon": "额外包含全部已弃置驱动盘",
     "pause_in_background": "失焦暂停", "dialog_click_interval": "对话间隔（秒）", "story_mode": "剧情处理",
     "dialog_option": "对话选项", "dodge_config": "闪避策略", "dodge_switch": "闪避助手快捷键",
     "auto_battle": "战斗策略", "auto_battle_switch": "战斗助手快捷键", "sleep_after_empty_screen": "空画面等待（秒）",
@@ -45,7 +45,7 @@ LABELS = {
     "target_agents": "目标角色", "go_in_1_step": "一步可达时优先", "waypoint": "必经节点", "avoid": "避开节点",
     "buy_only_priority": "仅购买优先鸣徽",
     "auto_manage_enabled":"自动托管", "good_goods_purchase_enabled":"好物铺采购", "craft_drag_times":"制造下拉次数上限",
-    "yum_cha_sin":"每日饮茶", "yum_cha_sin_period_refresh":"刷新定期采办", "adventure_duration":"派遣时长",
+    "yum_cha_sin":"提交定期采办", "yum_cha_sin_period_refresh":"刷新定期采办", "adventure_duration":"派遣时长",
     "adventure_mission_1":"任务 1", "adventure_mission_2":"任务 2", "adventure_mission_3":"任务 3", "adventure_mission_4":"任务 4",
     "boo_box_purchase_enabled":"购买邦布", "boo_box_adventure_price":"游历最低价格", "boo_box_craft_price":"制造最低价格", "boo_box_sell_price":"售卖最低价格",
     "pawnshop_omnicoin_enabled":"使用百宝通", "pawnshop_omnicoin_priority":"百宝通物品顺序",
@@ -209,6 +209,8 @@ class ConfigurationStore:
         ranges = {"weekly_challenge_start_weekday": (1,7), "critical_max_node_idx": (1,10),
                   "screenshot_interval": (.01,1), "store_blood_min": (0,100)}
         for field in fields:
+            if app_id == "suibian_temple" and field["name"].startswith("pawnshop_"):
+                field["supported_in_runtime"] = False
             if field["name"] in ranges:
                 field["minimum"], field["maximum"] = ranges[field["name"]]
         ranks = {}

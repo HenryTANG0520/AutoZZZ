@@ -19,6 +19,8 @@ class ApplicationRequirements:
         self.routes: list[str] = []
         self.scripts: list[dict] = []
         self.shortcuts: dict[str, str] = {}
+        self.resource_actions: list[dict] = []
+        self.resource_settings: dict[str, str] = {}
         self.uses_charge = False
 
     def policy(self, name: str, directory: str = "auto_battle") -> None:
@@ -105,6 +107,14 @@ class ApplicationRequirements:
                 self.scripts.append(dict(kind="key_sim",name="真拿命验收",app_id=app_id))
             elif app_id == "operation_debug":
                 self.scripts.append(dict(kind="operation_template",name=self.store.get(app_id).operation_template))
+            elif app_id in ("suibian_temple", "drive_disc_dismantle"):
+                from .onedragon_resources import resource_actions, resource_fingerprint
+                config = self.store.get(app_id)
+                for field in self.store._describe(app_id, config)["fields"]:
+                    if field.get("supported_in_runtime", True):
+                        self.store._validate_scalar(field, field["value"])
+                self.resource_actions.extend(resource_actions(app_id, config))
+                self.resource_settings[app_id] = resource_fingerprint(config)
 
     def _charge(self) -> None:
         from .onedragon_charge import ChargeBudgetControl
@@ -189,4 +199,5 @@ class ApplicationRequirements:
     def summary(self) -> dict:
         return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
                     models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
-                    challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts))
+                    challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts),
+                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings))

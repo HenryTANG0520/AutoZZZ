@@ -141,6 +141,53 @@ def main():
                     window.close()
                     pump(root,lambda:window.closed)
                     window.worker.join(1)
+                    window=ExecutionWindow(ui,'one_dragon','一条龙资源确认','cn')
+                    ui.execution_window=window
+                    pump(root,lambda:window.connected and not window.loading_account)
+                    actions=[dict(id='manual',text='随便观：派遣游历、制造和售卖，消耗经营材料及邦布续航。',requires_confirmation=True),
+                             dict(id='procurement',text='饮茶仙：提交材料，缺料时尝试制造或派遣；定期采办刷新开启。',requires_confirmation=True),
+                             dict(id='goods',text='好物铺：使用云纹徽批量购买邦布能源插件，可能用完对应资源。',requires_confirmation=True),
+                             dict(id='bangboo',text='邦巢：刷新并使用云纹徽批量聘用 S 级邦布；最低价格游历25000／制造25000／售卖25000，可能用完云纹徽。请先关闭游戏内“快速选择”。',requires_confirmation=True),
+                             dict(id='disc',text='驱动盘：拆解A及以下；额外包含全部已弃置驱动盘。拆解后无法恢复。',requires_confirmation=True)]
+                    for item in actions:item['app_id']='drive_disc_dismantle' if item['id']=='disc' else 'suibian_temple'
+                    window.session.state.update(state='prepared',busy=False,prepared_app='one_dragon',uses_charge=True,
+                                                resources=dict(actions=actions,confirmation_required=True,confirmation_id='prepared-resources-1',confirmed=[]))
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.prepared)
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update()
+                        layout(window.window)
+                        cases.append([scale,size,'resources'])
+                        if output is not None and scale==1. and size=='default':
+                            from PIL import ImageGrab
+                            ImageGrab.grab(window=window.window.winfo_id()).save(output/'resource-confirmation.png')
+                    assert window.start_button.instate(['disabled'])
+                    assert '拆解无法恢复' in window.resource_check.cget('text')
+                    before=len(window.session.commands)
+                    window.start()
+                    assert len(window.session.commands)==before
+                    window.resource_check.invoke()
+                    assert not window.start_button.instate(['disabled'])
+                    window.auto_launch.set(False)
+                    window.start_button.invoke()
+                    pump(root,lambda:window.busy)
+                    assert window.session.commands[-1][1]['resource_confirmation']=='prepared-resources-1'
+                    assert window.resource_check.instate(['disabled'])
+                    window.stop_button.invoke()
+                    pump(root,lambda:not window.busy)
+                    window.session.state.update(state='prepared',busy=False)
+                    window.session.state['resources']['confirmation_id']='prepared-resources-2'
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.prepared)
+                    assert not window.resource_accepted.get() and window.start_button.instate(['disabled'])
+                    window.session.state.update(state='success',busy=False,resource_results=[dict(reward_verified=False)])
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'拆解结果未核实' in window.status.get())
+                    assert not errors,errors
+                    window.close()
+                    pump(root,lambda:window.closed)
+                    window.worker.join(1)
                     window=ExecutionWindow(ui,'commission_assistant','委托助手','cn')
                     ui.execution_window=window
                     pump(root,lambda:window.connected and not window.loading_account)
