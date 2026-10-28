@@ -38,6 +38,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup_onedragon.ps1
 
 `tools/onedragon_smoke.py` 使用真实独立进程检查 30 个应用注册、17 个应用配置快照、内置与自定义条件策略，以及错误名称、非法策略和未开放执行请求的拒绝。`tools/onedragon_engine_smoke.py` 用真实条件引擎配合记录型原子操作验证状态选择、优先级打断和停止；`tools/onedragon_gui_smoke.py` 检查原生策略窗口的导入、保存、默认选择、关闭等待及三种 DPI。它们不启动游戏，也不能作为实机战斗成功的证据。
 
+执行适配层现已支持异步初始化、同一任务的状态查询与停止，以及受控前台键鼠、F9/F10、失焦等待、旧截图/线程池结果作废和共用任务锁。`tools/onedragon_initialize_smoke.py` 实际下载并加载上游 OCR，识别合成文字；`tools/onedragon_control_smoke.py` 使用真实上游 Operation、线程池和 RunSlot 回放暂停与停止，设备输入由记录器替代。`tools/onedragon_window_smoke.py` 用隐藏的测试子进程窗口核实进程绑定，不操作游戏。当前传输接口仅开放初始化与查询控制；完整配置、资源预算、后台/手柄适配和实机检查完成后才会开放新出战入口。
+
 ## 当前范围
 
 每日页面执行不消耗体力的流程。自动战斗从独立页面启动，使用独立策略与现有电量预算。

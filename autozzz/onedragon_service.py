@@ -32,12 +32,13 @@ class OneDragonService:
         from one_dragon.utils import os_utils
         os_utils.set_work_dir(self.data)
         self._ctx: Any = None
+        self._execution: Any = None
 
     @property
     def ctx(self) -> Any:
         if self._ctx is None:
-            from zzz_od.context.zzz_context import ZContext
-            ctx = ZContext()
+            from .onedragon_host import ManagedZContext
+            ctx = ManagedZContext()
             ctx.register_application_factory()
             self._ctx = ctx
         return self._ctx
@@ -67,6 +68,7 @@ class OneDragonService:
         return self.ctx.run_context.get_config(app_id, self.ctx.current_instance_idx, DEFAULT_GROUP_ID)
 
     def configuration(self, app_id: str) -> dict:
+        self._assert_idle()
         config = self._config(app_id)
         values, failures = {}, {}
         for name, prop in inspect.getmembers(type(config), lambda p: isinstance(p, property)):
@@ -79,6 +81,7 @@ class OneDragonService:
         return dict(app_id=app_id, fields=values, failures=failures)
 
     def set_battle_options(self, values: dict) -> dict:
+        self._assert_idle()
         allowed = {"auto_battle_config": str, "use_merged_file": bool, "auto_ultimate_enabled": bool,
                    "screenshot_interval": float, "background_mode": bool, "dodge_assistant_config": str}
         if not isinstance(values, dict) or set(values) - set(allowed):
@@ -144,6 +147,7 @@ class OneDragonService:
         return dict(name=name, filename=path.name, content=path.read_text(encoding="utf-8"))
 
     def policy_validate(self, name: str, merged: bool = True) -> dict:
+        self._assert_idle()
         self._policy_path(name, merged)  # 上游会在缺失时回退；桥接层必须先拒绝错误名称。
         from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
         from one_dragon.base.conditional_operation.operator import ConditionalOperator
@@ -166,6 +170,7 @@ class OneDragonService:
             operator.dispose()
 
     def policy_save(self, name: str, content: str) -> dict:
+        self._assert_idle()
         name = self._name(name)
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
@@ -187,6 +192,7 @@ class OneDragonService:
         return validation
 
     def policy_check(self, content: str) -> dict:
+        self._assert_idle()
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
         directory = self.data / "config" / "auto_battle"
@@ -200,7 +206,47 @@ class OneDragonService:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def _assert_idle(self) -> None:
+        if self._execution is not None and self._execution.busy:
+            raise RuntimeError("一条龙任务仍在处理，暂时不能修改或重载配置。")
+
+    def initialize_execution(self, server: str, game_path: str, region: str | None = None) -> dict:
+        if self._execution is None:
+            from .onedragon_execution import OneDragonExecution
+            self._execution = OneDragonExecution(self.ctx)
+        return self._execution.initialize(server, game_path, region)
+
+    def execution_status(self) -> dict:
+        if self._execution is None:
+            return dict(state="idle", busy=False, ready=False, job_id="", error="")
+        return self._execution.status()
+
+    def pause_execution(self, paused: bool) -> dict:
+        if self._execution is None:
+            raise RuntimeError("当前没有一条龙执行任务。")
+        return self._execution.pause(paused)
+
+    def stop_execution(self) -> dict:
+        if self._execution is None:
+            return self.execution_status()
+        return self._execution.stop()
+
+    def runtime_probe(self) -> dict:
+        self._assert_idle()
+        if self._execution is None or not self.ctx.ready_for_application:
+            raise RuntimeError("一条龙环境尚未就绪。")
+        import cv2
+        import numpy as np
+        image = np.full((100, 320, 3), 255, dtype=np.uint8)
+        cv2.putText(image, "400", (25, 72), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 3, cv2.LINE_AA)
+        text = self.ctx.ocr.run_ocr_single_line(image)
+        return dict(ocr_text=text, controller=type(self.ctx.controller).__name__,
+                    window_bound=self.ctx.controller.game_win.bound is not None,
+                    upstream_hotkeys_started=self.ctx._btn_listener_started, game_input_sent=False)
+
     def close(self) -> None:
+        if self._execution is not None:
+            self._execution.close()
         if self._ctx is not None:
             ctx = self._ctx
             try:
@@ -224,4 +270,5 @@ class OneDragonService:
 
 
 METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_validate",
-           "policy_save", "policy_check", "set_battle_options"}
+           "policy_save", "policy_check", "set_battle_options", "initialize_execution",
+           "execution_status", "pause_execution", "stop_execution", "runtime_probe"}

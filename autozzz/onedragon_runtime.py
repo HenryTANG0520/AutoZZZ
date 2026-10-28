@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ctypes
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from typing import Any, Callable
 
@@ -131,9 +133,18 @@ class OneDragonClient:
         self._terminal_error: str | None = None
         self._reader: threading.Thread | None = None
         self._logger: threading.Thread | None = None
+        self.worker_pid: int | None = None
+        self.worker_exit_code: int | None = None
+        self._worker_handle = None
+        self._kernel = None
 
     @property
     def alive(self) -> bool:
+        if self._worker_handle is not None:
+            state = self._kernel.WaitForSingleObject(self._worker_handle, 0)
+            if state not in (0, 258):
+                raise RuntimeUnavailable("暂时无法核实实际工作进程状态；请保留原进程，不要重复启动。")
+            return state == 258
         return self.process is not None and self.process.poll() is None
 
     def start(self, timeout: float = 30) -> dict:
@@ -160,6 +171,21 @@ class OneDragonClient:
         if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != UPSTREAM_REVISION:
             self.close()
             raise RuntimeUnavailable("一条龙通信协议或源码版本不一致。")
+        self.worker_pid = hello.get("pid")
+        if os.name == "nt":
+            if type(self.worker_pid) is not int or self.worker_pid <= 0:
+                self.close()
+                raise RuntimeUnavailable("一条龙未提供可监测的实际工作进程。")
+            self._kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            self._kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            self._kernel.OpenProcess.restype = ctypes.c_void_p
+            self._kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            self._kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            self._kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            self._worker_handle = self._kernel.OpenProcess(0x101000, False, self.worker_pid)
+            if not self._worker_handle:
+                self.close()
+                raise RuntimeUnavailable("无法监测一条龙实际工作进程。")
         return hello
 
     def submit(self, method: str, **params: Any) -> str:
@@ -243,6 +269,7 @@ class OneDragonClient:
                     pass  # 日志接收器异常不能阻塞进程排空 stderr。
 
     def close(self, timeout: float = 10) -> None:
+        deadline = time.monotonic() + timeout
         with self._write_lock:
             if self.process is None:
                 return
@@ -256,13 +283,26 @@ class OneDragonClient:
             self.process.wait(timeout)
         except subprocess.TimeoutExpired as exc:
             raise RequestPending("process-shutdown") from exc
+        if self._worker_handle is not None:
+            waited = self._kernel.WaitForSingleObject(self._worker_handle, max(0, round((deadline-time.monotonic())*1000)))
+            if waited == 258:
+                raise RequestPending("worker-shutdown")
+            if waited != 0:
+                raise RuntimeUnavailable("无法核实一条龙实际工作进程退出状态。")
+            exit_code = ctypes.c_ulong()
+            known_exit = self._kernel.GetExitCodeProcess(self._worker_handle, ctypes.byref(exit_code))
+            self._kernel.CloseHandle(self._worker_handle)
+            self._worker_handle = None
+            if not known_exit:
+                raise RuntimeUnavailable("无法读取一条龙实际工作进程的退出码。")
+            self.worker_exit_code = exit_code.value
         for thread in (self._reader, self._logger):
             if thread:
                 thread.join(timeout=1)
         for stream in (self.process.stdout, self.process.stderr):
             stream.close()
-        if self.process.returncode:
-            raise RemoteError(f"一条龙进程异常退出，退出码 {self.process.returncode}。")
+        if self.worker_exit_code or self.process.returncode:
+            raise RemoteError(f"一条龙进程异常退出，退出码 {self.worker_exit_code or self.process.returncode}。")
 
     def __enter__(self) -> OneDragonClient:
         self.start()

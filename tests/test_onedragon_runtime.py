@@ -15,12 +15,12 @@ from autozzz.onedragon_runtime import (
 )
 
 
-WORKER = '''import sys,json,time
+WORKER = '''import sys,json,time,os
 count=0
 close_delay=0
 for line in sys.stdin:
  r=json.loads(line); m=r['method']; p=r['params']
- if m=='hello': result={'protocol':1,'revision':REVISION}
+ if m=='hello': result={'protocol':1,'revision':REVISION,'pid':os.getpid()}
  elif m=='delay':
   count+=1; time.sleep(.15); result=count
  elif m=='count': result=count
@@ -127,6 +127,13 @@ class ProtocolTests(unittest.TestCase):
         self.client.close()
         with self.assertRaises(RuntimeError):
             self.client.start()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows venv launcher")
+    def test_launcher_exit_does_not_hide_a_live_worker(self):
+        with patch.object(self.client.process, "poll", return_value=0):
+            self.assertTrue(self.client.alive)
+            self.assertEqual(self.client.call("count"), 0)
+        self.assertIsInstance(self.client.worker_pid, int)
 
 
 class ProfileTests(unittest.TestCase):
