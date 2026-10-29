@@ -18,11 +18,14 @@ def main() -> None:
     source = Path(__file__).resolve().parents[1] / "vendor" / "onedragon"
     sys.path.insert(0, str(source / "src"))
     from autozzz.onedragon_service import OneDragonService
+    from autozzz.onedragon_runtime import RuntimePaths
     from one_dragon.base.conditional_operation.atomic_op import AtomicOp
     from one_dragon.base.conditional_operation.state_recorder import StateRecord
     from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
 
-    service = OneDragonService(source, args.data)
+    data=args.data.resolve();defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1])
+    RuntimePaths(source,defaults.python,data).prepare()
+    service = OneDragonService(source, data)
     events: list[str] = []
     attack = threading.Event()
     dodge = threading.Event()
@@ -41,6 +44,7 @@ def main() -> None:
                     events.append("普攻自然结束")
             else:
                 dodge.set()
+                self.cancelled.wait(1)
 
         def stop(self) -> None:
             events.append(self.op_name + "停止")
@@ -73,6 +77,7 @@ scenes:
     context = service.ctx.auto_battle_context
     context.atomic_op_factory = RecordingFactory()
     operator = AutoBattleOperator(context, "auto_battle", name, False)
+    context.auto_op=operator
     try:
         ok, message = operator.init_before_running()
         assert ok, message
@@ -80,8 +85,16 @@ scenes:
         assert not attack.wait(.1), "没有状态时不能普攻"
         context.state_record_service.update_state(StateRecord("自定义-可攻击", time.time()))
         assert attack.wait(2), "更新状态后应执行普攻"
+        from autozzz.onedragon_battle_state import battle_snapshot
+        attack_state=battle_snapshot(service.ctx)
+        assert attack_state['running'] and attack_state['task']['priority']=='1'
+        assert attack_state['task']['conditions']=='[自定义-可攻击,0,60]'
+        assert any(item['name']=='自定义-可攻击' for item in attack_state['states'])
         context.state_record_service.update_state(StateRecord("自定义-闪避", time.time()))
         assert dodge.wait(1), "高优先级场景应打断持续普攻"
+        dodge_state=battle_snapshot(service.ctx)
+        assert dodge_state['running'] and dodge_state['task']['priority']=='99'
+        assert dodge_state['task']['trigger']=='自定义-闪避'
         assert "普攻自然结束" not in events
         assert events.index("按键-普通攻击停止") < events.index("按键-闪避")
         operator.stop_running()
@@ -90,10 +103,11 @@ scenes:
         context.state_record_service.update_state(StateRecord("自定义-闪避", time.time()))
         time.sleep(.1)
         assert len(events) == count and not operator.is_running, "停止后不能继续发操作"
+        assert not battle_snapshot(service.ctx)['running'] and not battle_snapshot(service.ctx)['states']
         assert service.ctx.controller is None and not service.ctx._btn_listener_started
         print(json.dumps(dict(engine=type(operator).__module__ + "." + type(operator).__name__,
                               checks=["no_action_without_state", "state_starts_attack",
-                                      "high_priority_interrupts", "stop_rejects_new_state"],
+                                      "high_priority_interrupts", "stop_rejects_new_state","actual_executor_telemetry","stopped_telemetry_cleared"],
                               events=events, game_input_sent=False), ensure_ascii=False))
     finally:
         operator.dispose()

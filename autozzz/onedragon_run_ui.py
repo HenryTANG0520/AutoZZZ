@@ -27,6 +27,7 @@ class ExecutionWindow:
         self.application_states={}
         self.last_state={}
         self.last_report=None
+        self.battle_monitor=None
         self.resource_confirmation_id=""
         self.resource_required=False
         self.poll_token=None
@@ -183,6 +184,10 @@ class ExecutionWindow:
         self.close_button=ttk.Button(actions,text="关闭",command=self.close)
         self.report_button=ttk.Button(actions,text="报告",command=lambda:ui._open_path(self.last_report))
         for button in (self.prepare_button,self.start_button,self.pause_button,self.stop_button,self.report_button,self.close_button):button.pack(side="left",padx=(0,d(8)))
+        self.battle_button=None
+        if app_id in ('auto_battle','dodge_assistant','charge_plan','notorious_hunt','shiyu_defense','lost_void','withered_domain','world_patrol','commission_assistant','one_dragon','_rotation'):
+            self.battle_button=ttk.Button(actions,text='战斗状态…',command=self.show_battle_state)
+            self.battle_button.pack(side='left',before=self.close_button,padx=(0,d(8)))
         self.pause_button.pack_configure(padx=(d(12),d(8)))
         self.report_button.pack_configure(padx=(d(12),d(8)))
         self.window.protocol("WM_DELETE_WINDOW",self.close)
@@ -202,6 +207,14 @@ class ExecutionWindow:
     def browse(self):
         path=filedialog.askopenfilename(parent=self.window,filetypes=[("绝区零程序","ZenlessZoneZero.exe")])
         if path:self.game_path.set(path)
+
+    def show_battle_state(self):
+        if self.closing:return
+        from .onedragon_battle_state_ui import BattleStateWindow
+        if self.battle_monitor is None or not self.battle_monitor.window.winfo_exists():
+            self.battle_monitor=BattleStateWindow(self.window,self.ui.ui_scale)
+        self.battle_monitor.update(self.last_state.get('battle'))
+        self.battle_monitor.window.deiconify();self.battle_monitor.window.lift()
 
     def budget_records(self):
         from .budget_ui import BudgetWindow
@@ -361,6 +374,7 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    if self.battle_monitor is not None and self.battle_monitor.window.winfo_exists():self.battle_monitor.update(state.get('battle'))
                     if self.rotation_table is not None:
                         rows=state.get('rotation',{}).get('accounts',[])
                         ids={str(row['idx']) for row in rows}

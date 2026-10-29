@@ -572,6 +572,8 @@ class OneDragonExecution:
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())
+            from .onedragon_battle_state import battle_snapshot
+            result['battle']=battle_snapshot(self.ctx)
             result['client_exit']=self.client_exit.status() if self.client_exit is not None else dict(self.client_exit_result)
             if self.rotation_guard is not None:result['handoff_control']=dict(paused=self.manual_pause.is_set(),f9_down=self._f9_down)
             result["resources"] = self.resource_confirmation.status()

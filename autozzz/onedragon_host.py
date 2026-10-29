@@ -320,6 +320,13 @@ class ManagedController(ZPcController):
 
 class ManagedZContext(ZContext):
     def __init__(self):
+        # 固定版本的旧式“下一个角色-按下/松开”类缺少运行时导入。
+        # 新式 way 写法未走该分支；补全符号，仍保留实际上游原子类与动作。
+        from typing import Optional
+        from zzz_od.auto_battle.atomic_op import btn_switch_next
+        from zzz_od.auto_battle.auto_battle_state import BattleStateEnum
+        if not hasattr(btn_switch_next,'BattleStateEnum'):btn_switch_next.BattleStateEnum=BattleStateEnum
+        if not hasattr(btn_switch_next,'Optional'):btn_switch_next.Optional=Optional
         super().__init__()
         from .onedragon_push import ManagedPushService
         self.push_service.after_app_shutdown()
