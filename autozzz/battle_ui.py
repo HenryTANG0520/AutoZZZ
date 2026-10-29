@@ -29,9 +29,37 @@ class BattlePanel:
             except tk.TclError:pass
         s = ui.ui_scale
         d = lambda n: round(n * s)
-        theme.page_heading(page, "自动战斗（试验）", s, note="仅用现有电量 · 不使用备用电或电池")
-        forms = ttk.Frame(page)
-        forms.grid(row=1, column=0, sticky="ew")
+        theme.page_heading(page, "自动战斗", s, note="仅用现有电量 · 不使用备用电或电池")
+        page.rowconfigure(1,weight=1)
+        self.tabs=ttk.Notebook(page);self.tabs.grid(row=1,column=0,sticky='nsew')
+        conditional=ttk.Frame(self.tabs,padding=d(16));conditional.columnconfigure(0,weight=1)
+        self.legacy_page=ttk.Frame(self.tabs);self.legacy_page.columnconfigure(0,weight=1);self.legacy_page.rowconfigure(0,weight=1)
+        self.legacy_canvas=tk.Canvas(self.legacy_page,background=theme.PANEL,highlightthickness=0)
+        self.legacy_canvas.grid(row=0,column=0,sticky='nsew')
+        scroll=ttk.Scrollbar(self.legacy_page,command=self.legacy_canvas.yview);scroll.grid(row=0,column=1,sticky='ns')
+        self.legacy_canvas.configure(yscrollcommand=scroll.set)
+        legacy=ttk.Frame(self.legacy_canvas,padding=d(12));legacy.columnconfigure(0,weight=1)
+        item=self.legacy_canvas.create_window(0,0,window=legacy,anchor='nw')
+        legacy.bind('<Configure>',lambda _:self.legacy_canvas.configure(scrollregion=self.legacy_canvas.bbox('all')))
+        self.legacy_canvas.bind('<Configure>',lambda event:self.legacy_canvas.itemconfigure(item,width=event.width))
+        self.tabs.add(conditional,text='条件战斗');self.tabs.add(self.legacy_page,text='预输入兼容')
+        self.upstream_buttons={}
+        for row,(title,apps) in enumerate((('训练与挑战',(('charge_plan','体力刷本'),('notorious_hunt','恶名狩猎'),('shiyu_defense','式舆防卫战'),('lost_void','迷失之地'),('withered_domain','枯萎之都'),('intel_board','情报板'))),
+                                           ('战斗助手',(('auto_battle','自动战斗'),('dodge_assistant','闪避助手'),('commission_assistant','委托助手'))))):
+            group=ttk.LabelFrame(conditional,text=title,padding=d(14));group.grid(row=row,column=0,sticky='ew',pady=(0,d(14)))
+            for column in range(3):group.columnconfigure(column,weight=1,uniform='battle-actions')
+            for index,(app_id,label) in enumerate(apps):
+                button=ttk.Button(group,text=label+'…',command=lambda key=app_id,name=label:self.open_upstream(key,name),style='Accent.TButton' if app_id=='charge_plan' else 'TButton')
+                button.grid(row=index//3,column=index%3,sticky='ew',padx=d(5),pady=d(5))
+                self.upstream_buttons[app_id]=button;ui.setting_controls.append(button)
+        tools=ttk.Frame(conditional);tools.grid(row=2,column=0,sticky='w')
+        from .onedragon_ui import open_strategies
+        self.condition_button=ttk.Button(tools,text='条件策略…',command=lambda:open_strategies(ui))
+        self.condition_button.pack(side='left',padx=(0,d(10)));ui.setting_controls.append(self.condition_button)
+        config_button=ttk.Button(tools,text='应用配置…',command=lambda:ui._show_page('applications'))
+        config_button.pack(side='left');ui.setting_controls.append(config_button)
+        forms = ttk.Frame(legacy)
+        forms.grid(row=0, column=0, sticky="ew")
         for col in (0, 1):
             forms.columnconfigure(col, weight=1, uniform="combat-forms")
         self.controls={}
@@ -71,18 +99,21 @@ class BattlePanel:
         self.controls["subcategory"].bind("<<ComboboxSelected>>",lambda _:self.refresh_choices("subcategory"))
         self.refresh_choices()
         self.strategy_hint = tk.StringVar(ui.root)
-        self.strategy_hint_label=theme.wrapped_label(page, textvariable=self.strategy_hint, style="Hint.TLabel")
-        self.strategy_hint_label.grid(row=2, column=0, sticky="ew", pady=(d(8), d(3)))
+        self.strategy_hint_label=theme.wrapped_label(legacy, textvariable=self.strategy_hint, style="Hint.TLabel")
+        self.strategy_hint_label.grid(row=1, column=0, sticky="ew", pady=(d(8), d(3)))
         self.vars["strategy_file"].trace_add("write", self.refresh_strategy_hint)
         self.refresh_strategy_hint()
-        theme.wrapped_label(page, text="A 鼠标普攻 · E / Q 技能 · Space 换人 · h 长按单位 · - 换人标记 · | 轮末", style="Hint.TLabel").grid(row=3, column=0, sticky="ew", pady=(d(8), d(10)))
-        buttons=ttk.Frame(page);buttons.grid(row=4,column=0,sticky="w")
-        for label,command in (("保存方案",self.save),("读取副本目录",lambda:ui._start("battle_catalog")),("准备队伍（不出战）",lambda:ui._start("battle_prepare")),("开始战斗",lambda:ui._start("battle"))):
-            button=ttk.Button(buttons,text=label,command=command,style="Accent.TButton" if label=="开始战斗" else "TButton");button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
-        from .onedragon_ui import open_strategies
-        self.condition_button = ttk.Button(buttons, text="YAML 条件策略…", command=lambda: open_strategies(ui))
-        self.condition_button.pack(side="left", padx=(d(12), 0))
-        ui.setting_controls.append(self.condition_button)
+        theme.wrapped_label(legacy, text="A 鼠标普攻 · E / Q 技能 · Space 换人 · h 长按单位 · - 换人标记 · | 轮末", style="Hint.TLabel").grid(row=2, column=0, sticky="ew", pady=(d(8), d(10)))
+        buttons=ttk.Frame(legacy);buttons.grid(row=3,column=0,sticky="w")
+        for label,command in (("保存方案",self.save),("读取副本目录",lambda:ui._start("battle_catalog")),("准备队伍（不出战）",lambda:ui._start("battle_prepare")),("运行预输入",lambda:ui._start("battle"))):
+            button=ttk.Button(buttons,text=label,command=command);button.pack(side="left",padx=(0,d(10)));ui.setting_controls.append(button)
+        from .onedragon_forms import enable_scroll
+        enable_scroll(self.legacy_canvas,legacy)
+
+    def open_upstream(self,app_id,name):
+        from .onedragon_run_ui import open_execution
+        profile='global' if self.ui.server.get()=='国际服' else 'cn'
+        open_execution(self.ui,app_id,name,profile)
 
     def refresh_strategy_hint(self, *_args):
         selected = bool(self.vars["strategy_file"].get().strip())

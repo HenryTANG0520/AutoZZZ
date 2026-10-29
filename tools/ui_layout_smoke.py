@@ -24,9 +24,11 @@ def check_layout(widget):
             continue
         bounds = (child.winfo_x(), child.winfo_y(), child.winfo_width(), child.winfo_height())
         x, y, width, height = bounds
-        assert x >= -2 and y >= -2, (str(child), "negative position", bounds)
-        assert x + width <= widget.winfo_width() + 2, (str(child), "outside parent width", bounds)
-        assert y + height <= widget.winfo_height() + 2, (str(child), "outside parent height", bounds)
+        # Canvas 的窗口项是显式滚动内容，允许超出视口；内部控件仍逐项检查。
+        if not isinstance(widget,tk.Canvas):
+            assert x >= -2 and y >= -2, (str(child), "negative position", bounds)
+            assert x + width <= widget.winfo_width() + 2, (str(child), "outside parent width", bounds)
+            assert y + height <= widget.winfo_height() + 2, (str(child), "outside parent height", bounds)
         if child.winfo_class() in ("TLabel", "TButton", "TCheckbutton"):
             assert width >= child.winfo_reqwidth(), (str(child), "text clipped horizontally")
             assert height >= child.winfo_reqheight(), (str(child), "text clipped vertically")
@@ -60,6 +62,9 @@ def main():
                             raise AssertionError((scale, size, name, exc.args)) from exc
                         cases.append(dict(dpi=round(scale * 100), size=size, page=name))
                         if name == "combat":
+                            ui.combat_panel.tabs.select(ui.combat_panel.legacy_page)
+                            root.update();check_layout(root)
+                            cases.append(dict(dpi=round(scale*100),size=size,page=name,section='legacy'))
                             # 文件生效时显示覆盖范围；未选择文件时不保留空提示区域。
                             selector=ui.combat_panel.vars["strategy_file"]
                             original_strategy=selector.get()
@@ -69,6 +74,11 @@ def main():
                                 assert bool(ui.combat_panel.strategy_hint_label.winfo_ismapped())==bool(value)
                                 check_layout(root)
                             selector.set(original_strategy)
+                            ui.combat_panel.legacy_canvas.yview_moveto(1)
+                            root.update();check_layout(root)
+                            ui.combat_panel.legacy_canvas.yview_moveto(0)
+                            ui.combat_panel.tabs.select(0)
+                            root.update();check_layout(root)
                         if name == "settings":
                             for section in ("run", "recognition"):
                                 ui.show_settings_section(section)
