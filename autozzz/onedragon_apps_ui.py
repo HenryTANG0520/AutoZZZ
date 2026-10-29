@@ -290,6 +290,12 @@ class ApplicationsPanel:
                 ttk.Button(self.content,text="编辑执行顺序",command=lambda:self.tree.selection_set("_group")).grid(row=0,column=0,sticky="w")
         else:
             fields=[field for field in description["fields"] if field.get("supported_in_runtime",True)]
+            if self.current_id == "notify":
+                from .onedragon_notify_ui import NotificationForm, open_channels
+                profile = "global" if self.profile.get() == "国际服" else "cn"
+                self.form = NotificationForm(self.content, fields, self.changed, self.scale, lambda: open_channels(self.ui, profile))
+                self.form.frame.grid(row=0, column=0, sticky="ew")
+                fields = []
             simple = [f for f in fields if f["kind"] not in COLLECTIONS]
             records = [f for f in fields if f["kind"] in COLLECTIONS]
             row = 0
@@ -302,8 +308,9 @@ class ApplicationsPanel:
                 editor.frame.grid(row=row,column=0,sticky="nsew",pady=(0,round(22*self.scale)))
                 self.collections[field["name"]] = editor
                 row += 1
-            self.form = ScalarForm(self.content,simple,self.changed,self.scale)
-            self.form.frame.grid(row=row,column=0,sticky="ew")
+            if self.current_id != "notify":
+                self.form = ScalarForm(self.content,simple,self.changed,self.scale)
+                self.form.frame.grid(row=row,column=0,sticky="ew")
             row += 1
             for field in [f for f in records if f["kind"]=="plan"]:
                 editor = Records(self.content,field,self.options,self.current_id,self.changed,self.scale)

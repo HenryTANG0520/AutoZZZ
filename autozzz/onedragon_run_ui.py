@@ -343,6 +343,12 @@ class ExecutionWindow:
                     if hunt.get("free_completed"):fights.append(f"免费 {hunt['free_completed']} 场")
                     if hunt.get("paid_completed"):fights.append(f"深度追猎 {hunt['paid_completed']} 场")
                     if fights:name+=" · "+"，".join(fights)
+                    notifications=state.get("notifications",{})
+                    if notifications.get("pending") and state.get("busy") and state["state"]=="success":name="等待通知发送"
+                    if notifications.get("sent") or notifications.get("failed"):
+                        name+=f" · 通知已发送 {notifications.get('sent',0)} / 失败 {notifications.get('failed',0)}"
+                    elif self.app_id=="notify" and state["state"]=="success" and not notifications.get("enabled",False):
+                        name="通知已关闭"
                     detail=state.get("error") or state.get("preparation_step") or state.get("run",{}).get("last_status","")
                     if state["state"]=="success" and not fights and hunt.get("skipped"):
                         name="计划已跳过"

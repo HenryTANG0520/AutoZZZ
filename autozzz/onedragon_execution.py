@@ -39,6 +39,9 @@ class OneDragonExecution:
         self.assistant_control=AssistantModeControl(ctx,self.control)
         self.redemption_control=RedemptionControl(self.control)
         for adapter in (self.script_control,self.assistant_control,self.redemption_control):adapter.install()
+        from .onedragon_push import NotificationControl
+        self.notification_control = NotificationControl(ctx)
+        self.notification_control.install()
         from .onedragon_resources import ResourceConfirmation
         self.resource_confirmation = ResourceConfirmation()
         self.resource_control = None
@@ -170,6 +173,7 @@ class OneDragonExecution:
         from .onedragon_runtime import EXECUTABLE_APPLICATIONS
         if app_id not in EXECUTABLE_APPLICATIONS:raise ValueError("该应用的执行适配尚未完成。")
         def prepare():
+            self.ctx.push_service.reset_results()
             self.prepared_app=self.prepared_hash=""
             self.prepared_requirements={}
             self.preparation_step=""
@@ -268,6 +272,7 @@ class OneDragonExecution:
         return self._submit("running", run)
 
     def _run_bound_app(self,app_id:str) -> None:
+        self.ctx.push_service.reset_results()
         self.ctx.controller.bind(self.ctx.game_account_config.game_path)
         self.control.reset()
         self.battle_control.allowed=False
@@ -295,6 +300,9 @@ class OneDragonExecution:
             watch_stop.set()
             watcher.join(timeout=2)
             self.control.stop()
+            self.preparation_step = "等待通知发送" if self.ctx.push_service.pending else ""
+            try: self.ctx.push_service.flush()
+            finally: self.preparation_step = ""
 
     def _watch(self, watch_stop: threading.Event) -> None:
         from .windows import user32
@@ -334,6 +342,7 @@ class OneDragonExecution:
             result["resources"] = self.resource_confirmation.status()
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()
+            result["notifications"] = self.ctx.push_service.status()
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
@@ -374,5 +383,6 @@ class OneDragonExecution:
         if self.worker is not None:
             self.worker.join()  # 初始化下载或运行仍在退出时，保留同一线程与进程。
         for adapter in (self.redemption_control,self.assistant_control,self.script_control):adapter.close()
+        self.notification_control.close()
         self.adapter.close()
         self.battle_control.close()

@@ -51,6 +51,15 @@ class ApplicationRequirements:
         return self.store.get(directory + ":" + name)
 
     def collect(self, applications: list[str]) -> None:
+        self.ctx.push_service.reload_config()
+        notify = self.ctx.notify_config
+        if type(notify.enable_notify) is not bool: raise ValueError("通知开关类型无效。")
+        if notify.enable_notify:
+            if type(self.ctx.push_service.push_config.send_image) is not bool: raise ValueError("通知截图开关类型无效。")
+            from .onedragon_notify import validate_modes
+            validate_modes([dict(app_id=key, lifecycle=notify.get_app_lifecycle_mode(key), detail=notify.get_app_detail_mode(key)) for key in notify.app_map], notify.app_map)
+            if not self.ctx.push_service.available_channels():
+                raise ValueError("通知已启用，但没有完整且已启用的发送渠道。")
         self.uses_charge = "charge_plan" in applications or (
             "coffee" in applications and self.store.get("coffee").run_charge_plan_afterwards)
         if self.uses_charge:

@@ -286,7 +286,16 @@ class RecordDialog:
         ttk.Button(footer,text="取消",command=self.window.destroy).grid(row=1,column=1,sticky="e")
         self.window.transient(parent.winfo_toplevel())
         self.window.grab_set()
+        self.window.bind("<Destroy>",self._destroyed,add="+")
         enable_scroll(self.canvas,content)
+
+    def _destroyed(self,event):
+        if event.widget is not self.window:return
+        self.status=None
+        self.weaknesses.clear()
+        self.accept=None
+        if isinstance(self.form,PlanForm):self.form.selectors.clear()
+        self.form=None
 
     def confirm(self):
         try:

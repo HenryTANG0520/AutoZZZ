@@ -53,13 +53,15 @@ class OneDragonService:
             "instance": ctx.current_instance_idx,
             "applications": [dict(id=key, name=factory.app_name,
                                   default_group=factory.default_group, internal=factory.internal_app,
-                                  configurable=type(factory).create_config is not ApplicationFactory.create_config)
+                                  configurable=key == "notify" or type(factory).create_config is not ApplicationFactory.create_config)
                              for key, factory in factories.items()],
             "failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures],
             "ready_for_game": bool(ctx.ready_for_application),
         }
 
     def _config(self, app_id: str) -> Any:
+        if app_id == "notify":
+            return self.ctx.notify_config
         if app_id == "battle_assistant":
             return self.ctx.battle_assistant_config
         if app_id == "teams":
@@ -95,6 +97,22 @@ class OneDragonService:
     def save_configuration(self, app_id: str, values: dict, revision: str) -> dict:
         from .onedragon_config import ConfigurationStore
         return ConfigurationStore(self).save(app_id, values, revision)
+
+    def notification_channels(self):
+        from .onedragon_notify import NotificationStore
+        return NotificationStore(self).channels()
+
+    def notification_channel(self, channel_id: str):
+        from .onedragon_notify import NotificationStore
+        return NotificationStore(self).describe_channel(channel_id)
+
+    def notification_channel_save(self, channel_id: str, values: dict, revision: str):
+        from .onedragon_notify import NotificationStore
+        return NotificationStore(self).save_channel(channel_id, values, revision)
+
+    def notification_test(self, channel_id: str, revision: str):
+        from .onedragon_notify import NotificationStore
+        return NotificationStore(self).test(channel_id, revision)
 
     def training_options(self) -> dict:
         from .onedragon_config import ConfigurationStore
@@ -356,3 +374,4 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
            "execution_status", "pause_execution", "stop_execution", "runtime_probe","set_assistant_mode",
            "describe_configuration", "save_configuration", "training_options", "configuration_options",
            "prepare_application", "start_application","account_list","account_action","account_describe","account_save"}
+METHODS.update({"notification_channels", "notification_channel", "notification_channel_save", "notification_test"})

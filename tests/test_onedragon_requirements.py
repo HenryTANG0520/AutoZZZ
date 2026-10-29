@@ -21,6 +21,8 @@ class RequirementsTests(unittest.TestCase):
                 init_auto_op=lambda name,directory:self.calls.append((directory,name))),
             lost_void=SimpleNamespace(init_before_run=lambda:self.calls.append("lost"),init_lost_void_det_model=lambda:self.calls.append("target")),
             withered_domain=SimpleNamespace(init_before_run=lambda:self.calls.append("withered"),map_service=SimpleNamespace(init_event_yolo=lambda:self.calls.append("event"))))
+        self.ctx.push_service=SimpleNamespace(reload_config=lambda:None,available_channels=lambda:[])
+        self.ctx.notify_config=SimpleNamespace(enable_notify=False)
         self.requirements=ApplicationRequirements(self.ctx,self.data,SimpleNamespace(get=lambda key:self.configs[key]))
 
     def file(self,folder,name,suffix=".sample.yml"):

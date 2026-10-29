@@ -319,6 +319,9 @@ class ManagedController(ZPcController):
 class ManagedZContext(ZContext):
     def __init__(self):
         super().__init__()
+        from .onedragon_push import ManagedPushService
+        self.push_service.after_app_shutdown()
+        self.push_service = ManagedPushService(self)
         self.execution_control: ExecutionControl | None = None
         self.download_cancel = threading.Event()
         bus = self.run_context.event_bus
@@ -337,6 +340,14 @@ class ManagedZContext(ZContext):
             if failures:
                 raise RuntimeError(f"运行状态回调失败：{failures[0]}")
         bus.dispatch_event = dispatch
+
+    @cached_property
+    def notify_config(self):
+        from one_dragon.base.config.notify_config import NotifyConfig
+        config = NotifyConfig(self.current_instance_idx, self.run_context.notify_app_map)
+        if "enable_notify" not in config.data: config.enable_notify = False
+        if "title" not in config.data: config.title = "AutoZZZ 运行通知"
+        return config
 
     @cached_property
     def application_plugin_dirs(self):

@@ -128,6 +128,9 @@ class ConfigurationStore:
         # 配置编辑不能依赖仅按 mtime 判断的上游进程内缓存。
         from one_dragon.base.config.yaml_operator import cached_yaml_data
         cached_yaml_data.clear()
+        if app_id == "notify":
+            from .onedragon_notify import NotificationStore
+            return NotificationStore(self.service).config()
         if app_id == "battle_assistant":
             from zzz_od.application.battle_assistant.battle_assistant_config import BattleAssistantConfig
             return BattleAssistantConfig(self.ctx.current_instance_idx)
@@ -239,6 +242,9 @@ class ConfigurationStore:
         return dict(app_id=app_id, revision=config_revision(target), fields=fields)
 
     def describe(self, app_id: str) -> dict:
+        if app_id == "notify":
+            from .onedragon_notify import NotificationStore
+            return NotificationStore(self.service).describe()
         self.service._assert_idle()
         with profile_lock(self.root):
             return self._describe(app_id, self.get(app_id))
@@ -310,6 +316,9 @@ class ConfigurationStore:
         return result
 
     def save(self, app_id: str, values: dict, revision: str) -> dict:
+        if app_id == "notify":
+            from .onedragon_notify import NotificationStore
+            return NotificationStore(self.service).save(values, revision)
         self.service._assert_idle()
         with profile_lock(self.root):
             config = self.get(app_id)

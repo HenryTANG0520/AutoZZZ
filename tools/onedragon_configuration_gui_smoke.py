@@ -76,7 +76,7 @@ def main():
                     else:
                         panel._loaded(copy.deepcopy(snapshot))
                         root.update()
-                    assert len(panel.cache)==29,(panel.status.get(),len(panel.cache))
+                    assert len(panel.cache)==30,(panel.status.get(),len(panel.cache))
                     for size in ("default","minimum"):
                         if size=="minimum":root.geometry("%dx%d" % root.minsize())
                         for key,description in panel.cache.items():
