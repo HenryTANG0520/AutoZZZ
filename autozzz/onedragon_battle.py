@@ -16,6 +16,7 @@ class BattleInputControl:
         self.allowed = False
         self.allowed_epoch = -1
         self.originals = []
+        self.previous_validator=None;self.input_guard=None
 
     def check_input(self) -> None:
         if _battle_input.get() and (not self.allowed or self.allowed_epoch!=self.control.epoch):
@@ -92,10 +93,14 @@ class BattleInputControl:
         self._patch(AutoBattleOperator,"operate_periodically",guarded_periodic)
         self._patch(AutoBattleContext,"check_battle_state",guarded_check)
         self._patch(AutoBattleContext,"__setattr__",guarded_assign)
-        self.control.input_validator = self.check_input
+        self.previous_validator=self.control.input_validator
+        def validate():
+            if self.previous_validator is not None:self.previous_validator()
+            self.check_input()
+        self.input_guard=validate;self.control.input_validator=validate
 
     def close(self) -> None:
         self.allowed = False
-        self.control.input_validator = None
+        if self.control.input_validator is self.input_guard:self.control.input_validator=self.previous_validator
         for cls,name,original in reversed(self.originals):setattr(cls,name,original)
         self.originals.clear()

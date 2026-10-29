@@ -13,7 +13,7 @@ def _duration(value,*,positive=False):
 
 def release_controller_inputs(controller):
     seen=set();failures=[]
-    for name in ('keyboard_controller','xbox_controller','ds4_controller'):
+    for name in ('keyboard_controller','xbox_controller','ds4_controller','background_mouse'):
         device=getattr(controller,name,None)
         if device is None or id(device) in seen:continue
         seen.add(id(device))
@@ -27,6 +27,7 @@ class ControlledGamepad:
         if raw.pad is None:raise RuntimeError('虚拟手柄未创建，请检查 vgamepad 与 ViGEmBus。')
         self.raw,self.control=raw,control
         self.lock=threading.RLock();self.pressed={};self.camera=None
+        self.before_input=None
 
     @property
     def key_press_time(self):return self.raw.key_press_time
@@ -37,7 +38,9 @@ class ControlledGamepad:
         activate,_=self.raw._key_bindings[key]
         owner=(self.control.task_epoch,object())
         def send():
-            with self.lock:self.pressed[key]=owner;activate();self.raw.pad.update()
+            with self.lock:
+                if self.before_input is not None:self.before_input(key)
+                self.pressed[key]=owner;activate();self.raw.pad.update()
         try:self.control.input(send)
         except Exception:
             self.release(key,owner=owner)
@@ -96,6 +99,7 @@ class ControlledGamepad:
         distance=max(abs(dx),abs(dy));owner=(self.control.task_epoch,object())
         def send():
             with self.lock:
+                if self.before_input is not None:self.before_input(None)
                 self.camera=owner;self.raw.pad.right_joystick_float(dx/distance,-dy/distance);self.raw.pad.update()
         try:
             self.control.input(send);self.control.hold(distance/speed)

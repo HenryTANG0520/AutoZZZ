@@ -427,6 +427,7 @@ class ExecutionWindow:
                     name={"ready":"运行环境已就绪","prepared":"已准备","running":"正在运行","initializing":"正在初始化",
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
                     if self.app_id=='_rotation':name={'prepared':'预检通过','preparing':'读取轮换配置','success':'轮换完成','failed':'轮换未完成','stopped':'轮换已停止'}.get(state['state'],name)
+                    if self.busy and state.get('input',{}).get('background'):name+=' · 后台'
                     if state["state"]=="success" and state.get("redemption"):
                         name="流程结束 · 兑换奖励到账未核实"
                     login=state.get("login",{})

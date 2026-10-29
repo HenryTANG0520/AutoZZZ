@@ -33,7 +33,7 @@ NOTES = {
     "redemption_code":"兑换流程结束后，奖励是否到账仍需核对。",
     "_environment":"保存后重新准备任务。",
     "_models":"保存后重新准备任务；缺少的模型会在准备时下载。",
-    "_game_input":"键位须与游戏内一致；组合键每行一键，按顺序按住、逆序松开，留空停用动作。手柄和后台执行适配仍在接入，修改映射不会切换模式。",
+    "_game_input":"键位须与游戏内一致；组合键每行一键，按顺序按住、逆序松开，留空停用动作。后台需要 vgamepad 和 ViGEmBus，游戏最小化时暂停。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 

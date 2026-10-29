@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--data", type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    from autozzz.onedragon_runtime import RuntimePaths
+    defaults=RuntimePaths.discover(root)
+    RuntimePaths(defaults.source,defaults.python,args.data).prepare()
     sys.path.insert(0, str(root / "vendor" / "onedragon" / "src"))
     import numpy as np
     from one_dragon.base.operation.operation import Operation

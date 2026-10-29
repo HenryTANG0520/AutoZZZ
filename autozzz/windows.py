@@ -44,6 +44,8 @@ kernel32.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, C.P
 
 user32.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
 user32.PostMessageW.restype = W.BOOL
+user32.SendMessageTimeoutW.argtypes=[W.HWND,W.UINT,W.WPARAM,W.LPARAM,W.UINT,W.UINT,C.POINTER(C.c_size_t)]
+user32.SendMessageTimeoutW.restype=C.c_ssize_t
 kernel32.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
 kernel32.WaitForSingleObject.restype = W.DWORD
 

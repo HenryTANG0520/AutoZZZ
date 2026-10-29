@@ -494,6 +494,7 @@ class OneDragonExecution:
             window=self.ctx.controller.game_win
             if window.bound is None or window.bound.hwnd!=expected_window["window_handle"] or window.process_id!=expected_window["process_id"]:
                 raise RuntimeError("启动后游戏窗口身份已变化，请重新准备登录。")
+        if hasattr(self.ctx.controller,'begin_input_policy'):self.ctx.controller.begin_input_policy(app_id)
         with self.lock:
             self.control.reset()
             self._input_ready=True
@@ -523,8 +524,10 @@ class OneDragonExecution:
         finally:
             watch_stop.set()
             watcher.join(timeout=2)
-            self.control.stop()
-            with self.lock:self._input_ready=False
+            try:self.control.stop()
+            finally:
+                if hasattr(self.ctx.controller,'end_input_policy'):self.ctx.controller.end_input_policy()
+                with self.lock:self._input_ready=False
             self.preparation_step = "等待通知发送" if self.ctx.push_service.pending else ""
             try: self.ctx.push_service.flush()
             finally: self.preparation_step = ""
@@ -588,6 +591,10 @@ class OneDragonExecution:
             result["window_handle"]=None if bound is None else bound.hwnd
             pid=getattr(getattr(self.ctx.controller,'game_win',None),'process_id',None)
             result['window_identity']=None if bound is None or pid is None else dict(window_handle=bound.hwnd,process_id=pid)
+            controller=self.ctx.controller
+            if controller is not None and hasattr(controller,'using_background'):
+                result['input']=dict(background=controller.background_mode,requested=controller.using_background,
+                                     gamepad=getattr(controller,'_gamepad_type',None),requires_foreground=getattr(controller,'_foreground_required',False))
             if self.charge_control is not None:result["budget"]=self.charge_control.status()
             if self.state in ("running", "stopping"):
                 result["control"] = self.control.status() if self._input_ready else dict(state="paused" if self.manual_pause.is_set() else "starting",manual_paused=self.manual_pause.is_set(),focus_waiting=False)

@@ -27,11 +27,14 @@ class GameInputStore:
         from pynput.mouse import Button
         fields=[]
         def add(name,label,group,kind='str',options=None,**metadata):
-            fields.append(field_value(name,label,getattr(config,name),kind,options,group=group,**metadata))
+            value=config.get(name,'wait') if name=='autozzz_background_mouse' else getattr(config,name)
+            fields.append(field_value(name,label,value,kind,options,group=group,**metadata))
+        add('background_mode','应用流程使用后台','输入',kind='bool',hint='独立战斗、闪避助手使用“战斗设置”的后台开关。')
+        add('autozzz_background_mouse','后台鼠标','输入',kind='enum',options=[dict(label='等待游戏回到前台',value='wait'),dict(label='短暂切回游戏后恢复',value='flash')],hint='短暂切回会改变前台窗口和鼠标位置。')
         add('type_input_way','文本输入方式','输入',kind='enum',options=_options(TypeInputWay))
         add('background_gamepad_type','后台手柄类型','输入',kind='enum',options=_options(GamepadTypeEnum))
         for name,label,lo,hi in (('xbox_key_press_time','Xbox 点按时长（秒）',.001,1),('ds4_key_press_time','DS4 点按时长（秒）',.001,1),
-                                 ('turn_dx','每度转向像素',-1000,1000),('gamepad_turn_speed','摇杆镜头速度（像素/秒）',0,100000)):
+                                 ('turn_dx','每度转向像素',-1000,1000),('gamepad_turn_speed','摇杆镜头速度（像素/秒）',0,100000),('mouse_flash_duration','临时切换等待（秒）',.01,1)):
             add(name,label,'时长与镜头',kind='float',minimum=lo,maximum=hi)
         keyboard_options=[dict(label=value,value=value) for value in 'abcdefghijklmnopqrstuvwxyz0123456789']
         keyboard_options += [dict(label=name,value=name) for name in Key.__members__]
@@ -58,6 +61,7 @@ class GameInputStore:
             from pynput.mouse import Button
             for name,value in values.items():
                 field=fields[name];kind=field['kind'];options=[option['value'] for option in field['options']]
+                if kind=='bool' and type(value)is not bool:raise ValueError(field['label']+'须为开关值。')
                 if kind=='enum' and (type(value)is not str or value not in options):raise ValueError(field['label']+'：请选择有效按键或类型。')
                 if kind=='float' and (type(value)not in (int,float) or not math.isfinite(value) or not field['minimum']<=value<=field['maximum']):
                     raise ValueError(field['label']+'：数值超出范围。')
@@ -67,7 +71,11 @@ class GameInputStore:
                     valid=type(value)is str and (len(value)==1 and value.isprintable() or value in Key.__members__ or
                           value.startswith('mouse_') and value[6:] in Button.__members__ or len(value)==8 and value.startswith('numpad_') and value[-1] in '0123456789')
                     if not valid:raise ValueError(field['label']+'：请输入单键、特殊键名或 mouse_ 按钮名。')
-            atomic_apply(config,revision,lambda:[setattr(config,key,value) for key,value in values.items()],self.root)
+            def apply():
+                for key,value in values.items():
+                    if key=='autozzz_background_mouse':config.update(key,value)
+                    else:setattr(config,key,value)
+            atomic_apply(config,revision,apply,self.root)
             from one_dragon.base.config.yaml_operator import invalidate_cache
             invalidate_cache(str(config.file_path));self.ctx.__dict__['game_config']=config
             return self._describe(config)

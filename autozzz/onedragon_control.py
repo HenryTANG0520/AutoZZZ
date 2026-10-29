@@ -179,6 +179,16 @@ class ExecutionControl:
             self.observed_epoch = epoch
         return result
 
+    def discard_frame(self) -> None:
+        """截图失效时松键并换代；重新建立条件执行器后仍须取得新图。"""
+        with self._transitions:
+            with self.lock:self._invalidate()
+            self.release()
+            if self.stopped:return
+            with self.scope():
+                if not self.backend_paused:self.backend_paused=self.pause_backend() is not False
+                self._apply_pause()
+
     def input(self, action: Callable[[], Any]) -> Any:
         self.checkpoint(require_frame=True)
         with self.lock:

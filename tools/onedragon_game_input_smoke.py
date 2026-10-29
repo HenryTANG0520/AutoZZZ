@@ -22,18 +22,20 @@ def main():
     def save(values,description=None):return rpc('save_configuration',app_id='_game_input',revision=(description or describe())['revision'],values=values)
     try:
         client.start();initial=describe();f=fields(initial)
-        assert len(f)==64 and f['key_normal_attack']['value']=='mouse_left'
+        assert len(f)==67 and f['key_normal_attack']['value']=='mouse_left'
+        assert f['background_mode']['value'] is False and f['autozzz_background_mouse']['value']=='wait'
         assert f['xbox_key_normal_attack']['value']=='xbox_x' and f['ds4_key_normal_attack']['value']=='ds4_square'
         assert f['xbox_action_compendium']['value']==['xbox_lt','xbox_a']
-        assert not rpc('execution_status')['ready'];checks.append('actual_defaults_and_sixty_four_fields')
+        assert not rpc('execution_status')['ready'];checks.append('actual_defaults_and_sixty_seven_fields')
         updated=save(dict(key_normal_attack='j',key_interact='numpad_0',xbox_key_normal_attack='xbox_b',ds4_key_normal_attack='ds4_circle',
-                          xbox_action_compendium=['xbox_lb','xbox_a'],ds4_action_map=[],xbox_key_press_time=.04,gamepad_turn_speed=1200,turn_dx=-6.5,type_input_way='input'))
+                          xbox_action_compendium=['xbox_lb','xbox_a'],ds4_action_map=[],xbox_key_press_time=.04,gamepad_turn_speed=1200,turn_dx=-6.5,type_input_way='input',background_mode=True,autozzz_background_mouse='flash'))
         f=fields(updated);assert f['key_normal_attack']['value']=='j' and f['xbox_action_compendium']['value']==['xbox_lb','xbox_a']
         assert f['ds4_action_map']['value']==[];checks.append('all_device_types_and_combo_saved')
         original=(data/'config/01/game.yml').read_bytes()
         for invalid in (dict(key_interact='ctrl+a'),dict(key_dodge='mouse_invalid'),dict(xbox_key_normal_attack='ds4_cross'),
                         dict(ds4_key_normal_attack='xbox_a'),dict(xbox_action_map=['xbox_a','xbox_a']),dict(xbox_action_map=['ds4_cross']),
-                        dict(gamepad_turn_speed=-1),dict(turn_dx=True),dict(ds4_key_press_time=0),dict(hdr=True)):
+                        dict(gamepad_turn_speed=-1),dict(turn_dx=True),dict(ds4_key_press_time=0),dict(hdr=True),
+                        dict(background_mode='false'),dict(autozzz_background_mouse='auto'),dict(mouse_flash_duration=2)):
             try:save(invalid)
             except RemoteError:pass
             else:raise AssertionError(invalid)

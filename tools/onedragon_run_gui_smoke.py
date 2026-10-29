@@ -100,8 +100,16 @@ def main():
                     pump(root,lambda:window.last_state.get('state')=='running')
                     command,params=window.session.commands[-1]
                     assert command=='start' and params['budget']['allowance']==40 and params['budget']['battle_limit']==2
+                    window.session.state['input']=dict(background=True,requires_foreground=False)
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'后台' in window.status.get())
+                    window.session.state['control']['focus_waiting']=True
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.status.get()=='等待游戏恢复焦点')
                     window.pause_button.invoke()
                     pump(root,lambda:window.paused)
+                    assert window.status.get()=='已暂停'
+                    window.session.state['control']['focus_waiting']=False
                     window.pause_button.invoke()
                     pump(root,lambda:not window.paused)
                     window.stop_button.invoke()
