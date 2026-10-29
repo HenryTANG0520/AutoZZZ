@@ -15,6 +15,8 @@ from .onedragon_runtime import OneDragonClient,RequestPending,RuntimePaths
 class RuntimeSession:
     def __init__(self,paths:RuntimePaths,emit:Callable[[dict],None],report_root:Path|None=None):
         self.paths,self.emit=paths,emit
+        from .onedragon_trace_session import TraceSubscription
+        self.trace_subscription=TraceSubscription(emit)
         self.commands=queue.Queue()
         self.closing=threading.Event()
         self.stop_requested=threading.Event()
@@ -33,6 +35,9 @@ class RuntimeSession:
         if not self.closing.is_set():
             if command=="start" or command=="prepare" and not self.phase:self.stop_requested.clear()
             self.commands.put((command,params))
+
+    def trace(self,enabled,clear=False):return self.trace_subscription.configure(enabled,clear)
+    def take_trace(self):return self.trace_subscription.take()
 
     def stop(self):
         self.stop_requested.set()
@@ -174,6 +179,7 @@ class RuntimeSession:
                                     try:client.close(timeout=5);break
                                     except RequestPending:
                                         self.emit(dict(type="phase",phase="正在重新准备：等待原进程退出"))
+                                self.trace_subscription.disconnected()
                                 # close 的等待超时只继续观察原进程。确认退出后，仍须保留新到的停止意图。
                                 if self.closing.is_set():break
                                 if self.stop_requested.is_set():
@@ -200,8 +206,11 @@ class RuntimeSession:
                     except Exception as exc:
                         self.emit(dict(type="error",message="状态查询未完成："+str(exc),busy=True))
                         if not client.alive:break
+                if client.alive and not self.closing.is_set():
+                    self.trace_subscription.pump(client,lambda method,**params:self._call(client,method,**params))
         except Exception as exc:self.emit(dict(type="error",message=str(exc),busy=False))
         finally:
+            self.trace_subscription.disconnected()
             exited=False
             try:
                 if client.alive:

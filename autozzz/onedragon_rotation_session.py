@@ -21,6 +21,8 @@ class RotationControlChanged(RuntimeError):pass
 class RotationSession:
     def __init__(self,paths,emit,report_root=None,*,client_factory=None,lease_factory=None,read_key=None):
         self.paths,self.emit=paths,emit
+        from .onedragon_trace_session import TraceSubscription
+        self.trace_subscription=TraceSubscription(emit)
         self.client_factory=client_factory or OneDragonClient;self.lease_factory=lease_factory or RunLeaseOwner
         if read_key is None:
             from .windows import user32
@@ -46,6 +48,9 @@ class RotationSession:
     def pause(self,paused):
         with self.lock:self.manual=bool(paused);self.version+=1
 
+    def trace(self,enabled,clear=False):return self.trace_subscription.configure(enabled,clear)
+    def take_trace(self):return self.trace_subscription.take()
+
     def stop(self):
         with self.lock:self.stop_requested.set()
 
@@ -64,7 +69,11 @@ class RotationSession:
             self._keys()
             if self.stop_requested.is_set() or self.closing.is_set():raise RotationStopped('轮换已停止。')
             if not self.manual:return
-            self._state();self.stop_requested.wait(.05)
+            self._state();self._trace_poll();self.stop_requested.wait(.05)
+
+    def _trace_poll(self):
+        if self.client is not None and self.client.alive and not self.closing.is_set():
+            self.trace_subscription.pump(self.client,lambda method,**params:self._rpc(method,**params))
 
     def _state(self):
         resources=[] if self.plan is None else [dict(item,text=row['name']+'：'+item['text']) for row in self.plan['instances'] for item in row['resources']]
@@ -132,7 +141,9 @@ class RotationSession:
             if transfer and self.manifest is not None and snapshot(self.paths.data)!=self.manifest:
                 raise ValueError('工作进程退出期间资料已变化，请重新预检。')
             if error is not None:raise error
-        finally:self.client=None;self.bound=False;self.job=None;self.game_active=False
+        finally:
+            self.trace_subscription.disconnected()
+            self.client=None;self.bound=False;self.job=None;self.game_active=False
 
     def _job(self,method,expected,*,game=False,**params):
         self._gate();self.source_state={};self.game_active=False;self.stop_request=None
@@ -162,6 +173,7 @@ class RotationSession:
                 if game and self.version==applied and state.get('handoff_control'):
                     self.manual=state['handoff_control']['paused'];self.f9_down=state['handoff_control']['f9_down']
             self._state()
+            self._trace_poll()
             if not state['busy']:break
             self.stop_requested.wait(.1)
         self.job=None;self.game_active=False

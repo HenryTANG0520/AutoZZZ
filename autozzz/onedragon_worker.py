@@ -53,13 +53,13 @@ def main() -> int:
                 method = request["method"]
                 if service._rotation_sealed and method!='hello':raise RuntimeError('该轮换工作进程已收尾，请关闭原进程。')
                 if service._rotation_guard is not None:
-                    allowed={'hello','rotation_select','rotation_checkpoint','rotation_release','rotation_control','rotation_window','initialize_execution','prepare_application','start_application','prepare_login','start_login','prepare_client_close','start_client_close','execution_status','pause_execution','stop_execution'}
+                    allowed={'hello','rotation_select','rotation_checkpoint','rotation_release','rotation_control','rotation_window','initialize_execution','prepare_application','start_application','prepare_login','start_login','prepare_client_close','start_client_close','execution_status','pause_execution','stop_execution','trace_configure','trace_snapshot'}
                     if method not in allowed:raise RuntimeError('轮换期间不能编辑或重载其他配置。')
                 if method == "hello":
                     result = dict(protocol=PROTOCOL_VERSION, revision=UPSTREAM_REVISION,
                                   python=sys.version.split()[0], pid=os.getpid(), input_enabled=False,task_lease=run_lease is not None)
                 elif method in METHODS:
-                    if service._rotation_guard is not None and method not in ('execution_status','pause_execution','stop_execution','rotation_release'):
+                    if service._rotation_guard is not None and method not in ('execution_status','pause_execution','stop_execution','rotation_release','trace_configure','trace_snapshot'):
                         service._rotation_guard.check()
                     result = getattr(service, method)(**request["params"])
                 else:

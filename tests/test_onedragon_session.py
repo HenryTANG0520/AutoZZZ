@@ -53,6 +53,29 @@ class Client:
 
 
 class SessionTests(unittest.TestCase):
+    def test_trace_uses_original_connection_and_is_not_saved_in_run_report(self):
+        class TraceClient(Client):
+            def submit(self,method,**params):
+                key=super().submit(method,**params)
+                if method=='trace_snapshot':self.requests[key]=(method,dict(enabled=True,private_screen_text='private fixture screen'))
+                return key
+        Client.instances=[];events=queue.Queue()
+        with tempfile.TemporaryDirectory() as folder,patch('autozzz.onedragon_session.OneDragonClient',TraceClient):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                session.trace(True)
+                self.wait_event(events,lambda event:event['type']=='trace')
+                self.assertIn('private_screen_text',session.take_trace()['snapshot'])
+                session.send('prepare',app_id='email',server='cn',game_path='fixture.exe',region='cn')
+                self.wait_event(events,lambda event:event['type']=='state' and event['state']['state']=='prepared')
+                session.send('start',app_id='email',budget=None,auto_launch=False,timeout_seconds=30)
+                self.wait_event(events,lambda event:event['type']=='state' and event['state']['state']=='running')
+                session.stop();self.wait_event(events,lambda event:event['type']=='state' and event['state']['state']=='stopped')
+            finally:session.close();session.worker.join(5)
+            self.assertEqual(len(Client.instances),1)
+            report=next(Path(folder).rglob('report.json')).read_text(encoding='utf-8')
+            self.assertNotIn('private fixture screen',report);self.assertNotIn('trace_snapshot',report)
+
     def test_login_uses_login_operations_and_never_legacy_enter_or_application_budget(self):
         class LoginClient(Client):
             def submit(self,method,**params):

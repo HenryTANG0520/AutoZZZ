@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import sys
 import threading
 import time
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -24,8 +26,17 @@ def main() -> None:
     from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
 
     data=args.data.resolve();defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1])
+    if data.exists():raise ValueError('请使用新的隔离验证目录。')
     RuntimePaths(source,defaults.python,data).prepare()
+    import platform
+    platform.uname()
+    scope=ExitStack()
+    def forbidden(*_,**__):raise AssertionError('条件引擎回放不得访问游戏、网络或输入设备。')
+    for target in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo',
+                   'autozzz.windows.find_game','autozzz.windows.user32.SendInput','pynput.keyboard.Controller.press','pynput.mouse.Controller.press'):
+        scope.enter_context(patch(target,side_effect=forbidden))
     service = OneDragonService(source, data)
+    service.trace_configure(True)
     events: list[str] = []
     attack = threading.Event()
     dodge = threading.Event()
@@ -97,6 +108,10 @@ scenes:
         assert dodge_state['task']['trigger']=='自定义-闪避'
         assert "普攻自然结束" not in events
         assert events.index("按键-普通攻击停止") < events.index("按键-闪避")
+        trace=service.trace_snapshot()
+        assert any(row['trigger']=='自定义-闪避' and row['expression']=='[自定义-闪避,0,60]' for row in trace['items']['decision']),trace
+        assert any(row['category']=='decision' for row in trace['items']['timeline']),trace
+        (data/'trace.json').write_text(json.dumps(trace,ensure_ascii=False,indent=2),encoding='utf-8')
         operator.stop_running()
         time.sleep(.1)
         count = len(events)
@@ -107,11 +122,12 @@ scenes:
         assert service.ctx.controller is None and not service.ctx._btn_listener_started
         print(json.dumps(dict(engine=type(operator).__module__ + "." + type(operator).__name__,
                               checks=["no_action_without_state", "state_starts_attack",
-                                      "high_priority_interrupts", "stop_rejects_new_state","actual_executor_telemetry","stopped_telemetry_cleared"],
+                                      "high_priority_interrupts", "stop_rejects_new_state","actual_executor_telemetry","stopped_telemetry_cleared","actual_conditional_decision_and_timeline_trace"],
                               events=events, game_input_sent=False), ensure_ascii=False))
     finally:
         operator.dispose()
         service.close()
+        scope.close()
 
 
 if __name__ == "__main__":

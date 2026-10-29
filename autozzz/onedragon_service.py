@@ -71,6 +71,9 @@ class OneDragonService:
     def pip_activate(self,epoch):return self.pip_service.activate(epoch)
     def pip_stop(self):return self.pip_service.stop()
 
+    def trace_configure(self,enabled,clear=False):return self.ctx.debug_trace_runtime.configure(enabled,clear)
+    def trace_snapshot(self):return self.ctx.debug_trace_runtime.snapshot()
+
     def catalog(self) -> dict:
         from one_dragon.base.operation.application.application_factory import ApplicationFactory
         ctx = self.ctx
@@ -658,6 +661,8 @@ class OneDragonService:
             self._execution=None
         if self._ctx is not None:
             ctx = self._ctx
+            trace=getattr(ctx,'debug_trace_runtime',None)
+            if trace is not None:trace.close()
             try:
                 if ctx.controller is not None:
                     ctx.after_app_shutdown()
@@ -696,3 +701,4 @@ METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
 METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})
+METHODS.update({'trace_configure','trace_snapshot'})

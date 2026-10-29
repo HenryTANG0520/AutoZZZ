@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import platform
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -35,8 +36,12 @@ def main():
     from zzz_od.operation.goto.goto_menu import GotoMenu
     from zzz_od.application.charge_plan.charge_plan_config import ChargePlanItem
     state_file=data/'autozzz/fixture-game.json';state_file.parent.mkdir(exist_ok=True)
-    def load():return json.loads(state_file.read_text()) if state_file.is_file() else dict(running=False,world=False,path='',pid=900,hwnd=1900,done=[])
-    def save(value):state_file.write_text(json.dumps(value),encoding='utf-8')
+    state_lock=threading.RLock()
+    def load():
+        with state_lock:return json.loads(state_file.read_text()) if state_file.is_file() else dict(running=False,world=False,path='',pid=900,hwnd=1900,done=[])
+    def save(value):
+        with state_lock:
+            temporary=state_file.with_suffix('.tmp');temporary.write_text(json.dumps(value),encoding='utf-8');temporary.replace(state_file)
     def launch(path):
         value=load();value.update(running=True,world=False,path=path,pid=value['pid']+1,hwnd=value['hwnd']+1);save(value)
     def inventory():
@@ -67,11 +72,15 @@ def main():
         def reset(self):self.keyboard.reset();self.mouse.reset()
     class Controller:
         screenshot_method='auto';is_game_window_ready=True
+        standard_width=1920;standard_height=1080
         def __init__(self,ctx):
             self.ctx=ctx;self.keyboard_controller=Keys(ctx.execution_control)
-            self.game_win=SimpleNamespace(bound=None,process_id=None,clear_binding=self.clear)
+            self.game_win=SimpleNamespace(bound=None,process_id=None,clear_binding=self.clear,identity_valid=self.identity_valid)
             self.screenshot_controller=SimpleNamespace(init_screenshot=lambda *_:None)
         def clear(self):self.game_win.bound=None;self.game_win.process_id=None
+        def identity_valid(self):
+            value=load();bound=self.game_win.bound
+            return bool(bound is not None and value['running'] and value['hwnd']==bound.hwnd and value['pid']==self.game_win.process_id and value['path']==bound.path)
         def bind(self,path):self.game_win.bound=window(path);self.game_win.process_id=load()['pid']
         def probe(self):return WindowState(load()['running'],True,(0,0,1920,1080))
         def screenshot(self):return self.ctx.execution_control.observe(lambda:(time.time(),np.zeros((1080,1920,3),np.uint8)))

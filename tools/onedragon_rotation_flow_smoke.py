@@ -32,7 +32,7 @@ def close(client):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);parser.add_argument('--restart-client',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);parser.add_argument('--restart-client',action='store_true');parser.add_argument('--trace',action='store_true');args=parser.parse_args()
     data=args.data.resolve()
     if data.exists():raise SystemExit('请使用新的隔离验证目录。')
     defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);paths=RuntimePaths(defaults.source,defaults.python,data);paths.prepare()
@@ -53,9 +53,13 @@ def main():
             rpc('save_configuration',app_id='_group',revision=group['revision'],values=dict(app_list=rows))
         action('activate',idx=1)
     finally:close(setup)
-    events=queue.Queue();logs=[];last=None
+    events=queue.Queue();logs=[];last=None;trace_events=[]
     def emit(event):
         if event['type']=='log':logs.append(event['message'])
+        if event['type']=='trace':
+            event=session.take_trace()
+            if event is None:return
+            trace_events.append(event)
         events.put(event)
     session=RotationSession(paths,emit,report_root=data/'reports',client_factory=FixtureClient,read_key=lambda _:0)
     def wait(predicate):
@@ -63,6 +67,7 @@ def main():
             event=events.get(timeout=90)
             if predicate(event):return event
     try:
+        if args.trace:session.trace(True)
         session.send('prepare',server='cn')
         prepared=wait(lambda e:e['type']=='state' and not e['state']['busy'])['state']
         assert prepared['state']=='prepared',prepared
@@ -74,12 +79,16 @@ def main():
         methods=[row['method'] for row in report['stages']]
         assert methods.count('start_login')==3 and methods.count('start_application')==2
         assert methods.count('start_client_close')==(2 if args.restart_client else 0)
+        if args.trace:
+            assert any(event.get('snapshot',{}).get('items',{}).get('decision') for event in trace_events if event.get('snapshot')),trace_events
+            assert sum(event.get('snapshot')is None for event in trace_events)>=2
+            assert all('items' not in row['execution'] for row in report['stages'])
     finally:
         session.close();session.worker.join(15)
         (data/'parent.log').write_text('\n'.join(logs),encoding='utf-8')
         assert not session.worker.is_alive()
     result=dict(actual_sdk_operation_graphs=True,actual_pipe_and_worker_handoffs=True,accounts=2,returned_to_start=True,
-                restart_client=args.restart_client,fixture_models_and_devices=True,game_accessed=False,game_input_sent=False)
+                restart_client=args.restart_client,trace_subscribed=args.trace,trace_snapshots=sum(event.get('snapshot')is not None for event in trace_events),fixture_models_and_devices=True,game_accessed=False,game_input_sent=False)
     (data/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(result,ensure_ascii=False))
 
 

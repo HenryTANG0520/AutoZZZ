@@ -520,6 +520,8 @@ class ManagedZContext(ZContext):
         if not hasattr(btn_switch_next,'BattleStateEnum'):btn_switch_next.BattleStateEnum=BattleStateEnum
         if not hasattr(btn_switch_next,'Optional'):btn_switch_next.Optional=Optional
         super().__init__()
+        from .onedragon_trace import TraceRuntime
+        self.debug_trace_runtime=TraceRuntime(self)
         from .onedragon_push import ManagedPushService
         self.push_service.after_app_shutdown()
         self.push_service = ManagedPushService(self)

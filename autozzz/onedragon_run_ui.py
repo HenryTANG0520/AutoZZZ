@@ -28,6 +28,7 @@ class ExecutionWindow:
         self.last_state={}
         self.last_report=None
         self.battle_monitor=None
+        self.trace_window=None
         self.resource_confirmation_id=""
         self.resource_required=False
         self.poll_token=None
@@ -62,6 +63,12 @@ class ExecutionWindow:
         ttk.Label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
         self.account_badge=ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel")
         self.account_badge.grid(row=0,column=1,sticky="e")
+        style=ttk.Style(self.window)
+        style.layout('RunTool.TButton',[('Button.padding',{'sticky':'nsew','children':[('Button.label',{'sticky':'nsew'})]})])
+        style.configure('RunTool.TButton',padding=(d(10),d(3)),background=theme.PANEL,foreground=theme.MUTED)
+        style.map('RunTool.TButton',foreground=[('active',theme.ACCENT),('focus',theme.ACCENT)])
+        self.trace_button=ttk.Button(header,text='调试追踪…',command=self.show_trace,style='RunTool.TButton')
+        self.trace_button.grid(row=0,column=2,sticky='e',padx=(d(14),0))
         if route_debug is not None:
             theme.wrapped_label(header,text=f"{route_debug['key']} · 已完成 {route_debug['start_index']} 个移动点" if route_debug['start_index'] else f"{route_debug['key']} · 从起点传送",style="Hint.TLabel").grid(row=1,column=0,columnspan=2,sticky="ew",pady=(d(8),0))
             self.auto_launch.set(False)
@@ -216,6 +223,14 @@ class ExecutionWindow:
         self.battle_monitor.update(self.last_state.get('battle'))
         self.battle_monitor.window.deiconify();self.battle_monitor.window.lift()
 
+    def show_trace(self):
+        if self.closing:return
+        from .onedragon_trace_ui import TraceWindow
+        if self.trace_window is None or self.trace_window.closed:
+            self.trace_window=TraceWindow(self.window,self.ui.ui_scale,self.session.trace)
+        self.trace_window.update_state(self.last_state)
+        self.trace_window.window.deiconify();self.trace_window.window.lift()
+
     def budget_records(self):
         from .budget_ui import BudgetWindow
         BudgetWindow(self.window,self.profile,self.ui.ui_scale)
@@ -234,6 +249,7 @@ class ExecutionWindow:
 
     def disposed(self,event):
         if event.widget is self.window:
+            if self.trace_window is not None:self.trace_window.close()
             if self.poll_token is not None:
                 self.window.after_cancel(self.poll_token)
                 self.poll_token=None
@@ -359,6 +375,11 @@ class ExecutionWindow:
                 elif kind=="report":
                     from pathlib import Path
                     self.last_report=Path(event["path"])
+                elif kind=='trace':
+                    payload=event if 'snapshot' in event else self.session.take_trace()
+                    if payload is not None and self.trace_window is not None:self.trace_window.update(payload['snapshot'],payload.get('version'))
+                elif kind=='trace_error':
+                    if self.trace_window is not None and not self.trace_window.closed:self.trace_window.error(event['message'])
                 elif kind=="log":
                     self.write(event["message"])
                     if self.busy and not self.ui.closing:self.ui.overlay.append(event["message"])
@@ -374,6 +395,7 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    if self.trace_window is not None and not self.trace_window.closed:self.trace_window.update_state(state)
                     if self.battle_monitor is not None and self.battle_monitor.window.winfo_exists():self.battle_monitor.update(state.get('battle'))
                     if self.rotation_table is not None:
                         rows=state.get('rotation',{}).get('accounts',[])
@@ -484,6 +506,7 @@ class ExecutionWindow:
 
     def close(self):
         if not self.closing:
+            if self.trace_window is not None:self.trace_window.close()
             self.closing=True
             self.status.set("正在停止并关闭…")
             self.session.close()
