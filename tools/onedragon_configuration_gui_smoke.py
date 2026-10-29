@@ -76,7 +76,7 @@ def main():
                     else:
                         panel._loaded(copy.deepcopy(snapshot))
                         root.update()
-                    assert len(panel.cache)==32,(panel.status.get(),len(panel.cache))
+                    assert len(panel.cache)==33,(panel.status.get(),len(panel.cache))
                     for size in ("default","minimum"):
                         if size=="minimum":root.geometry("%dx%d" % root.minsize())
                         for key,description in panel.cache.items():
@@ -112,6 +112,17 @@ def main():
                         root.update()
                         assert panel.current_id=="teams"
                     if scale==1.:
+                        panel.tree.selection_set('_game_input');panel.select();root.update()
+                        panel.form.controls['key_normal_attack'].variable.set('j');root.update()
+                        assert panel.dirty
+                        panel.save_button.invoke();pump(root,lambda:not panel.busy)
+                        assert not panel.dirty and '已保存' in panel.status.get(),panel.status.get()
+                        panel.reload_button.invoke();pump(root,lambda:not panel.busy)
+                        assert panel.form.values()['key_normal_attack']=='j'
+                        if args.preview:
+                            from PIL import ImageGrab
+                            args.preview.parent.mkdir(parents=True,exist_ok=True)
+                            ImageGrab.grab(window=root.winfo_id()).save(args.preview.with_name('game-input.png'))
                         panel.tree.selection_set("charge_plan")
                         panel.select()
                         root.update()

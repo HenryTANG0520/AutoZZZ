@@ -80,7 +80,8 @@ class BattleInputControl:
                                  and not owner.control.focus_waiting and owner.control.task_epoch==owner.control.epoch)
                 owner.allowed_epoch=owner.control.task_epoch
             if not owner.allowed:
-                owner.ctx.controller.keyboard_controller.reset()
+                from .onedragon_gamepad import release_controller_inputs
+                release_controller_inputs(owner.ctx.controller)
             if ended:
                 if battle.auto_op is not None:battle.auto_op.stop_running()
                 return False

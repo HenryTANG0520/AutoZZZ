@@ -94,7 +94,8 @@ class OneDragonExecution:
 
     def _release(self) -> None:
         if self.ctx.controller is not None:
-            self.ctx.controller.keyboard_controller.reset()
+            from .onedragon_gamepad import release_controller_inputs
+            release_controller_inputs(self.ctx.controller)
 
     def _pause_backend(self) -> bool:
         if self.ctx.run_context.is_context_running:

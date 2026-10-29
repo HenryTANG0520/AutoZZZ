@@ -203,7 +203,9 @@ class ManagedController(ZPcController):
         try:
             super().cleanup_after_app_shutdown()
         finally:
-            self.game_win.clear_binding()
+            from .onedragon_gamepad import release_controller_inputs
+            try:release_controller_inputs(self)
+            finally:self.game_win.clear_binding()
 
     def probe(self) -> WindowState:
         from .windows import user32
@@ -223,7 +225,7 @@ class ManagedController(ZPcController):
 
     def init_before_context_run(self) -> bool:
         if self.game_config.background_mode:
-            raise ValueError("受控后台与手柄适配尚未完成，请先使用前台键鼠模式。")
+            raise ValueError("后台执行适配尚未完成，请先使用前台键鼠模式。")
         self.enable_foreground_mode()
         return self.init_game_win()
 
@@ -235,13 +237,41 @@ class ManagedController(ZPcController):
         self.game_win.init_win()
 
     def enable_background_mode(self, gamepad_type: str = "xbox") -> None:
-        raise ValueError("受控后台与手柄适配尚未完成。")
+        raise ValueError("后台执行适配尚未完成。")
 
     def enable_xbox(self) -> None:
-        raise ValueError("受控 Xbox 适配尚未完成。")
+        self._enable_gamepad('xbox')
 
     def enable_ds4(self) -> None:
-        raise ValueError("受控 DS4 适配尚未完成。")
+        self._enable_gamepad('ds4')
+
+    def _enable_gamepad(self,kind):
+        from one_dragon.base.controller.pc_button import pc_button_utils
+        if not pc_button_utils.is_vgamepad_installed():raise ValueError('未安装虚拟手柄依赖 vgamepad / ViGEmBus。')
+        self.control.checkpoint()
+        from .onedragon_gamepad import ControlledGamepad,release_controller_inputs
+        release_controller_inputs(self)
+        name=kind+'_controller';device=getattr(self,name,None)
+        if device is None:
+            if kind=='xbox':
+                from one_dragon.base.controller.pc_button.xbox_button_controller import XboxButtonController
+                raw=XboxButtonController()
+            else:
+                from one_dragon.base.controller.pc_button.ds4_button_controller import Ds4ButtonController
+                raw=Ds4ButtonController()
+            device=ControlledGamepad(raw,self.control);setattr(self,name,device)
+        device.set_key_press_time(getattr(self.game_config,kind+'_key_press_time'))
+        self.btn_controller=device;self._gamepad_type=kind
+        self.action_keys=self.game_config.get_action_keys(kind)
+        self.gamepad_action_keys=self.game_config.get_gamepad_action_keys(kind)
+
+    def enable_keyboard(self):
+        from .onedragon_gamepad import release_controller_inputs
+        release_controller_inputs(self)
+        super().enable_keyboard()
+
+    def _get_switch_gamepad_key(self):
+        return 'ds4_rs_up' if getattr(self,'_gamepad_type',None)=='ds4' else 'xbox_rs_up'
 
     def screenshot(self, independent: bool = False):
         def capture():

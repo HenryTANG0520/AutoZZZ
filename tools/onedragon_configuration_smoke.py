@@ -22,7 +22,7 @@ def main():
             catalog = client.call("catalog", timeout=60)
             options = client.call("configuration_options")
             apps = [a["id"] for a in catalog["applications"] if a["configurable"]]
-            apps += ["teams", "_group", "battle_assistant", "_environment", "_models"]+[c["id"] for c in options["challenges"]]
+            apps += ["teams", "_group", "battle_assistant", "_game_input", "_environment", "_models"]+[c["id"] for c in options["challenges"]]
             descriptions = {key: client.call("describe_configuration", app_id=key) for key in apps}
             assert all(d["fields"] for d in descriptions.values())
             assert "异常演练" in [m["value"] for m in options["training"]["实战模拟室"]["types"]["代理人晋升"]["missions"]]

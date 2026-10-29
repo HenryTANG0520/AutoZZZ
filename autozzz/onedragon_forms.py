@@ -131,7 +131,8 @@ class ScalarForm:
                     ttk.Button(add,text="添加",command=append).pack(side="left",padx=(d(6),0))
                 widget=container
                 variable = None
-                ttk.Label(line,text="每行一项 · 从上到下优先",style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
+                order_hint=field.get('order_hint','每行一项 · 从上到下优先')
+                if order_hint:ttk.Label(line,text=order_hint,style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
             else:
                 variable = tk.StringVar(line,str(value or "") if kind=="str" else str(value))
                 widget = ttk.Entry(line,textvariable=variable,width=24)

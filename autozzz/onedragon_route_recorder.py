@@ -129,7 +129,9 @@ class RouteCaptureJob:
         return self.controller.probe() if self.controller is not None else WindowState(False, False, reason="截图器尚未绑定。")
 
     def _release(self):
-        if self.controller is not None: self.controller.keyboard_controller.reset()
+        if self.controller is not None:
+            from .onedragon_gamepad import release_controller_inputs
+            release_controller_inputs(self.controller)
 
     def _work(self, large_map, anchor, game_path):
         try:
