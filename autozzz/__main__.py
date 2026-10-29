@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--battle-resume", type=Path, help="仅续接报告对应的未完成战斗；不重新出战")
     mode.add_argument("--battle-prepare", action="store_true", help="核实副本与预编队伍；不出战")
     mode.add_argument("--onedragon-run", metavar="APP_ID", help="运行已保存的一条龙应用配置")
+    mode.add_argument("--runtime-check", type=Path, metavar="REPORT", help="检查一条龙分发环境并保存离线报告，不操作游戏")
     parser.add_argument("--energy-limit", type=int, help="一条龙本轮总电量上限")
     parser.add_argument("--battle-limit", type=int, help="一条龙本轮场次上限")
     parser.add_argument("--battle-cost-limit", type=int, help="一条龙每场电量上限")
@@ -48,6 +49,16 @@ def main(argv: list[str] | None = None) -> int:
     native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
     if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.run_timeout != 600):
         parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
+
+    if args.runtime_check:
+        try:
+            from .onedragon_diagnostics import check_runtime
+            result=check_runtime(ROOT,args.runtime_check)
+            print(_json(result))
+            return 0 if result['state']=='success' else 2
+        except Exception as exc:
+            print(_json({'error':str(exc)}),file=sys.stderr)
+            return 2
 
     if args.onedragon_run:
         try:

@@ -85,6 +85,16 @@ class ProtocolTests(unittest.TestCase):
             finally:other.close()
         self.assertNotIn(LEASE_ENV,self.popen.call_args.kwargs['env'])
 
+    def test_worker_ignores_foreign_python_home_and_user_site(self):
+        import os
+        with patch.dict(os.environ,{'PYTHONHOME':'foreign python','PYTHONUSERBASE':'foreign user site','VIRTUAL_ENV':'foreign env'}):
+            other=OneDragonClient(self.paths)
+            try:other.start()
+            finally:other.close()
+        environment=self.popen.call_args.kwargs['env']
+        self.assertNotIn('PYTHONHOME',environment);self.assertNotIn('PYTHONUSERBASE',environment)
+        self.assertNotIn('VIRTUAL_ENV',environment);self.assertEqual(environment['PYTHONNOUSERSITE'],'1')
+
     def test_start_timeout_finishes_same_hello_without_spawning_another_worker(self):
         import os
         before=self.popen.call_count

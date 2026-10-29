@@ -42,17 +42,31 @@ class RuntimePaths:
     source: Path
     python: Path
     data: Path
+    bundle: Path | None = None
 
     @classmethod
     def discover(cls, root: Path, profile: str = "cn") -> RuntimePaths:
         if profile not in ("cn", "global"):
             raise ValueError("区服必须为 cn 或 global。")
-        source = Path(root).resolve() / "vendor" / "onedragon"
+        root=Path(root).resolve()
+        source = root / "vendor" / "onedragon"
         base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local" / "share")))
+        from .onedragon_bundle import BUNDLE_DIRECTORY
+        bundle=root/BUNDLE_DIRECTORY
+        if bundle.exists():
+            return cls(bundle/'source',bundle/'python/python.exe',base/'AutoZZZ/OneDragon'/profile,bundle)
         return cls(source, source / ".venv" / "Scripts" / "python.exe",
                    base / "AutoZZZ" / "OneDragon" / profile)
 
     def verify(self) -> None:
+        if self.bundle is not None:
+            from .onedragon_bundle import verify_bundle,BundleError
+            if self.source.resolve()!=self.bundle.resolve()/'source' or self.python.resolve()!=self.bundle.resolve()/'python/python.exe':
+                raise RuntimeUnavailable('分发运行时路径与清单目录不一致。')
+            try:verify_bundle(self.bundle,UPSTREAM_REVISION,PROTOCOL_VERSION)
+            except BundleError as exc:raise RuntimeUnavailable(str(exc)) from exc
+            self._verify_data_directory()
+            return
         if not (self.source / "src" / "zzz_od" / "context" / "zzz_context.py").is_file():
             raise RuntimeUnavailable("缺少一条龙源码，请运行 tools/setup_onedragon.ps1。")
         if not self.python.is_file():
@@ -71,7 +85,10 @@ class RuntimePaths:
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if clean.returncode:
                 raise RuntimeUnavailable("一条龙源码或内置资源存在本地修改；自定义策略请保存在 AutoZZZ 数据目录。")
-        source, data = self.source.resolve(), self.data.resolve()
+        self._verify_data_directory()
+
+    def _verify_data_directory(self):
+        source, data = (self.bundle or self.source).resolve(), self.data.resolve()
         if source == data or source in data.parents or data in source.parents:
             raise RuntimeUnavailable("一条龙数据目录必须独立于源码目录。")
 
@@ -85,26 +102,33 @@ class RuntimePaths:
             if saved.get("revision") != UPSTREAM_REVISION:
                 raise RuntimeUnavailable("数据目录来自其他一条龙版本，需要先迁移配置与资源。")
             return
-        result = subprocess.run(["git", "-C", str(self.source), "ls-files", "-z", "config", "assets"],
-                                capture_output=True, timeout=15, check=True,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        for name in result.stdout.decode("utf-8").split("\0"):
+        if self.bundle is None:
+            result = subprocess.run(["git", "-C", str(self.source), "ls-files", "-z", "config", "assets"],
+                                    capture_output=True, timeout=15, check=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            names=result.stdout.decode("utf-8").split("\0")
+        else:
+            from .onedragon_bundle import read_manifest
+            names=read_manifest(self.bundle,UPSTREAM_REVISION,PROTOCOL_VERSION)['resources']
+        for name in names:
             if not name:
                 continue
             relative = Path(name)
             if relative.is_absolute() or ".." in relative.parts:
                 raise RuntimeUnavailable("上游资源路径无效。")
             origin, target = self.source / relative, self.data / relative
-            if not origin.is_file() or target.exists():
+            from .onedragon_bundle import filesystem_path
+            origin_io,target_io=filesystem_path(origin),filesystem_path(target)
+            if not origin_io.is_file() or target_io.exists():
                 continue
             if not target.resolve().is_relative_to(self.data.resolve()):
                 raise RuntimeUnavailable("数据目录中的资源路径指向目录外。")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+            target_io.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target_io.with_name(target_io.name + "." + uuid.uuid4().hex + ".tmp")
             try:
-                shutil.copyfile(origin, temporary)
+                shutil.copyfile(origin_io, temporary)
                 try:
-                    os.link(temporary, target)  # 已有文件不会被另一并发初始化覆盖。
+                    os.link(temporary, target_io)  # 已有文件不会被另一并发初始化覆盖。
                 except FileExistsError:
                     pass
             finally:
@@ -168,11 +192,14 @@ class OneDragonClient:
             environment.pop(LEASE_ENV,None)
             if self.run_lease is not None:environment[LEASE_ENV]=self.run_lease.export()
             environment["PYTHONUTF8"] = "1"
+            for name in ('PYTHONHOME','PYTHONUSERBASE','VIRTUAL_ENV','CONDA_PREFIX','PYTHONSTARTUP'):
+                environment.pop(name,None)
+            environment['PYTHONNOUSERSITE']='1'
             # 独立解释器只通过明确的模块路径加载桥接代码。
-            package_root = Path(__file__).resolve().parent.parent
+            package_root = self.paths.bundle/'bridge' if self.paths.bundle is not None else Path(__file__).resolve().parent.parent
             environment["PYTHONPATH"] = str(package_root)
             self.process = subprocess.Popen(
-                [str(self.paths.python), "-u", "-m", "autozzz.onedragon_worker",
+                [str(self.paths.python), "-s", "-P", "-u", "-m", "autozzz.onedragon_worker",
                  "--source", str(self.paths.source.resolve()), "--data", str(self.paths.data.resolve())],
                 cwd=package_root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
