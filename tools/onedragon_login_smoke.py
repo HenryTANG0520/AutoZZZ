@@ -312,6 +312,12 @@ def main():
                 original_switch(operation,context);attach(operation)
                 operation.round_by_ocr_and_click=lambda screen,text,**kwargs:operation.round_by_click_area('菜单',text)
                 operation.round_by_find_area=lambda screen,screen_name,area_name,**kwargs:operation.round_success(area_name)
+                original_click=operation.round_by_find_and_click_area
+                def logout(screen,screen_name,area_name,**kwargs):
+                    result=original_click(screen,screen_name,area_name,**kwargs)
+                    if area_name=='更多登出确认':fixture.world=False
+                    return result
+                operation.round_by_find_and_click_area=logout
             service.prepare_login('switch');manager.worker.join(5)
             with patch.object(SwitchAccount,'__init__',constructed_switch),patch.object(EnterGame,'__init__',constructed),patch.object(GotoMenu,'execute',return_value=OperationResult(True)):
                 service.start_login('switch',timeout_seconds=30);manager.worker.join(15)
@@ -319,6 +325,35 @@ def main():
             assert not state['busy'] and state['state']=='success' and state['login']['world_verified'],state
             assert fixture.submits==1 and fixture.clicks.count('更多登出确认')==1
             checks.append('actual_switch_account_graph_runs_logout_nodes_then_actual_enter_game_graph_in_one_run_slot')
+
+            from autozzz.onedragon_login_account import LoginAccount
+            fixture.login_screen=True;fixture.monthly=False;fixture.route=False
+            def account_enter(op,context,switch=False):
+                constructed(op,context,switch)
+                op.round_by_find_area=lambda screen,screen_name,area_name,**kwargs:op.round_success(area_name) if fixture.login_screen and not fixture.world and area_name=='点击进入游戏' else op.round_retry('fixture absent')
+                op.check_screen_with_can_go=lambda *_,**__:('快捷手册',True) if fixture.route else (None,False)
+                op.round_by_ocr=lambda screen,text,**kwargs:op.round_success(text) if fixture.monthly and text in ('今日到账','月卡剩余') else op.round_retry('fixture absent')
+                op.round_by_ocr_and_click_by_priority=lambda words,**kwargs:op.round_by_click_area('打开游戏',words[0])
+            for in_world in (False,True):
+                reset();fixture.world=in_world;config.save()
+                service.prepare_login('account');manager.worker.join(5)
+                with patch.object(EnterGame,'__init__',account_enter),patch.object(SwitchAccount,'__init__',constructed_switch),patch.object(GotoMenu,'execute',return_value=OperationResult(True)):
+                    service.start_login('account',timeout_seconds=30);manager.worker.join(15)
+                state=service.execution_status()
+                assert not state['busy'] and state['state']=='success' and state['login']['world_verified'] and fixture.submits==1,state
+                assert fixture.clicks.count('更多登出确认')==int(in_world)
+            checks.append('account_mode_actual_operation_graph_chooses_forced_title_login_or_world_logout_and_requires_new_submission')
+            reset();fixture.login_screen=False
+            with patch.object(EnterGame,'__init__',account_enter):
+                op=LoginAccount(ctx);op.last_screenshot=np.zeros((1080,1920,3),np.uint8)
+                result=tick(op.recognize);assert not result.is_success and op.child is None and not fixture.clicks
+                fixture.monthly=True;result=tick(op.recognize)
+                assert not result.is_success and op.child is None and fixture.clicks==['今日到账']
+                fixture.monthly=False;fixture.route=True;tick(op.recognize)
+                assert isinstance(op.child,SwitchAccount)
+            fixture.login_screen=True;fixture.route=False
+            checks.append('account_origin_waits_without_unknown_clicks_and_only_claims_monthly_popup_with_both_required_markers')
+            checks.append('recognized_ingame_screen_with_actual_menu_route_dispatches_switch_account_instead_of_treating_it_as_login')
 
             # 启动等待、绑定和真实登录图交接；启动器与进程清单仍为替身。
             from autozzz.onedragon_startup import GameStartup

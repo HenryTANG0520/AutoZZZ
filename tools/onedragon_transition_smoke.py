@@ -62,7 +62,7 @@ def main():
                 except subprocess.TimeoutExpired:continue
         assert code==0,'SDK fixture failed; inspect sdk.log'
         result=json.loads((data/'sdk/result.json').read_text(encoding='utf-8'))
-        assert result['leased_worker'] and result['count']==23 and not result['game_accessed'] and result['network_blocked']
+        assert result['leased_worker'] and result['count']==26 and not result['game_accessed'] and result['network_blocked']
         excluded()
     with RunLock():pass
     checks.append('actual_login_switch_and_verified_client_exit_operations_execute_under_the_parent_lease_with_normal_input_guards')

@@ -39,6 +39,12 @@ def main():
                 expected=next(row for row in plan['instances'] if row['idx']==3)['applications'][0]['name']
                 assert expected in dialog.details.get('1.0','end')
                 dialog.edit();assert selected==[3]
+                started=[]
+                dialog=RotationPreviewDialog(root,copy.deepcopy(plan),ui.ui_scale,selected.append,lambda:started.append(True))
+                root.update();layout(dialog.window);cases+=1
+                footer=dialog.window.winfo_children()[-1]
+                next(child for child in footer.winfo_children() if child.cget('text')=='连续轮换…').invoke()
+                assert started==[True] and not dialog.window.winfo_exists()
                 broken=copy.deepcopy(plan);broken['configuration_valid']=False;broken['issues']=[dict(instance_idx=2,message='请填写登录资料。')]
                 broken['instances'][0]['login_configured']=False
                 dialog=RotationPreviewDialog(root,broken,ui.ui_scale,selected.append);dialog.table.selection_set('2');dialog.select();root.update()
@@ -72,7 +78,13 @@ def main():
                     assert accounts.selected()==selected and not errors,errors
                     assert config.read_bytes()==original and not list(paths.data.rglob('*.onnx'))
                     accounts.preview_button.invoke();pump(root,lambda:accounts.preview_dialog.window.winfo_exists() and not accounts.busy)
-                    accounts.close();pump(root,lambda:accounts.closed)
+                    launched=[]
+                    def open_rotation(*args,**kwargs):
+                        assert not accounts.worker.is_alive()
+                        launched.append((args[1:4],kwargs))
+                    with patch('autozzz.onedragon_run_ui.open_execution',side_effect=open_rotation):
+                        accounts.run_rotation();pump(root,lambda:accounts.closed)
+                    assert launched==[(('_rotation','多账号轮换','cn'),{})]
                     accounts.worker.join(2)
                     assert not accounts.worker.is_alive()
                     checks.append(dict(real_sdk_account_window_preview=True,unsaved_login_guard=True,close_destroys_preview_and_waits_worker=True,legacy_config_unchanged=True))

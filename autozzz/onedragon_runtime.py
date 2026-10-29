@@ -142,6 +142,12 @@ class OneDragonClient:
         self.worker_exit_code: int | None = None
         self._worker_handle = None
         self._kernel = None
+        self._hello_request=None
+        self._hello=None
+        self._startup_lock=threading.Lock()
+
+    @property
+    def protocol_available(self):return not self._closed and self._terminal_error is None
 
     @property
     def alive(self) -> bool:
@@ -175,7 +181,17 @@ class OneDragonClient:
             self._logger = threading.Thread(target=self._logs, name="AutoZZZ-OneDragon-Logs", daemon=True)
             self._reader.start()
             self._logger.start()
-        hello = self.call("hello", timeout=timeout)
+        self._hello_request=self.submit('hello')
+        return self.finish_start(timeout)
+
+    def finish_start(self,timeout:float=.5) -> dict:
+        with self._startup_lock:
+            if self._closed or self._hello_request is None:raise RuntimeUnavailable('工作进程启动连接已关闭或尚未开始。')
+            if self._hello is not None:return self._hello
+            hello=self.result(self._hello_request,timeout=timeout)
+            return self._accept_hello(hello)
+
+    def _accept_hello(self,hello):
         if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != UPSTREAM_REVISION:
             self.close()
             raise RuntimeUnavailable("一条龙通信协议或源码版本不一致。")
@@ -197,6 +213,7 @@ class OneDragonClient:
             if not self._worker_handle:
                 self.close()
                 raise RuntimeUnavailable("无法监测一条龙实际工作进程。")
+        self._hello=hello
         return hello
 
     def submit(self, method: str, **params: Any) -> str:

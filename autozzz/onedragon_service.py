@@ -41,6 +41,8 @@ class OneDragonService:
         self._downloads = None
         self._rotation = None
         self._run_lease=run_lease
+        self._rotation_guard=None
+        self._rotation_sealed=False
 
     @property
     def ctx(self) -> Any:
@@ -142,6 +144,75 @@ class OneDragonService:
 
     def rotation_preview(self,server:str):return self._rotation_plans().preview(server)
     def rotation_validate(self,plan_id:str):return self._rotation_plans().validate(plan_id)
+
+    def rotation_snapshot(self,plan_id:str):
+        self.rotation_validate(plan_id)
+        from .rotation_snapshot import snapshot
+        result=snapshot(self.data)
+        self.rotation_validate(plan_id)
+        return result
+
+    def rotation_bind(self,manifest:dict):
+        self._assert_idle()
+        if self._run_lease is None:raise RuntimeError('轮换资料交接需要总任务锁。')
+        if self._ctx is not None or self._rotation_guard is not None:raise RuntimeError('请使用新的工作进程接续轮换。')
+        self._run_lease.check()
+        from .rotation_snapshot import RotationSnapshot
+        guard=RotationSnapshot(self.data,manifest);guard.install();self._rotation_guard=guard
+        return dict(bound=True)
+
+    def rotation_select(self,idx:int,expected_current:int):
+        self._assert_idle()
+        guard=self._rotation_guard
+        if guard is None:raise RuntimeError('请先交接轮换资料。')
+        from .onedragon_accounts import AccountStore
+        from .config_transaction import atomic_apply,config_revision
+        from .run_lock import profile_lock
+        store=AccountStore(self)
+        with profile_lock(self.data):
+            guard.check();registry=store._registry();store._instance(registry,idx)
+            if type(expected_current)is not int or registry.current_active_instance.idx!=expected_current:raise ValueError('当前账号已变化，请重新预检。')
+            def activate():
+                rows=[dict(row,active=row['idx']==idx) for row in registry.dict_instance_list]
+                registry.dict_instance_list=rows
+            target=registry._get_write_path()
+            guard.authorized(target,lambda:atomic_apply(registry,config_revision(registry),activate,self.data))
+            registry._init_instance_list();store._refresh(registry)
+        return dict(current=idx)
+
+    def rotation_checkpoint(self):
+        self._assert_idle()
+        if self._rotation_guard is None:raise RuntimeError('当前没有轮换资料交接。')
+        return self._rotation_guard.checkpoint()
+
+    def rotation_control(self,paused:bool,f9_down:bool):
+        self._assert_idle()
+        if self._rotation_guard is None or self._execution is None:raise RuntimeError('当前没有可交接的轮换执行器。')
+        if type(paused)is not bool or type(f9_down)is not bool:raise ValueError('暂停交接格式无效。')
+        self._execution.handoff=(paused,f9_down)
+        return dict(accepted=True)
+
+    def rotation_window(self):
+        self._assert_idle()
+        if self._rotation_guard is None:raise RuntimeError('请先交接轮换资料。')
+        from .windows import find_game,user32,W,C
+        from .models import AutomationError
+        path=self.ctx.game_account_config.game_path
+        if not path:return None
+        try:window=find_game(path)
+        except AutomationError:return None
+        pid=W.DWORD();user32.GetWindowThreadProcessId(window.hwnd,C.byref(pid))
+        return dict(window_handle=window.hwnd,process_id=pid.value)
+
+    def rotation_release(self):
+        self._assert_idle()
+        guard=self._rotation_guard
+        if guard is None:raise RuntimeError('当前没有轮换资料交接。')
+        try:
+            self._close_resources()
+            return guard.checkpoint()
+        finally:
+            guard.close();self._rotation_guard=None;self._rotation_sealed=True
 
     def model_catalog(self): return self._download_service().catalog()
     def model_download_start(self, resource_id: str, revision: str): return self._download_service().start(resource_id,revision)
@@ -443,7 +514,7 @@ class OneDragonService:
         EnvironmentStore(self).validate_models(self.ctx.model_config)
         if self._execution is None:
             from .onedragon_execution import OneDragonExecution
-            self._execution = OneDragonExecution(self.ctx,run_lease=self._run_lease) if self._run_lease is not None else OneDragonExecution(self.ctx)
+            self._execution = OneDragonExecution(self.ctx,run_lease=self._run_lease,rotation_guard=self._rotation_guard) if self._run_lease is not None else OneDragonExecution(self.ctx)
         return self._execution.initialize(server, game_path, region,instance_idx)
 
     def execution_status(self) -> dict:
@@ -548,6 +619,11 @@ class OneDragonService:
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
+        try:self._close_resources()
+        finally:
+            if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
+
+    def _close_resources(self) -> None:
         if self._downloads is not None:self._downloads.close()
         if self._map_capture is not None:self._map_capture.close()
         if self._route_capture is not None: self._route_capture.close()
@@ -555,6 +631,7 @@ class OneDragonService:
             self._binding.close()
         if self._execution is not None:
             self._execution.close()
+            self._execution=None
         if self._ctx is not None:
             ctx = self._ctx
             try:
@@ -587,6 +664,8 @@ METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
 METHODS.update({"model_catalog", "model_download_start", "model_download_status", "model_download_cancel", "model_install_recover"})
 METHODS.update({"rotation_preview", "rotation_validate"})
+METHODS.update({"rotation_snapshot", "rotation_bind", "rotation_select", "rotation_checkpoint", "rotation_release"})
+METHODS.update({"rotation_control", "rotation_window"})
 METHODS.update({"prepare_login", "start_login"})
 METHODS.update({"prepare_client_close", "start_client_close"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})

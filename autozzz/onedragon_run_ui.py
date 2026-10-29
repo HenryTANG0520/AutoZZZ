@@ -64,8 +64,22 @@ class ExecutionWindow:
         if route_debug is not None:
             theme.wrapped_label(header,text=f"{route_debug['key']} · 已完成 {route_debug['start_index']} 个移动点" if route_debug['start_index'] else f"{route_debug['key']} · 从起点传送",style="Hint.TLabel").grid(row=1,column=0,columnspan=2,sticky="ew",pady=(d(8),0))
             self.auto_launch.set(False)
-        settings=ttk.Frame(self.window,padding=(d(18),0,d(18),d(12)))
-        settings.grid(row=1,column=0,sticky="ew")
+        content=self.window
+        self.rotation_canvas=None
+        if app_id=='_rotation':
+            self.window.rowconfigure(1,weight=1);self.window.rowconfigure(3,weight=0)
+            viewport=ttk.Frame(self.window);viewport.grid(row=1,column=0,rowspan=3,sticky='nsew')
+            viewport.rowconfigure(0,weight=1);viewport.columnconfigure(0,weight=1)
+            self.rotation_canvas=tk.Canvas(viewport,background=theme.PANEL,highlightthickness=0)
+            self.rotation_canvas.grid(row=0,column=0,sticky='nsew')
+            vertical=ttk.Scrollbar(viewport,command=self.rotation_canvas.yview);vertical.grid(row=0,column=1,sticky='ns')
+            self.rotation_canvas.configure(yscrollcommand=vertical.set)
+            content=ttk.Frame(self.rotation_canvas);content.columnconfigure(0,weight=1)
+            item=self.rotation_canvas.create_window(0,0,anchor='nw',window=content)
+            content.bind('<Configure>',lambda _:self.rotation_canvas.configure(scrollregion=self.rotation_canvas.bbox('all')))
+            self.rotation_canvas.bind('<Configure>',lambda event:self.rotation_canvas.itemconfigure(item,width=event.width))
+        settings=ttk.Frame(content,padding=(d(18),0,d(18),d(12)))
+        settings.grid(row=0 if self.rotation_canvas is not None else 1,column=0,sticky="ew")
         settings.columnconfigure(1,weight=1)
         ttk.Label(settings,text="游戏程序").grid(row=0,column=0,sticky="w",padx=(0,d(14)))
         path=ttk.Entry(settings,textvariable=self.game_path,width=24)
@@ -90,15 +104,27 @@ class ExecutionWindow:
             self.login_hint=tk.StringVar(self.window)
             theme.wrapped_label(settings,textvariable=self.login_hint,style="Hint.TLabel").grid(row=3,column=0,columnspan=3,sticky="ew",pady=(d(8),0))
             self.login_mode_changed()
-        if profile=="global":
+        if profile=="global" and app_id!='_rotation':
             region=ttk.Combobox(row,textvariable=self.region,values=("asia","us","eu","twhkmo"),state="readonly",width=8)
             region.pack(side="right")
             self.settings_controls.append(region)
             ttk.Label(row,text="账号时区").pack(side="right",padx=d(8))
-        self.options=ttk.Frame(self.window)
-        self.options.grid(row=2,column=0,sticky="ew")
+        self.rotation_table=None
+        if app_id=='_rotation':
+            for widget in settings.grid_slaves(row=0):widget.grid_remove()
+            launch.pack_forget()
+            for widget in row.winfo_children():
+                if isinstance(widget,ttk.Label):widget.configure(text='每阶段时限（秒，暂停不计）')
+            account_area=ttk.Frame(settings);account_area.grid(row=2,column=0,columnspan=3,sticky='ew',pady=(d(12),0));account_area.columnconfigure(0,weight=1)
+            self.rotation_table=ttk.Treeview(account_area,columns=('name','state'),show='headings',height=3,style='Config.Treeview')
+            self.rotation_table.heading('name',text='账号配置');self.rotation_table.heading('state',text='状态')
+            self.rotation_table.column('name',width=d(420),stretch=True);self.rotation_table.column('state',width=d(160),stretch=False)
+            self.rotation_table.grid(row=0,column=0,sticky='ew')
+            vertical=ttk.Scrollbar(account_area,command=self.rotation_table.yview);vertical.grid(row=0,column=1,sticky='ns');self.rotation_table.configure(yscrollcommand=vertical.set)
+        self.options=ttk.Frame(content)
+        self.options.grid(row=1 if self.rotation_canvas is not None else 2,column=0,sticky="ew")
         self.options.columnconfigure(0,weight=1)
-        self.budget_frame=ttk.LabelFrame(self.options,text="本轮战斗预算",padding=d(12))
+        self.budget_frame=ttk.LabelFrame(self.options,text="整轮共享战斗预算" if app_id=='_rotation' else "本轮战斗预算",padding=d(12))
         self.budget_frame.grid(row=0,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
         for col,(name,var) in enumerate((("总电量上限",self.allowance),("最多场次",self.rounds),("每场电量上限",self.per_battle))):
             ttk.Label(self.budget_frame,text=name).grid(row=0,column=col*2,sticky="w",padx=(0,d(8)))
@@ -130,12 +156,16 @@ class ExecutionWindow:
         self.resource_check=ttk.Checkbutton(self.resource_frame,text="允许本轮按以上配置消费或拆解",variable=self.resource_accepted,
                                            style="Config.TCheckbutton",command=self.update_buttons)
         self.resource_check.grid(row=1,column=0,columnspan=2,sticky="w",pady=(d(9),0))
-        area=ttk.Frame(self.window,padding=(d(18),0))
-        area.grid(row=3,column=0,sticky="nsew")
+        area=ttk.Frame(content,padding=(d(18),0))
+        area.grid(row=2 if self.rotation_canvas is not None else 3,column=0,sticky="nsew")
         area.columnconfigure(0,weight=1)
         area.rowconfigure(0,weight=1)
         self.log=tk.Text(area,wrap="word",font=("Microsoft YaHei UI",10),background=theme.FIELD,foreground=theme.TEXT,
                          insertbackground=theme.ACCENT,borderwidth=0,padx=d(12),pady=d(12),state="disabled")
+        if self.rotation_canvas is not None:
+            self.log.configure(height=7)
+            from .onedragon_forms import enable_scroll
+            enable_scroll(self.rotation_canvas,content)
         scroll=ttk.Scrollbar(area,command=self.log.yview)
         self.log.configure(yscrollcommand=scroll.set)
         self.log.grid(row=0,column=0,sticky="nsew")
@@ -161,7 +191,10 @@ class ExecutionWindow:
             self.write("战斗助手需先在游戏中进入战斗；自动选本请使用体力刷本。")
         if app_id=="notorious_hunt":
             self.write("每周免费挑战；不自动切换深度追猎。")
-        self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
+        if app_id=='_rotation':
+            from .onedragon_rotation_session import RotationSession
+            self.session=RotationSession(RuntimePaths.discover(ROOT,profile),self.events.put)
+        else:self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
         self.worker=self.session.worker
         self.update_buttons()
         self.poll_token=self.window.after(80,self.poll)
@@ -204,11 +237,12 @@ class ExecutionWindow:
     def update_buttons(self):
         self.prepare_button.configure(text="重新准备" if self.last_state else "准备运行", style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
-        self.start_button.configure(text="开始登录" if self.login_mode is not None else "开始运行")
+        self.start_button.configure(text="开始轮换" if self.app_id=='_rotation' else "开始登录" if self.login_mode is not None else "开始运行")
+        if self.app_id=='_rotation':self.prepare_button.configure(text='重新预检' if self.last_state else '轮换预检')
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
         confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))
         self.start_button.state(["!disabled"] if self.connected and self.prepared and confirmed and not self.busy and not self.closing else ["disabled"])
-        self.pause_button.state(["!disabled"] if self.busy and (self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
+        self.pause_button.state(["!disabled"] if self.busy and (self.app_id=='_rotation' or self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
         self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
         self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
         self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
@@ -232,6 +266,9 @@ class ExecutionWindow:
 
     def prepare(self):
         if self.busy or self.closing:return
+        if self.app_id=='_rotation':
+            self.busy=True;self.prepared=False;self.resource_accepted.set(False)
+            self.status.set('正在读取轮换配置');self.session.send('prepare',server=self.profile);self.update_buttons();return
         try:Settings(server=self.profile,game_path=self.game_path.get()).validate("enter_game")
         except (TypeError,ValueError) as exc:
             self.status.set(str(exc))
@@ -264,7 +301,8 @@ class ExecutionWindow:
         self.busy=True
         self.status.set("正在开始运行")
         confirmation=self.resource_confirmation_id if self.resource_required else None
-        self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation)
+        if self.app_id=='_rotation':self.session.send('start',budget=budget,timeout_seconds=timeout,resource_confirmation=confirmation)
+        else:self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation)
         self.update_buttons()
 
     def pause(self):
@@ -283,6 +321,9 @@ class ExecutionWindow:
                 kind=event["type"]
                 if kind=="connected":
                     self.connected=True
+                    if self.app_id=='_rotation':
+                        self.loading_account=False;self.status.set('待轮换预检');self.account_badge.configure(text=('国服' if self.profile=='cn' else '国际服')+' · 多账号')
+                        self.update_buttons();continue
                     self.status.set("正在读取当前账号配置")
                     self.session.send("rpc",method="account_list",tag="run-account-list",params={})
                 elif kind=="rpc_result" and event["tag"]=="run-account-list":
@@ -320,6 +361,19 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    if self.rotation_table is not None:
+                        rows=state.get('rotation',{}).get('accounts',[])
+                        ids={str(row['idx']) for row in rows}
+                        for item in self.rotation_table.get_children():
+                            if item not in ids:self.rotation_table.delete(item)
+                        for item in rows:
+                            values=(item['name'],{'pending':'等待','running':'进行中','success':'完成','failed':'未完成','stopped':'已停止'}.get(item['state'],item['state']))
+                            if self.rotation_table.exists(str(item['idx'])):self.rotation_table.item(str(item['idx']),values=values)
+                            else:self.rotation_table.insert('','end',iid=str(item['idx']),values=values)
+                        current=next((row for row in rows if row['idx']==state.get('rotation',{}).get('current')),None)
+                        if current is not None:
+                            text=current['name'][:16]+(' · 返回起点' if state['rotation'].get('returning') else '')
+                            self.account_badge.configure(text=text)
                     resources=state.get("resources",{})
                     from .onedragon_resources import resource_confirmation_label
                     self.resource_check.configure(text=resource_confirmation_label(resources.get("actions",[])))
@@ -358,6 +412,7 @@ class ExecutionWindow:
                     self.paused=control.get("manual_paused",False)
                     name={"ready":"运行环境已就绪","prepared":"已准备","running":"正在运行","initializing":"正在初始化",
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
+                    if self.app_id=='_rotation':name={'prepared':'预检通过','preparing':'读取轮换配置','success':'轮换完成','failed':'轮换未完成','stopped':'轮换已停止'}.get(state['state'],name)
                     if state["state"]=="success" and state.get("redemption"):
                         name="流程结束 · 兑换奖励到账未核实"
                     login=state.get("login",{})

@@ -14,7 +14,7 @@ from .run_lock import RunLock, profile_lock
 
 
 class OneDragonExecution:
-    def __init__(self, ctx: Any,run_lease=None):
+    def __init__(self, ctx: Any,run_lease=None,rotation_guard=None):
         from zzz_od.backend.backend_context import ZzzBackendContext
         self.ctx = ctx
         from one_dragon.utils import os_utils
@@ -31,9 +31,11 @@ class OneDragonExecution:
         self.client_exit=None
         self.client_exit_result={}
         self.close_target=None
+        self.handoff=None
         self.control = ExecutionControl(self._probe, self._release, self._pause_backend,
                                         self._resume_backend, self._stop_backend)
         self.run_lease=run_lease
+        self.rotation_guard=rotation_guard
         self.control.input_validator=self._validate_task_input
         self.ctx.execution_control = self.control
         self.adapter = UpstreamControlAdapter(self.control)
@@ -118,7 +120,11 @@ class OneDragonExecution:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
-            if state=="running":self.manual_pause.clear();self._input_ready=False;self._f9_down=False;self.client_exit_result={}
+            if state=="running":
+                paused,down=self.handoff or (False,False);self.handoff=None
+                if paused:self.manual_pause.set()
+                else:self.manual_pause.clear()
+                self._input_ready=False;self._f9_down=down;self.client_exit_result={}
             self.ctx.download_cancel.clear()
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
@@ -128,7 +134,9 @@ class OneDragonExecution:
                         MapTransaction(self.data).assert_clear()
                         from .model_install import ModelInstall
                         ModelInstall(self.data).assert_clear()
+                        if self.rotation_guard is not None:self.rotation_guard.check()
                         operation()
+                        if self.rotation_guard is not None:self.rotation_guard.check()
                         with self.lock:
                             if self.cancelled.is_set():
                                 if self.state!="failed":self.state="stopped"
@@ -282,7 +290,7 @@ class OneDragonExecution:
         return self._submit("preparing",prepare)
 
     def prepare_login(self,mode:str) -> dict:
-        if mode not in ("enter","switch","forced_enter"):raise ValueError("登录方式无效。")
+        if mode not in ("enter","switch","forced_enter","account"):raise ValueError("登录方式无效。")
         if not self.ctx.ready_for_application:raise RuntimeError("请先初始化运行环境。")
         def prepare():
             self.ctx.push_service.reset_results()
@@ -339,7 +347,11 @@ class OneDragonExecution:
                         try:identity=self.startup.run(auto_launch=True)
                         finally:self.startup=None;self.preparation_step=""
                         if identity is None:self.state="stopped";return
-                    def factory(ctx):return SwitchAccount(ctx) if mode=="switch" else EnterGame(ctx,switch=mode=="forced_enter")
+                    def factory(ctx):
+                        if mode=='account':
+                            from .onedragon_login_account import LoginAccount
+                            return LoginAccount(ctx)
+                        return SwitchAccount(ctx) if mode=="switch" else EnterGame(ctx,switch=mode=="forced_enter")
                     extra={} if identity is None else dict(expected_window=identity)
                     self._run_bound_app("one_dragon",factory,display_name="账号登录",**extra)
                     if self.state not in ("failed","stopped") and not self.login_control.status()["world_verified"]:
@@ -418,10 +430,8 @@ class OneDragonExecution:
         if app_id!=self.prepared_app:raise ValueError("请先准备所选应用。")
         if type(timeout_seconds)is not int or not 30<=timeout_seconds<=7200:raise ValueError("运行时限须为 30—7200 秒。")
         if self.uses_charge:
-            if not isinstance(budget,dict) or set(budget)!={"id","allowance","battle_limit","max_per_battle"}:
-                raise ValueError("刷本须指定预算编号、电量上限、场次和每场上限。")
-            for name,maximum in (("allowance",300),("battle_limit",15),("max_per_battle",100)):
-                if type(budget[name])is not int or not (20 if name=="max_per_battle" else 1)<=budget[name]<=maximum:raise ValueError("战斗预算超出允许范围。")
+            from .battle_budget import validate_runtime_budget
+            validate_runtime_budget(budget)
         elif budget is not None:raise ValueError("当前应用不需要战斗预算。")
         self.resource_confirmation.verify(resource_confirmation, self.prepared_hash)
         def run():
@@ -563,6 +573,7 @@ class OneDragonExecution:
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())
             result['client_exit']=self.client_exit.status() if self.client_exit is not None else dict(self.client_exit_result)
+            if self.rotation_guard is not None:result['handoff_control']=dict(paused=self.manual_pause.is_set(),f9_down=self._f9_down)
             result["resources"] = self.resource_confirmation.status()
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()
@@ -572,6 +583,8 @@ class OneDragonExecution:
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
             bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
             result["window_handle"]=None if bound is None else bound.hwnd
+            pid=getattr(getattr(self.ctx.controller,'game_win',None),'process_id',None)
+            result['window_identity']=None if bound is None or pid is None else dict(window_handle=bound.hwnd,process_id=pid)
             if self.charge_control is not None:result["budget"]=self.charge_control.status()
             if self.state in ("running", "stopping"):
                 result["control"] = self.control.status() if self._input_ready else dict(state="paused" if self.manual_pause.is_set() else "starting",manual_paused=self.manual_pause.is_set(),focus_waiting=False)

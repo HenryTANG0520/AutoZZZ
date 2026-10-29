@@ -138,6 +138,7 @@ class RotationPlans:
                                         returning=index==len(targets)-1 and target==first and len(order)>1))
                 previous=target
             self.plan=dict(plan_id=uuid.uuid4().hex,server=server,original_current=original,start_idx=first,return_idx=first,
+                           origin=dict(idx=original,game_path=configs[original].game_path,region=configs[original].game_region,language=configs[original].game_language),
                            revision=rotation_revision(self.root),instances=instances,transitions=transitions,issues=issues,
                            configuration_valid=not issues,uses_charge=any(row['uses_charge'] for row in instances))
             return copy.deepcopy(self.plan)

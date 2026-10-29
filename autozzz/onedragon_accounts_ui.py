@@ -120,7 +120,7 @@ class AccountsWindow:
         def show(result):
             from .onedragon_rotation_ui import RotationPreviewDialog
             if self.preview_dialog is not None and self.preview_dialog.window.winfo_exists():self.preview_dialog.window.destroy()
-            self.preview_dialog=RotationPreviewDialog(self.window,result,self.ui.ui_scale,self.edit_preview_account)
+            self.preview_dialog=RotationPreviewDialog(self.window,result,self.ui.ui_scale,self.edit_preview_account,self.run_rotation)
             self.status.set("轮换配置预检通过" if result['configuration_valid'] else "请修复轮换预检中的问题。")
         self.request("rotation_preview",show,server=self.profile)
 
@@ -139,6 +139,15 @@ class AccountsWindow:
             self.status.set("请先关闭原运行窗口，再打开账号登录。")
             return
         self.after_close=lambda:open_execution(self.ui,"_login","账号登录",self.profile,login_mode="enter")
+        self.close()
+
+    def run_rotation(self):
+        if self.busy or self.closing or self.dirty:return
+        from .onedragon_run_ui import open_execution
+        existing=getattr(self.ui,'execution_window',None)
+        if existing is not None and not existing.closed:
+            existing.window.deiconify();existing.window.lift();self.status.set('请先关闭原运行窗口，再打开连续轮换。');return
+        self.after_close=lambda:open_execution(self.ui,'_rotation','多账号轮换',self.profile)
         self.close()
 
     def finished_close(self):

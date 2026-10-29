@@ -20,7 +20,9 @@ count=0
 close_delay=0
 for line in sys.stdin:
  r=json.loads(line); m=r['method']; p=r['params']
- if m=='hello': result={'protocol':1,'revision':REVISION,'pid':os.getpid()}
+ if m=='hello':
+  time.sleep(float(os.environ.get('AUTOZZZ_FIXTURE_HELLO_DELAY','0')))
+  result={'protocol':1,'revision':REVISION,'pid':os.getpid()}
  elif m=='delay':
   count+=1; time.sleep(.15); result=count
  elif m=='count': result=count
@@ -82,6 +84,20 @@ class ProtocolTests(unittest.TestCase):
             try:other.start()
             finally:other.close()
         self.assertNotIn(LEASE_ENV,self.popen.call_args.kwargs['env'])
+
+    def test_start_timeout_finishes_same_hello_without_spawning_another_worker(self):
+        import os
+        before=self.popen.call_count
+        with patch.dict(os.environ,{'AUTOZZZ_FIXTURE_HELLO_DELAY':'.15'}):
+            other=OneDragonClient(self.paths)
+            try:
+                with self.assertRaises(RequestPending):other.start(timeout=.001)
+                hello=other.finish_start(timeout=3)
+                self.assertEqual(other.finish_start(timeout=0),hello)
+                self.assertEqual(len(other._replies),1)
+                self.assertEqual(self.popen.call_count,before+1)
+                self.assertTrue(other.alive)
+            finally:other.close()
 
     def test_missing_worker_acknowledgement_rejects_requested_lease(self):
         from types import SimpleNamespace

@@ -27,8 +27,8 @@ class LoginControl:
         self.originals=[];self.enforce_region=False;self.reset()
 
     def reset(self,mode=''):
-        self.mode=mode;self.enforce_region=bool(mode in ('switch','forced_enter') and self.ctx.game_account_config.game_region in self.REGIONS)
-        self.enforce_submission=mode in ('switch','forced_enter')
+        self.mode=mode;self.enforce_region=bool(mode in ('switch','forced_enter','account') and self.ctx.game_account_config.game_region in self.REGIONS)
+        self.enforce_submission=mode in ('switch','forced_enter','account')
         self.loading_seen=False
         self.progress=dict(phase='等待登录',submitted=False,world_verified=False,server_verified=False,manual_wait=False)
 

@@ -5,6 +5,16 @@ import uuid
 from pathlib import Path
 from .models import AutomationError
 
+
+def validate_runtime_budget(budget):
+    if not isinstance(budget,dict) or set(budget)!={'id','allowance','battle_limit','max_per_battle'}:
+        raise ValueError('刷本须指定预算编号、电量上限、场次和每场上限。')
+    if not isinstance(budget['id'],str) or re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',budget['id']) is None:
+        raise ValueError('战斗预算编号仅允许字母、数字、横线和下划线。')
+    for name,maximum in (('allowance',300),('battle_limit',15),('max_per_battle',100)):
+        if type(budget[name])is not int or not (20 if name=='max_per_battle' else 1)<=budget[name]<=maximum:
+            raise ValueError('战斗预算超出允许范围。')
+
 def budget_directory():
     import os
     from .config import ROOT

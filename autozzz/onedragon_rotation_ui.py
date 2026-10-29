@@ -1,4 +1,4 @@
-"""逐账号展示轮换预检及问题，不提供尚未完成的执行入口。"""
+"""逐账号展示轮换预检及问题，转到原生轮换运行窗口。"""
 from __future__ import annotations
 
 import tkinter as tk
@@ -8,7 +8,7 @@ from . import theme
 
 
 class RotationPreviewDialog:
-    def __init__(self,parent,plan,scale,edit_account):
+    def __init__(self,parent,plan,scale,edit_account,run=None):
         self.plan,self.edit_account=plan,edit_account
         self.window=tk.Toplevel(parent);self.window.title('AutoZZZ · 轮换预检');self.window.transient(parent)
         self.window.configure(background=theme.PANEL)
@@ -39,7 +39,11 @@ class RotationPreviewDialog:
         start=next(row['name'] for row in plan['instances'] if row['idx']==plan['start_idx'])
         theme.wrapped_label(footer,text=f"{len(plan['instances'])} 个账号 · 返回起点：{start}"+(' · 涉及电量消耗' if plan['uses_charge'] else ''),style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew',pady=(0,d(12)))
         ttk.Button(footer,text='编辑所选账号…',command=self.edit).grid(row=1,column=0,sticky='w')
-        ttk.Button(footer,text='关闭',command=self.window.destroy).grid(row=1,column=1,sticky='e')
+        if run is not None:
+            def start():self.window.destroy();run()
+            button=ttk.Button(footer,text='连续轮换…',command=start,style='Accent.TButton');button.grid(row=1,column=1,padx=d(8))
+            button.state(['!disabled'] if plan['configuration_valid'] else ['disabled'])
+        ttk.Button(footer,text='关闭',command=self.window.destroy).grid(row=1,column=2,sticky='e')
         self.window.bind('<Escape>',lambda _:self.window.destroy())
         self.window.bind('<Destroy>',self.disposed,add='+')
         if plan['instances']:self.table.selection_set(str(plan['instances'][0]['idx']));self.select()
