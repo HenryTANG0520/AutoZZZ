@@ -85,6 +85,18 @@ class ConfigurationTransactionTests(unittest.TestCase):
         self.assertEqual(self.config.rows, [])
         self.assertEqual(list(self.root.glob("*.tmp")), [])
 
+    def test_source_change_after_serialization_rejects_atomic_publish(self):
+        checks=[]
+        def guard():
+            checks.append(True)
+            return False
+        with self.assertRaisesRegex(ValueError, "来源发生变化"):
+            atomic_apply(self.config, self.revision, self.apply, self.root, guard=guard)
+        self.assertEqual(checks, [True])
+        self.assertEqual(self.target.read_bytes(), self.original)
+        self.assertEqual(self.config.data, {"enabled": False, "rows": []})
+        self.assertEqual(list(self.root.glob("*.tmp")), [])
+
     def test_path_outside_profile_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "数据目录"):
             atomic_apply(self.config, self.revision, self.apply, self.root/"another-profile")

@@ -130,6 +130,42 @@ class OneDragonService:
         if self._binding is None: raise ValueError("QQ 绑定尚未开始。")
         return self._binding.cancel(job_id)
 
+    def library_catalog(self):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).catalog()
+
+    def library_read(self, kind: str, key: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).read(kind, key)
+
+    def library_draft(self, kind: str, key: str = "", source_key: str = "", source_revision: str = "", area_id: str = "", text: str | None = None, data: dict | None = None):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).draft(kind, key, source_key, source_revision, area_id, text, data)
+
+    def library_save(self, kind: str, key: str, data: dict, revision: str, source_key: str = "", source_revision: str = ""):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).save(kind, key, data, revision, source_key, source_revision)
+
+    def library_remove(self, kind: str, key: str, revision: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).remove(kind, key, revision)
+
+    def library_rename(self, kind: str, key: str, name: str, revision: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).rename(kind, key, name, revision)
+
+    def library_map(self, area_id: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).map_preview(area_id)
+
+    def library_export(self, kind: str, key: str, revision: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).export(kind, key, revision)
+
+    def library_archive_read(self, identifier: str):
+        from .onedragon_library import LibraryStore
+        return LibraryStore(self).archive_read(identifier)
+
     def training_options(self) -> dict:
         from .onedragon_config import ConfigurationStore
         return ConfigurationStore(self).compendium()
@@ -407,3 +443,4 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
            "prepare_application", "start_application","account_list","account_action","account_describe","account_save"}
 METHODS.update({"notification_channels", "notification_channel", "notification_channel_save", "notification_test"})
 METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
+METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})

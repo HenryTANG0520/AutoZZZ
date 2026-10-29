@@ -42,6 +42,9 @@ class OneDragonExecution:
         from .onedragon_push import NotificationControl
         self.notification_control = NotificationControl(ctx)
         self.notification_control.install()
+        from .onedragon_patrol import PatrolOrderControl
+        self.patrol_control = PatrolOrderControl(ctx)
+        self.patrol_control.install()
         from .onedragon_resources import ResourceConfirmation
         self.resource_confirmation = ResourceConfirmation()
         self.resource_control = None
@@ -384,5 +387,6 @@ class OneDragonExecution:
             self.worker.join()  # 初始化下载或运行仍在退出时，保留同一线程与进程。
         for adapter in (self.redemption_control,self.assistant_control,self.script_control):adapter.close()
         self.notification_control.close()
+        self.patrol_control.close()
         self.adapter.close()
         self.battle_control.close()

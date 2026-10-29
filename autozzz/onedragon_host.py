@@ -350,6 +350,11 @@ class ManagedZContext(ZContext):
         return config
 
     @cached_property
+    def world_patrol_service(self):
+        from .onedragon_patrol import managed_patrol_service
+        return managed_patrol_service(self)
+
+    @cached_property
     def application_plugin_dirs(self):
         from one_dragon.base.operation.application.plugin_info import PluginSource
         from one_dragon.utils import os_utils

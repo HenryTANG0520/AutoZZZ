@@ -195,6 +195,13 @@ class ApplicationsPanel:
         if self.dirty:self._clear()
         open_accounts(self.ui,profile,lambda:self.load() if not self.closing else None)
 
+    def library(self):
+        if self.busy:return
+        from .onedragon_library_ui import open_library
+        kind = self.current_id.split(":", 1)[0] if ":" in self.current_id else {
+            "lost_void": "lost_void_challenge", "withered_domain": "hollow_zero_challenge", "world_patrol": "world_patrol_route_list"}.get(self.current_id, "lost_void_challenge")
+        open_library(self.ui, "global" if self.profile.get()=="国际服" else "cn", kind)
+
     def _freeze(self):
         def visit(widget):
             if isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button,ttk.Treeview)):
@@ -302,6 +309,9 @@ class ApplicationsPanel:
             simple = [f for f in fields if f["kind"] not in COLLECTIONS]
             records = [f for f in fields if f["kind"] in COLLECTIONS]
             row = 0
+            if self.current_id in ("lost_void", "withered_domain", "world_patrol") or self.current_id.startswith(("lost_void_challenge:", "hollow_zero_challenge:")):
+                ttk.Button(self.content, text="管理方案与路线…", command=self.library).grid(row=row, column=0, sticky="w", pady=(0, round(18*self.scale)))
+                row += 1
             if self.current_id=="shiyu_defense":
                 ttk.Button(self.content,text="编队与策略…",command=lambda:self.tree.selection_set("teams")).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1

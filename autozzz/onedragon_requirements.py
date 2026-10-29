@@ -162,22 +162,25 @@ class ApplicationRequirements:
                 self.models.add("lost_void_det")
 
     def _world_patrol(self, config: Any) -> None:
-        from zzz_od.application.world_patrol.world_patrol_route_list import RouteListType
+        from .onedragon_library_rules import coordinate, route_selection
         service = self.ctx.world_patrol_service
         service.load_data()
         routes = [route for area in service.area_list for route in service.get_world_patrol_routes_by_area(area)]
+        routes = route_selection(routes)
         if config.route_list:
             selected = next((item for item in service.get_world_patrol_route_lists() if item.name == config.route_list), None)
             if selected is None:
                 raise ValueError("路线列表不存在：" + config.route_list)
-            if selected.list_type not in (RouteListType.WHITELIST, RouteListType.BLACKLIST):
-                raise ValueError("路线列表类型无效。")
-            missing = set(selected.route_items) - {route.full_id for route in routes}
-            if missing:
-                raise ValueError("路线列表包含不存在的路线：" + "、".join(sorted(missing)))
-            routes = [route for route in routes if (route.full_id in selected.route_items) == (selected.list_type == RouteListType.WHITELIST)]
+            routes = route_selection(routes, selected)
         if not routes:
             raise ValueError("所选路线列表没有可运行的路线。")
+        for route in routes:
+            large_map = service.get_route_large_map(route)
+            if large_map is None or service.get_route_tp_icon(route) is None: raise ValueError("路线地图或传送点不完整：" + route.full_id)
+            height, width = large_map.road_mask.shape[:2]
+            for operation in route.op_list:
+                if operation.op_type != "move" or not isinstance(operation.data, list) or len(operation.data) != 2: raise ValueError("路线操作无效：" + route.full_id)
+                coordinate(operation.data[0], width); coordinate(operation.data[1], height)
         self.routes = [route.full_id for route in routes]
 
     def load(self, cancelled: Callable[[], bool], progress: Callable[[str], None]) -> None:
