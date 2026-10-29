@@ -33,6 +33,7 @@ class Session:
         self.catalogs = 0
         self.fail_save = self.hold = False
         self.held = None
+        self.capture=None;self.release_capture=False;self.fail_capture_status=False;self.fail_locate=False
         self.finished = threading.Event()
         self.worker = threading.Thread(target=self.work, daemon=False); self.worker.start()
         self.emit(dict(type='connected'))
@@ -47,6 +48,21 @@ class Session:
         if self.hold: self.held=(method, args); return
         if method == 'library_catalog': self.catalogs+=1; result=self.data['catalog']
         elif method == 'library_map': result=self.data['map']
+        elif method == 'route_locate':
+            if self.fail_locate:
+                self.fail_locate=False;self.emit(dict(type='error',message='未识别到玩家标记。',busy=False));return
+            result=dict(found=True,position=[10,20],match_value=.91,mini_png='')
+        elif method == 'route_capture_start':
+            self.capture=dict(job_id='same-capture',busy=True,state='focus_wait',error='',result=None,control=dict(manual_paused=False,focus_waiting=True))
+            result=self.capture
+        elif method.startswith('route_capture_'):
+            assert args['job_id']=='same-capture'
+            if method=='route_capture_status' and self.fail_capture_status:
+                self.fail_capture_status=False;self.emit(dict(type='error',message='状态查询暂未完成。',busy=False));return
+            if method=='route_capture_pause':self.capture['control']['manual_paused']=args['paused'];self.capture['state']='paused' if args['paused'] else 'focus_wait'
+            elif method=='route_capture_cancel':self.capture.update(busy=False,state='cancelled')
+            elif self.release_capture:self.capture.update(busy=False,state='success',result=dict(found=True,position=[10,20],match_value=.91,mini_png=''))
+            result=self.capture
         elif method == 'library_save':
             if self.fail_save:
                 self.fail_save=False; self.emit(dict(type='error', message='资料已变化，请重新读取后保存。', busy=False)); return
@@ -119,6 +135,47 @@ def main():
                             assert editor.rows[:2]==before[:2][::-1]
                             editor.add(True); assert len(editor.rows)==len(set(editor.rows))
                         dialog.dirty=False
+                dialog.render(copy.deepcopy(dialog.session.data['route']),dialog.session.data['map']);root.update()
+                editor=dialog.editor;previous=len(editor.rows)
+                dialog.session.fail_capture_status=True
+                editor.buttons['从游戏识别'].invoke()
+                pump(root,lambda:dialog.capture is not None and not dialog.busy)
+                root.update();layout(dialog.window);cases+=1
+                assert not editor.enabled and dialog.save_button.instate(['disabled'])
+                original_key=dialog.document['key'];read_count=len([p for p in dialog.session.commands if p[1]['method']=='library_read'])
+                another=next(key for key in dialog.table.get_children() if key!=original_key)
+                dialog.table.selection_set(another);dialog.select()
+                dialog.kind_var.set('迷失之地方案');dialog.change_kind()
+                root.update()
+                assert dialog.kind=='world_patrol_route' and dialog.document['key']==original_key and dialog.table.selection()==(original_key,)
+                assert len([p for p in dialog.session.commands if p[1]['method']=='library_read'])==read_count
+                pump(root,lambda:any(p[1]['method']=='route_capture_status' for p in dialog.session.commands) and not dialog.busy)
+                assert dialog.capture['job_id']=='same-capture' and not editor.enabled
+                dialog.capture_pause_button.invoke()
+                pump(root,lambda:dialog.capture is not None and dialog.capture['control']['manual_paused'] and not dialog.busy)
+                assert len([p for p in dialog.session.commands if p[1]['method']=='route_capture_start'])==1
+                dialog.session.release_capture=True
+                dialog.pause_capture()
+                pump(root,lambda:dialog.capture is None and not dialog.busy)
+                assert editor.enabled and editor.candidate and len(editor.rows)==previous
+                root.update();layout(dialog.window);cases+=1
+                editor.buttons['追加到路线'].invoke()
+                assert len(editor.rows)==previous+1 and dialog.dirty and editor.candidate is None
+                with patch('autozzz.onedragon_library_ui.simpledialog.askinteger') as ask:
+                    dialog.debug();ask.assert_not_called()
+                frame=Path(folder)/'client.png'
+                from PIL import Image
+                Image.new('RGB',(1920,1080),(88,95,100)).save(frame)
+                with patch('autozzz.onedragon_library_ui.filedialog.askopenfilename',return_value=str(frame)):
+                    dialog.locate(True);pump(root,lambda:not dialog.busy)
+                    assert editor.candidate
+                    dialog.session.fail_locate=True
+                    dialog.locate(True);pump(root,lambda:not dialog.busy)
+                    assert editor.candidate is None and '玩家标记' in dialog.status.get()
+                dialog.dirty=False
+                with patch('autozzz.onedragon_library_ui.simpledialog.askinteger',return_value=0),patch('autozzz.onedragon_run_ui.open_execution') as opened:
+                    dialog.debug()
+                    assert opened.call_args.kwargs['route_debug']==dict(key=dialog.document['key'],revision=dialog.document['revision'],start_index=0)
                 document=copy.deepcopy(dialog.session.data['route'])
                 dialog.render(document,dialog.session.data['map']);root.update()
                 editor=dialog.editor
@@ -155,6 +212,11 @@ def main():
                     dialog.render(copy.deepcopy(dialog.session.data['route']),dialog.session.data['map']);root.update()
                     args.preview.parent.mkdir(parents=True,exist_ok=True)
                     ImageGrab.grab(window=dialog.window.winfo_id()).save(args.preview)
+                dialog.render(copy.deepcopy(dialog.session.data['route']),dialog.session.data['map']);root.update()
+                dialog.session.release_capture=False
+                dialog.locate(False);pump(root,lambda:dialog.capture is not None and not dialog.busy)
+                dialog.capture_cancel_button.invoke();pump(root,lambda:dialog.capture is None and not dialog.busy)
+                assert dialog.editor.enabled and dialog.editor.candidate is None
                 dialog.session.hold=True;dialog.reload()
                 assert dialog.busy and dialog.session.held is not None
                 dialog.close();assert not dialog.closed and dialog.worker.is_alive()
@@ -162,7 +224,7 @@ def main():
                 assert not dialog.worker.is_alive()
                 assert not errors,errors
                 assert config.read_bytes()==original
-                checks.append(dict(scale=scale, coordinate_roundtrip=True, draft_copy=True, save_conflict_keeps_draft=True, close_waits=True))
+                checks.append(dict(scale=scale, coordinate_roundtrip=True, draft_copy=True, save_conflict_keeps_draft=True, capture_same_job_retry_pause_adopt_cancel=True, import_failure_clears_candidate=True, debug_saved_route_request=True, close_waits=True))
                 if scale==1.:
                     first=open_library(ui,'cn');pump(root,lambda:first.document is not None and not first.busy)
                     first.dirty=True
@@ -173,14 +235,15 @@ def main():
                     pump(root,lambda:ui.library_window is not first and ui.library_window.document is not None and not ui.library_window.busy)
                     assert first.closed and not first.worker.is_alive() and ui.library_window.profile=='global'
                     current=ui.library_window
-                    current.session.hold=True;current.reload()
+                    current.render(copy.deepcopy(current.session.data['route']),current.session.data['map'])
+                    current.locate(False);pump(root,lambda:current.capture is not None and not current.busy)
                     destroyed=threading.Event()
                     root.bind('<Destroy>',lambda e: destroyed.set() if e.widget is root else None,add='+')
                     ui._close()
                     assert not destroyed.is_set() and current.worker.is_alive()
                     pump(root,destroyed.is_set)
                     current.worker.join(2);assert not current.worker.is_alive()
-                    checks.append(dict(region_switch_waits_original_worker=True, rejected_switch_keeps_draft=True, parent_close_waits_worker=True))
+                    checks.append(dict(region_switch_waits_original_worker=True, rejected_switch_keeps_draft=True, parent_close_during_capture_waits_worker=True))
                     continue
                 ui._close()
         defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1])

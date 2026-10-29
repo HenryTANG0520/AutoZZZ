@@ -129,6 +129,21 @@ def main():
                     assert not window.closed and window.worker.is_alive()
                     pump(root,lambda:window.closed)
                     window.worker.join(1)
+                    route_debug=dict(key='former_employee_community_1',revision='saved-route-revision',start_index=1)
+                    window=ExecutionWindow(ui,'world_patrol','路线调试','global',route_debug=route_debug)
+                    ui.execution_window=window
+                    pump(root,lambda:window.connected and not window.loading_account)
+                    assert not window.auto_launch.get()
+                    window.session.state.update(state='prepared',busy=False,prepared_app='world_patrol',uses_charge=False)
+                    window.prepare_button.invoke();pump(root,lambda:window.prepared)
+                    assert window.session.commands[-1][1]['route_debug']==route_debug
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update();layout(window.window);cases.append([scale,size,'route-debug'])
+                    window.start_button.invoke();pump(root,lambda:window.busy)
+                    assert window.session.commands[-1][1]['budget'] is None
+                    window.stop();pump(root,lambda:not window.busy)
+                    window.close();pump(root,lambda:window.closed);window.worker.join(1)
                     # 国际服增加了时区选择，收拢时限说明后也必须在最小窗口完整显示。
                     window=ExecutionWindow(ui,'charge_plan','体力刷本','global')
                     ui.execution_window=window

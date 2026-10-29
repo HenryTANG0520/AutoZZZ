@@ -13,8 +13,9 @@ from .onedragon_session import RuntimeSession
 
 
 class ExecutionWindow:
-    def __init__(self,ui,app_id,app_name,profile):
+    def __init__(self,ui,app_id,app_name,profile,route_debug=None):
         self.ui,self.app_id,self.profile=ui,app_id,profile
+        self.route_debug=route_debug
         self.closed=self.closing=self.busy=self.prepared=self.connected=False
         self.paused=False
         self.bootstrapping=False
@@ -56,6 +57,9 @@ class ExecutionWindow:
         ttk.Label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
         self.account_badge=ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel")
         self.account_badge.grid(row=0,column=1,sticky="e")
+        if route_debug is not None:
+            theme.wrapped_label(header,text=f"{route_debug['key']} · 已完成 {route_debug['start_index']} 个移动点" if route_debug['start_index'] else f"{route_debug['key']} · 从起点传送",style="Hint.TLabel").grid(row=1,column=0,columnspan=2,sticky="ew",pady=(d(8),0))
+            self.auto_launch.set(False)
         settings=ttk.Frame(self.window,padding=(d(18),0,d(18),d(12)))
         settings.grid(row=1,column=0,sticky="ew")
         settings.columnconfigure(1,weight=1)
@@ -214,7 +218,8 @@ class ExecutionWindow:
         self.prepared=False
         self.resource_accepted.set(False)
         self.status.set("正在准备运行环境")
-        self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get(),instance_idx=self.instance_idx,instance_name=self.account_name)
+        extra={"route_debug":self.route_debug} if self.route_debug is not None else {}
+        self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get(),instance_idx=self.instance_idx,instance_name=self.account_name,**extra)
         self.update_buttons()
 
     def start(self):
@@ -392,11 +397,11 @@ class ExecutionWindow:
         return True
 
 
-def open_execution(ui,app_id,app_name,profile):
+def open_execution(ui,app_id,app_name,profile,route_debug=None):
     existing=getattr(ui,"execution_window",None)
     if existing is not None and not existing.closed:
         existing.window.deiconify()
         existing.window.lift()
         return existing
-    ui.execution_window=ExecutionWindow(ui,app_id,app_name,profile)
+    ui.execution_window=ExecutionWindow(ui,app_id,app_name,profile,route_debug=route_debug) if route_debug is not None else ExecutionWindow(ui,app_id,app_name,profile)
     return ui.execution_window

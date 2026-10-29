@@ -35,6 +35,7 @@ class OneDragonService:
         self._execution: Any = None
         self._environment_changed = False
         self._binding = None
+        self._route_capture = None
 
     @property
     def ctx(self) -> Any:
@@ -133,6 +134,32 @@ class OneDragonService:
     def library_catalog(self):
         from .onedragon_library import LibraryStore
         return LibraryStore(self).catalog()
+
+    def route_locate(self, area_id: str, anchor: list, image: str):
+        self._assert_idle()
+        from .onedragon_route_recorder import decode_client_image, locate_position, route_map
+        from .run_lock import profile_lock
+        frame = decode_client_image(image)
+        large_map, point = route_map(self, area_id, anchor)
+        with profile_lock(self.data): return locate_position(self.ctx, large_map, point, frame)
+
+    def route_capture_start(self, area_id: str, anchor: list, game_path: str):
+        self._assert_idle()
+        from .onedragon_route_recorder import RouteCaptureJob
+        if self._route_capture is None: self._route_capture = RouteCaptureJob(self)
+        return self._route_capture.start(area_id, anchor, game_path)
+
+    def route_capture_status(self, job_id: str):
+        if self._route_capture is None: raise ValueError("截图任务尚未开始。")
+        return self._route_capture.status(job_id)
+
+    def route_capture_cancel(self, job_id: str):
+        if self._route_capture is None: raise ValueError("截图任务尚未开始。")
+        return self._route_capture.cancel(job_id)
+
+    def route_capture_pause(self, job_id: str, paused: bool):
+        if self._route_capture is None: raise ValueError("截图任务尚未开始。")
+        return self._route_capture.pause(job_id, paused)
 
     def library_read(self, kind: str, key: str):
         from .onedragon_library import LibraryStore
@@ -332,6 +359,8 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if self._route_capture is not None and self._route_capture.busy:
+            raise RuntimeError("路线截图仍在处理，请等待或取消原任务。")
         if self._binding is not None and self._binding.busy:
             raise RuntimeError("QQ 绑定仍在处理中，请等待原连接退出。")
         if self._execution is not None and self._execution.busy:
@@ -354,10 +383,27 @@ class OneDragonService:
             return dict(state="idle", busy=False, ready=False, job_id="", error="")
         return self._execution.status()
 
-    def prepare_application(self,app_id:str) -> dict:
+    def prepare_application(self,app_id:str,route_debug:dict|None=None) -> dict:
         self._assert_idle()
         if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        if route_debug is not None:
+            if app_id != "world_patrol" or not isinstance(route_debug, dict) or set(route_debug) != {"key", "revision", "start_index"}:
+                raise ValueError("路线调试参数无效。")
+            from .onedragon_library import LibraryStore
+            from .run_lock import profile_lock
+            store = LibraryStore(self)
+            with profile_lock(self.data):
+                document = store._document("world_patrol_route", route_debug["key"])
+                if route_debug["revision"] != document["revision"]: raise ValueError("路线已变化，请重新读取后调试。")
+                data, _, _ = store._validate("world_patrol_route", document["key"], document["data"])
+                index = route_debug["start_index"]
+                if type(index) is not int or not 0 <= index < len(data["op_list"]): raise ValueError("开始下标须为 0 到移动点数量减 1。")
+                descriptor = dict(route_debug, data=data, name=document["name"])
+                # 首次读取补齐安全默认值，先完成这个已知初始化，再固定准备快照。
+                self.ctx.push_service.reload_config()
+                digest = self._execution.configuration_digest()
+            return self._execution.prepare_route_debug(descriptor, digest)
         return self._execution.prepare_application(app_id)
 
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
@@ -410,6 +456,7 @@ class OneDragonService:
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
+        if self._route_capture is not None: self._route_capture.close()
         if self._binding is not None:
             self._binding.close()
         if self._execution is not None:
@@ -444,3 +491,4 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
 METHODS.update({"notification_channels", "notification_channel", "notification_channel_save", "notification_test"})
 METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
+METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})

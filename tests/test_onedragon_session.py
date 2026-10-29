@@ -53,6 +53,25 @@ class Client:
 
 
 class SessionTests(unittest.TestCase):
+    def test_route_debug_metadata_is_prepared_once_and_kept_in_report(self):
+        Client.instances=[]
+        events=queue.Queue()
+        descriptor=dict(key='saved_route_1',revision='version',start_index=1)
+        with tempfile.TemporaryDirectory() as folder,patch('autozzz.onedragon_session.OneDragonClient',Client):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                session.send('prepare',app_id='world_patrol',server='global',game_path='fixture.exe',region='asia',route_debug=descriptor)
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='prepared')
+                prepares=[params for method,params in Client.instances[0].calls if method=='prepare_application']
+                self.assertEqual(prepares,[dict(app_id='world_patrol',route_debug=descriptor)])
+                session.send('start',app_id='world_patrol',budget=None,timeout_seconds=30)
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='running')
+                saved=json.loads((session.report_dir/'report.json').read_text(encoding='utf-8'))
+                self.assertEqual(saved['connection']['route_debug'],descriptor)
+                self.assertEqual(len(Client.instances),1)
+            finally:session.close();session.worker.join(5)
+            self.assertFalse(session.worker.is_alive())
+
     def test_explicit_reprepare_closes_old_process_before_new_initialization(self):
         Client.instances=[]
         observations=[]

@@ -141,7 +141,8 @@ class RuntimeSession:
         if self.job_id and state["job_id"]!=self.job_id:raise RuntimeError("任务编号发生变化，请停止并检查原任务。")
         if not state["busy"]:
             if self.phase=="initializing" and state["state"]=="ready":
-                result=self._call(client,"prepare_application",app_id=self.parameters["app_id"])
+                extra = {"route_debug": self.parameters["route_debug"]} if self.parameters.get("route_debug") is not None else {}
+                result=self._call(client,"prepare_application",app_id=self.parameters["app_id"],**extra)
                 self.phase="preparing"
                 self.job_id=result["job_id"]
                 self.emit(dict(type="phase",phase="正在准备策略和模型"))

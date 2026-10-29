@@ -50,6 +50,7 @@ class OneDragonExecution:
         self.resource_control = None
         self.hunt_control = None
         self.prepared_app = self.prepared_hash = ""
+        self.route_debug = None
         self.prepared_applications=[]
         self.prepared_requirements={}
         self.preparation_step=""
@@ -130,6 +131,7 @@ class OneDragonExecution:
             raise ValueError("客户端与游戏服务器不匹配。")
         if instance_idx is not None and type(instance_idx) is not int:raise ValueError("账号配置编号无效。")
         def initialize():
+            self.route_debug = None
             self.prepared_app=self.prepared_hash=""
             self.prepared_requirements={}
             self.preparation_step=""
@@ -166,16 +168,52 @@ class OneDragonExecution:
 
     def configuration_digest(self) -> str:
         digest=hashlib.sha256()
-        for path in sorted((self.data/"config").rglob("*.yml")):
+        paths = list((self.data/"config").rglob("*.yml"))
+        maps = self.data/"assets/game_data/world_patrol"
+        paths.extend(path for path in maps.rglob("*") if path.is_file() and path.suffix in (".png", ".yml"))
+        for path in sorted(paths):
             digest.update(str(path.relative_to(self.data)).encode("utf-8"))
             digest.update(path.read_bytes())
         return digest.hexdigest()
+
+    def prepare_route_debug(self, descriptor: dict, expected_digest: str) -> dict:
+        if not self.ctx.ready_for_application: raise RuntimeError("请先初始化运行环境。")
+        def prepare():
+            self.ctx.push_service.reset_results()
+            self.route_debug = None
+            self.prepared_app = self.prepared_hash = ""
+            self.prepared_requirements = {}; self.prepared_applications = []
+            self.uses_charge = False
+            self.charge_control = self.group_control = self.hunt_control = self.resource_control = None
+            self.resource_confirmation.prepare([], "")
+            self.backend._refresh_runtime_config()
+            account = self.ctx.game_account_config
+            if self.connection != (self.ctx.current_instance_idx, account.game_path, account.game_region, account.game_language):
+                raise ValueError("游戏登录设置已变化，请重新准备运行环境。")
+            if expected_digest != self.configuration_digest(): raise ValueError("路线或配置已变化，请重新读取后调试。")
+            self.ctx.on_switch_instance()
+            self.ctx.world_patrol_service.load_data()
+            from .onedragon_requirements import ApplicationRequirements
+            requirements = ApplicationRequirements(self.ctx, self.data, None)
+            requirements.collect([])
+            config = self.ctx.run_context.get_config("world_patrol", self.ctx.current_instance_idx, "one_dragon")
+            requirements.policy(config.auto_battle)
+            requirements.routes = [descriptor["key"]]
+            requirements.load(self.cancelled.is_set, lambda label: setattr(self, "preparation_step", label))
+            if expected_digest != self.configuration_digest(): raise ValueError("准备期间资料已变化，请重新准备。")
+            self.prepared_requirements = dict(requirements.summary(), route_debug={key: descriptor[key] for key in ("key", "name", "start_index")})
+            self.prepared_hash = expected_digest
+            self.resource_confirmation.prepare([], expected_digest)
+            self.route_debug = descriptor
+            self.prepared_app, self.state = "world_patrol", "prepared"
+        return self._submit("preparing", prepare)
 
     def prepare_application(self,app_id:str) -> dict:
         if not self.ctx.ready_for_application:raise RuntimeError("请先初始化运行环境。")
         from .onedragon_runtime import EXECUTABLE_APPLICATIONS
         if app_id not in EXECUTABLE_APPLICATIONS:raise ValueError("该应用的执行适配尚未完成。")
         def prepare():
+            self.route_debug = None
             self.ctx.push_service.reset_results()
             self.prepared_app=self.prepared_hash=""
             self.prepared_requirements={}
@@ -266,7 +304,19 @@ class OneDragonExecution:
                         self.hunt_control=NotoriousHuntControl(self.ctx,self.control)
                         self.hunt_control.install()
                     self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
-                    self._run_bound_app(app_id)
+                    factory = None
+                    if self.route_debug is not None:
+                        from zzz_od.application.world_patrol.operation.world_patrol_run_route import WorldPatrolRunRoute
+                        from zzz_od.application.world_patrol.world_patrol_route import WorldPatrolRoute
+                        descriptor = self.route_debug
+                        area = next(area for area in self.ctx.world_patrol_service.area_list if area.full_id == descriptor["data"]["tp_area_id"])
+                        route = WorldPatrolRoute.from_dict(descriptor["data"], area)
+                        def factory(ctx):
+                            config = ctx.run_context.get_config("world_patrol", ctx.current_instance_idx, "one_dragon")
+                            ctx.auto_battle_context.init_auto_op(config.auto_battle)
+                            return WorldPatrolRunRoute(ctx, route, start_idx=descriptor["start_index"])
+                    if factory is None: self._run_bound_app(app_id)
+                    else: self._run_bound_app(app_id, factory)
                 finally:
                     if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
@@ -274,7 +324,7 @@ class OneDragonExecution:
                     if self.resource_control is not None:self.resource_control.close()
         return self._submit("running", run)
 
-    def _run_bound_app(self,app_id:str) -> None:
+    def _run_bound_app(self,app_id:str,op_factory=None) -> None:
         self.ctx.push_service.reset_results()
         self.ctx.controller.bind(self.ctx.game_account_config.game_path)
         self.control.reset()
@@ -290,7 +340,8 @@ class OneDragonExecution:
             if self.cancelled.is_set() or self.control.stopped:
                 self.state="stopped"
                 return
-            ok,future=self.backend._start_app("autozzz",app_id,"one_dragon")
+            if op_factory is None: ok,future=self.backend._start_app("autozzz",app_id,"one_dragon")
+            else: ok,future=self.backend.run_slot._start("autozzz",op_factory=op_factory,instance_idx=self.ctx.current_instance_idx,display_name="路线调试")
             if not ok or future is None:raise RuntimeError("一条龙拒绝并发运行。")
             future.result()
             status=self.backend.query_status()

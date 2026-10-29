@@ -6,6 +6,7 @@ import copy
 import io
 from pathlib import Path
 import queue
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -110,13 +111,14 @@ class CoordinateDialog:
 
 
 class RouteEditor:
-    def __init__(self, parent, document, preview, changed, scale):
+    def __init__(self, parent, document, preview, changed, scale, locate=None, debug=None):
         from PIL import Image
         self.changed, self.preview, self.scale = changed, preview, scale
         self.rows = copy.deepcopy(document["data"]["op_list"])
         self.data = copy.deepcopy(document["data"])
         self.enabled, self.zoom, self.photo, self.dialog = True, 1., None, None
         self.traces = []
+        self.candidate = None
         self.image = Image.open(io.BytesIO(base64.b64decode(preview["png"], validate=True))).convert("RGB")
         self.frame = ttk.Frame(parent); self.frame.columnconfigure(0, weight=1)
         self.frame.bind("<Destroy>", self.disposed, add="+")
@@ -130,7 +132,7 @@ class RouteEditor:
         tools = ttk.Frame(self.frame); tools.grid(row=1, column=0, sticky="ew", pady=(0, d(6)))
         ttk.Label(tools, text=f"{preview['width']} × {preview['height']} 像素", style="Hint.TLabel").pack(side="left")
         ttk.Button(tools, text="适应地图", command=self.fit).pack(side="right")
-        map_frame = ttk.Frame(self.frame); map_frame.grid(row=2, column=0, sticky="ew"); map_frame.columnconfigure(0, weight=1)
+        map_frame = ttk.Frame(self.frame); map_frame.grid(row=4, column=0, sticky="ew"); map_frame.columnconfigure(0, weight=1)
         self.canvas = tk.Canvas(map_frame, height=d(270), background="#141a1b", highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky="ew")
         horizontal = ttk.Scrollbar(map_frame, orient="horizontal", command=self.canvas.xview); horizontal.grid(row=1, column=0, sticky="ew")
@@ -141,8 +143,8 @@ class RouteEditor:
         self.canvas.bind("<MouseWheel>", self.wheel)
         self.canvas.bind("<ButtonPress-3>", lambda e: self.canvas.scan_mark(e.x, e.y))
         self.canvas.bind("<B3-Motion>", lambda e: self.canvas.scan_dragto(e.x, e.y, gain=1))
-        theme.wrapped_label(self.frame, text="点击地图添加移动点 · 滚轮缩放 · 右键拖动", style="Hint.TLabel").grid(row=3, column=0, sticky="ew", pady=(d(6), d(12)))
-        table_frame = ttk.Frame(self.frame); table_frame.grid(row=4, column=0, sticky="ew"); table_frame.columnconfigure(0, weight=1)
+        theme.wrapped_label(self.frame, text="点击地图添加移动点 · 滚轮缩放 · 右键拖动", style="Hint.TLabel").grid(row=5, column=0, sticky="ew", pady=(d(6), d(12)))
+        table_frame = ttk.Frame(self.frame); table_frame.grid(row=6, column=0, sticky="ew"); table_frame.columnconfigure(0, weight=1)
         self.table = ttk.Treeview(table_frame, columns=("step", "x", "y"), show="headings", height=5, selectmode="browse", style="Config.Treeview")
         for key, label in (("step", "移动点"), ("x", "X"), ("y", "Y")):
             self.table.heading(key, text=label); self.table.column(key, width=d(90), minwidth=d(45))
@@ -150,11 +152,20 @@ class RouteEditor:
         scroll = ttk.Scrollbar(table_frame, command=self.table.yview); scroll.grid(row=0, column=1, sticky="ns"); self.table.configure(yscrollcommand=scroll.set)
         self.table.bind("<<TreeviewSelect>>", lambda _: self.draw())
         self.table.bind("<Double-1>", lambda _: self.edit())
-        buttons = ttk.Frame(self.frame); buttons.grid(row=5, column=0, sticky="w", pady=(d(8), 0))
+        buttons = ttk.Frame(self.frame); buttons.grid(row=7, column=0, sticky="w", pady=(d(8), 0))
         self.buttons = {}
         for name, command in (("添加坐标…", lambda: self.edit(True)), ("编辑…", self.edit), ("上移", lambda: self.move(-1)), ("下移", lambda: self.move(1)), ("移除", self.remove)):
             button = ttk.Button(buttons, text=name, command=command); button.pack(side="left", padx=(0, d(6))); self.buttons[name] = button
+        record = ttk.Frame(self.frame); record.grid(row=2, column=0, sticky="w", pady=(d(6),0))
+        if locate is not None:
+            for name, command in (("从游戏识别", lambda: locate(False)), ("从截图识别…", lambda: locate(True)), ("追加到路线", self.adopt)):
+                button=ttk.Button(record,text=name,command=command); button.pack(side="left",padx=(0,d(6)));self.buttons[name]=button
+        if debug is not None:
+            button=ttk.Button(record,text="调试路线…",command=debug);button.pack(side="left");self.buttons["调试路线…"]=button
+        self.candidate_text = tk.StringVar(self.frame)
+        theme.wrapped_label(self.frame,textvariable=self.candidate_text,style="Hint.TLabel").grid(row=3,column=0,sticky="ew",pady=(d(7),d(10)))
         self.refresh()
+        self.set_candidate(None)
 
     def selected(self):
         values = self.table.selection()
@@ -191,6 +202,29 @@ class RouteEditor:
         if len(points) > 1: self.canvas.create_line(*[v for point in points for v in point], fill="#58d8a7", width=2, tags="route")
         self.canvas.tag_lower("route")
         if self.canvas.find_withtag("route"): self.canvas.tag_raise("route", "map")
+        if self.candidate is not None:
+            x,y=[12+v*self.ratio for v in self.candidate["position"]]
+            self.canvas.create_oval(x-8,y-8,x+8,y+8,outline="#ffb454",width=3)
+            self.canvas.create_text(x+10,y+10,anchor="nw",text="候选",fill="#ffb454")
+
+    def anchor(self):
+        from .onedragon_library_rules import coordinate
+        if self.rows: point=self.rows[-1]["data"]
+        else:
+            name=self.teleport.get()
+            point=next(row["tp_pos"] for row in self.preview["icons"] if row["icon_name"]==name)
+        return [coordinate(value,self.preview[key]) for value,key in zip(point,("width","height"))]
+
+    def set_candidate(self,result):
+        self.candidate=copy.deepcopy(result) if result and result.get("found") else None
+        if "追加到路线" in self.buttons:self.buttons["追加到路线"].state(["!disabled"] if self.candidate else ["disabled"])
+        self.candidate_text.set(f"候选坐标 {self.candidate['position'][0]}, {self.candidate['position'][1]} · 匹配值 {self.candidate['match_value']}" if self.candidate else "")
+        self.draw()
+
+    def adopt(self):
+        if not self.enabled or self.candidate is None:return
+        self.rows.append(dict(op_type="move",data=list(map(str,self.candidate["position"]))))
+        self.set_candidate(None);self.refresh(len(self.rows)-1);self.changed()
 
     def fit(self): self.zoom=1.; self.draw(); self.canvas.xview_moveto(0); self.canvas.yview_moveto(0)
 
@@ -234,6 +268,7 @@ class RouteEditor:
         self.traces.clear()
         self.teleport.variable = None
         self.photo = self.image = self.changed = None
+        self.candidate_text=None
 
 
 class GroupEditor:
@@ -311,6 +346,7 @@ class LibraryWindow:
         self.busy = self.connected = self.closed = self.closing = self.dirty = False
         self.document, self.editor, self.callback, self.dialog = None, None, None, None
         self.catalog, self.frozen, self.events = dict(items=[], archives=[], areas=[]), [], queue.Queue()
+        self.capture=None;self.capture_cancel=False;self.capture_pause=None;self.next_capture_poll=0.
         self.window = tk.Toplevel(ui.root); self.window.title("AutoZZZ · 方案与路线"); self.window.transient(ui.root)
         self.window.configure(background=theme.PANEL)
         d = lambda n: round(n * ui.ui_scale)
@@ -353,6 +389,9 @@ class LibraryWindow:
         self.save_button = ttk.Button(footer, text="保存资料", command=self.save); self.save_button.grid(row=0, column=1)
         self.reload_button = ttk.Button(footer, text="重新读取", command=self.reload); self.reload_button.grid(row=0, column=2, padx=d(8))
         self.close_button = ttk.Button(footer, text="关闭", command=self.close); self.close_button.grid(row=0, column=3)
+        self.capture_actions=ttk.Frame(footer);self.capture_actions.grid(row=1,column=0,columnspan=4,sticky="e",pady=(d(10),0))
+        self.capture_pause_button=ttk.Button(self.capture_actions,text="暂停截图",command=self.pause_capture);self.capture_pause_button.pack(side="left",padx=(0,d(8)))
+        self.capture_cancel_button=ttk.Button(self.capture_actions,text="取消截图",command=self.cancel_capture);self.capture_cancel_button.pack(side="left")
         self.controls = [self.menu_button, self.selector, self.area_selector, self.table, self.save_button, self.reload_button]
         self.session = RuntimeSession(RuntimePaths.discover(ROOT, profile), self.events.put)
         self.worker = self.session.worker
@@ -360,7 +399,12 @@ class LibraryWindow:
         self.poll_token = self.window.after(80, self.poll); self.buttons()
 
     def buttons(self):
-        allowed = self.connected and not self.busy and not self.closing
+        allowed = self.connected and not self.busy and not self.closing and self.capture is None
+        if self.capture is None:self.capture_actions.grid_remove()
+        else:
+            self.capture_actions.grid()
+            self.capture_pause_button.configure(text="继续截图" if self.capture.get("control",{}).get("manual_paused") else "暂停截图")
+            for widget in (self.capture_pause_button,self.capture_cancel_button):widget.state(["disabled"] if self.closing or self.capture_cancel else ["!disabled"])
         for widget in self.controls: widget.state(["!disabled"] if allowed else ["disabled"])
         self.save_button.state(["!disabled"] if allowed and self.document is not None and self.dirty else ["disabled"])
         self.reload_button.state(["!disabled"] if allowed and self.document is not None else ["disabled"])
@@ -383,6 +427,12 @@ class LibraryWindow:
     def request(self, method, callback, **params):
         if self.busy or self.closing or not self.connected: return
         self.busy, self.callback = True, callback
+        self.freeze()
+        self.status.set("正在处理资料…")
+        self.session.send("rpc", method=method, tag=method, params=params); self.buttons()
+
+    def freeze(self):
+        if self.frozen:return
         def freeze(widget):
             if isinstance(widget, (ttk.Entry, ttk.Combobox, ttk.Button, ttk.Checkbutton)):
                 self.frozen.append((widget, widget.state())); widget.state(["disabled"])
@@ -390,8 +440,6 @@ class LibraryWindow:
             for child in widget.winfo_children(): freeze(child)
         freeze(self.content)
         if isinstance(self.editor, (RouteEditor, GroupEditor)): self.editor.enabled = False
-        self.status.set("正在处理资料…")
-        self.session.send("rpc", method=method, tag=method, params=params); self.buttons()
 
     def thaw(self):
         for widget, state in self.frozen:
@@ -429,12 +477,12 @@ class LibraryWindow:
     def change_kind(self, _event=None):
         chosen = KINDS[self.kind_var.get()]
         if chosen == self.kind: return
-        if self.busy or not self.allow_leave():
+        if self.busy or self.capture is not None or not self.allow_leave():
             self.kind_var.set(next(k for k, v in KINDS.items() if v == self.kind)); return
         self.kind = chosen; self.clear(); self.document = None; self.refresh_nav()
 
     def change_area(self, _event=None):
-        if self.busy or not self.allow_leave():
+        if self.busy or self.capture is not None or not self.allow_leave():
             if self.document is not None:
                 area = self.document["data"].get("tp_area_id")
                 row = next((r for r in self.catalog["areas"] if r["id"] == area), None)
@@ -444,6 +492,10 @@ class LibraryWindow:
 
     def select(self, _event=None):
         selected = self.table.selection()
+        if self.capture is not None:
+            if self.document is not None and selected != (self.document["key"],) and self.table.exists(self.document["key"]):
+                self.table.selection_set(self.document["key"])
+            return
         if self.busy or not selected: return
         if self.document is not None and selected[0] == self.document["key"] and self.document["kind"] == self.kind: return
         if not self.allow_leave():
@@ -474,7 +526,7 @@ class LibraryWindow:
         author = document["data"].get("author")
         if author: metadata += " · 作者：" + ("、".join(map(str, author)) if isinstance(author, list) else str(author))
         self.info.set(metadata)
-        if document["kind"] == "world_patrol_route": self.editor = RouteEditor(self.content, document, preview, self.changed, self.ui.ui_scale)
+        if document["kind"] == "world_patrol_route": self.editor = RouteEditor(self.content, document, preview, self.changed, self.ui.ui_scale, self.locate, self.debug)
         elif document["kind"] == "world_patrol_route_list": self.editor = GroupEditor(self.content, document, self.catalog, self.changed, self.ui.ui_scale)
         else: self.editor = ScalarForm(self.content, document["fields"], self.changed, self.ui.ui_scale)
         self.editor.frame.grid(row=0, column=0, sticky="ew")
@@ -589,6 +641,59 @@ class LibraryWindow:
         if not self.busy and not self.closing and self.catalog.get("issues"):
             self.dialog = DiagnosticsDialog(self.window, self.catalog["issues"], self.ui.ui_scale)
 
+    def locate(self, from_file=False):
+        if self.busy or self.capture is not None or not isinstance(self.editor,RouteEditor):return
+        self.editor.set_candidate(None)
+        try: anchor=self.editor.anchor()
+        except (ValueError,StopIteration,KeyError,TypeError) as exc:self.status.set("请先修正路线起点："+str(exc));return
+        params=dict(area_id=self.document["data"]["tp_area_id"],anchor=anchor)
+        if from_file:
+            path=filedialog.askopenfilename(parent=self.window,filetypes=[("客户区截图","*.png *.jpg *.jpeg")])
+            if not path:return
+            try:
+                from .onedragon_route_recorder import encode_client_image
+                params["image"]=encode_client_image(path)
+            except Exception as exc:self.status.set(str(exc));return
+            self.request("route_locate",self.position_result,**params)
+        else:
+            from .config import GAME_PATHS
+            params["game_path"]=self.ui.game_path.get() if self.ui.server.get()==("国服" if self.profile=="cn" else "国际服") else GAME_PATHS[self.profile]
+            self.capture_cancel=False;self.capture_pause=None
+            self.request("route_capture_start",self.capture_result,**params)
+
+    def position_result(self,result):
+        if isinstance(self.editor,RouteEditor):self.editor.set_candidate(result)
+        self.status.set("已识别候选位置" if result.get("found") else "未能匹配位置，请核实所选地图和起点。")
+
+    def capture_result(self,result):
+        if result["busy"]:
+            self.capture=result;self.freeze();self.next_capture_poll=time.monotonic()+.15
+            self.status.set("正在取消截图…" if self.capture_cancel else {"focus_wait":"等待游戏恢复焦点 · F9 暂停 / F10 停止","paused":"截图已暂停 · F9 继续","success":"等待截图器退出…"}.get(result["state"],"正在识别位置 · F9 暂停 / F10 停止"))
+        else:
+            self.capture=None;self.capture_cancel=False;self.capture_pause=None;self.thaw()
+            if result["state"]=="success" and result.get("result") is not None:self.position_result(result["result"])
+            else:self.status.set(result.get("error") or "截图已取消")
+        self.buttons()
+
+    def pause_capture(self):
+        if self.capture is not None:
+            self.capture_pause=not self.capture.get("control",{}).get("manual_paused",False);self.next_capture_poll=0.
+
+    def cancel_capture(self):
+        if self.capture is not None:self.capture_cancel=True;self.next_capture_poll=0.;self.buttons()
+
+    def debug(self):
+        if self.busy or self.capture is not None or self.document is None:return
+        if self.dirty or self.document.get("draft"):self.status.set("请先保存路线，再打开调试。");return
+        count=len(self.document["data"]["op_list"])
+        if not count:self.status.set("请先添加移动点。");return
+        existing=getattr(self.ui,"execution_window",None)
+        if existing is not None and not existing.closed:self.status.set("请先关闭当前运行窗口，再打开路线调试。");return
+        index=simpledialog.askinteger("路线调试","已完成的移动点数（0 从起点传送；大于 0 须已在对应点位附近）",initialvalue=0,minvalue=0,maxvalue=count-1,parent=self.window)
+        if index is None:return
+        from .onedragon_run_ui import open_execution
+        open_execution(self.ui,"world_patrol","路线调试",self.profile,route_debug=dict(key=self.document["key"],revision=self.document["revision"],start_index=index))
+
     def restore_draft(self, document):
         self.kind = document["kind"]; self.kind_var.set(next(k for k, v in KINDS.items() if v == self.kind)); self.display(document)
 
@@ -599,15 +704,25 @@ class LibraryWindow:
                 event = self.events.get_nowait()
                 if event["type"] == "connected": self.connected=True; self.request("library_catalog", self.loaded)
                 elif event["type"] == "rpc_result":
-                    self.busy=False; self.thaw()
+                    self.busy=False
+                    if self.capture is None:self.thaw()
                     callback, self.callback = self.callback, None
                     if not self.closing and callback:
                         try: callback(event["result"])
                         except Exception as exc: self.status.set("资料显示失败：" + str(exc))
-                elif event["type"] == "error": self.busy=False; self.thaw(); self.callback=None; self.status.set(event["message"])
+                elif event["type"] == "error":
+                    self.busy=False
+                    if self.capture is None:self.thaw()
+                    self.callback=None; self.status.set(event["message"])
                 elif event["type"] == "closed": self.closed=True; self.window.destroy(); return
                 self.buttons()
         except queue.Empty: pass
+        if self.capture is not None and not self.busy and not self.closing and time.monotonic()>=self.next_capture_poll:
+            method="route_capture_cancel" if self.capture_cancel else "route_capture_pause" if self.capture_pause is not None else "route_capture_status"
+            params=dict(job_id=self.capture["job_id"])
+            if method=="route_capture_pause":params["paused"]=self.capture_pause;self.capture_pause=None
+            self.next_capture_poll=time.monotonic()+.3
+            self.request(method,self.capture_result,**params)
         # 地图读取保持同一请求；完成后才刷新目录，避免覆盖 display 的回调。
         pending = getattr(self, "after_map_saved", None)
         if pending is not None and not self.busy and not self.closing:
