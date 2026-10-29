@@ -479,11 +479,11 @@ class OneDragonService:
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.prepare_login(mode)
 
-    def start_login(self,mode:str,timeout_seconds:int=600) -> dict:
+    def start_login(self,mode:str,timeout_seconds:int=600,auto_launch:bool=False) -> dict:
         self._assert_idle()
         if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
-        return self._execution.start_login(mode,timeout_seconds)
+        return self._execution.start_login(mode,timeout_seconds,auto_launch=auto_launch)
 
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
         self._assert_idle()

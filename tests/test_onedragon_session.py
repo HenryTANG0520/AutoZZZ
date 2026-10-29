@@ -53,6 +53,35 @@ class Client:
 
 
 class SessionTests(unittest.TestCase):
+    def test_login_uses_login_operations_and_never_legacy_enter_or_application_budget(self):
+        class LoginClient(Client):
+            def submit(self,method,**params):
+                if method=='prepare_login':self.state,self.job='prepared','login-prep'
+                elif method=='start_login':self.state,self.job='running','login-run'
+                return super().submit(method,**params)
+        Client.instances=[];events=queue.Queue()
+        with tempfile.TemporaryDirectory() as folder,patch('autozzz.onedragon_session.OneDragonClient',LoginClient),patch('autozzz.app.Runner',side_effect=AssertionError('legacy entry must not run')):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                session.send('prepare',app_id='_login',server='global',game_path='fixture.exe',region='asia',login_mode='forced_enter')
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='prepared')
+                session.send('start',app_id='_login',budget=None,auto_launch=True,timeout_seconds=30)
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='running')
+                session.pause(True)
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='running')
+                session.stop()
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='stopped')
+            finally:session.close();session.worker.join(5)
+            calls=Client.instances[0].calls
+            self.assertEqual([params for name,params in calls if name=='prepare_login'],[dict(mode='forced_enter')])
+            self.assertEqual([params for name,params in calls if name=='start_login'],[dict(mode='forced_enter',auto_launch=True,timeout_seconds=30)])
+            self.assertFalse(any(name in ('prepare_application','start_application') for name,_ in calls))
+            self.assertEqual(len(Client.instances),1)
+            report=json.loads(next(Path(folder).rglob('report.json')).read_text(encoding='utf-8'))
+            self.assertEqual(report['app_id'],'_login');self.assertEqual(report['status'],'stopped')
+            self.assertEqual(report['connection']['login_mode'],'forced_enter')
+            self.assertFalse(report['game_input_verified'])
+
     def test_route_debug_metadata_is_prepared_once_and_kept_in_report(self):
         Client.instances=[]
         events=queue.Queue()

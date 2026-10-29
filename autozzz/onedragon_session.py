@@ -122,13 +122,17 @@ class RuntimeSession:
                 self._finish_report(dict(state="stopped",application_started=False))
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))
                 return
-            if params.pop("auto_launch",False):self._enter_game(self.parameters)
+            auto_launch=params.pop("auto_launch",False)
+            login=params.get("app_id")=="_login"
+            if auto_launch and not login:self._enter_game(self.parameters)
             if self.stop_requested.is_set() or self.closing.is_set():
                 self._finish_report(dict(state="stopped",application_started=False))
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))
                 return
             self.emit(dict(type="phase",phase="正在运行",minimize=True,bootstrapping=False))
-            result=self._call(client,"start_application",**params)
+            result=(self._call(client,"start_login",mode=self.parameters["login_mode"],auto_launch=auto_launch,
+                               timeout_seconds=params.get("timeout_seconds",600)) if login
+                    else self._call(client,"start_application",**params))
             self.phase="running"
             self.job_id=result["job_id"]
         elif command=="pause":
@@ -142,7 +146,8 @@ class RuntimeSession:
         if not state["busy"]:
             if self.phase=="initializing" and state["state"]=="ready":
                 extra = {"route_debug": self.parameters["route_debug"]} if self.parameters.get("route_debug") is not None else {}
-                result=self._call(client,"prepare_application",app_id=self.parameters["app_id"],**extra)
+                result=(self._call(client,"prepare_login",mode=self.parameters["login_mode"]) if self.parameters["app_id"]=="_login"
+                        else self._call(client,"prepare_application",app_id=self.parameters["app_id"],**extra))
                 self.phase="preparing"
                 self.job_id=result["job_id"]
                 self.emit(dict(type="phase",phase="正在准备策略和模型"))

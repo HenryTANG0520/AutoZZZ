@@ -167,6 +167,7 @@ class LoginControl:
 
     def install(self):
         from zzz_od.operation.enter_game.enter_game import EnterGame
+        from zzz_od.operation.enter_game.switch_account import SwitchAccount
         owner=self;initialize=EnterGame.handle_init;check=EnterGame.check_screen;wait=EnterGame.wait_loading;interact=EnterGame.check_screen_to_interact
         def init(operation):
             initialize(operation);operation._autozzz_login=None;operation._autozzz_server=None
@@ -216,6 +217,16 @@ class LoginControl:
                 owner.progress.update(phase='已进入大世界',world_verified=True,manual_wait=False)
             return result
         self._patch(EnterGame,'wait_loading',loading)
+        logout_init=SwitchAccount.handle_init;logout_confirm=SwitchAccount.more_logout_confirm
+        def switch_init(operation):
+            logout_init(operation);operation._autozzz_logout=dict(clicked=False)
+        def confirm_logout(operation):
+            state=operation._autozzz_logout
+            owner.progress.update(phase='正在退出当前游戏账号',manual_wait=False)
+            if state['clicked']:return operation.round_success('登出确认已尝试')
+            return owner._witness(operation,state,'logout',lambda:logout_confirm(operation))
+        self._patch(SwitchAccount,'handle_init',switch_init)
+        self._patch(SwitchAccount,'more_logout_confirm',confirm_logout)
 
     def status(self):return dict(self.progress)
 

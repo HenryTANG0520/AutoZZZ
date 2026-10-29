@@ -24,6 +24,10 @@ class OneDragonExecution:
         self.worker: threading.Thread | None = None
         self.state, self.error, self.job_id = "idle", "", ""
         self.cancelled = threading.Event()
+        self.manual_pause=threading.Event()
+        self._input_ready=False
+        self._f9_down=False
+        self.startup=None
         self.control = ExecutionControl(self._probe, self._release, self._pause_backend,
                                         self._resume_backend, self._stop_backend)
         self.ctx.execution_control = self.control
@@ -101,6 +105,7 @@ class OneDragonExecution:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
+            if state=="running":self.manual_pause.clear();self._input_ready=False;self._f9_down=False
             self.ctx.download_cancel.clear()
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
@@ -269,6 +274,7 @@ class OneDragonExecution:
         def prepare():
             self.ctx.push_service.reset_results()
             self.prepared_app=self.prepared_hash=self.login_mode=""
+            self.login_control.reset(mode)
             self.prepared_applications=[];self.prepared_requirements={};self.route_debug=None
             self.uses_charge=False;self.charge_control=self.group_control=self.hunt_control=self.resource_control=None
             self.resource_confirmation.prepare([],"")
@@ -289,10 +295,11 @@ class OneDragonExecution:
             self.login_mode=mode;self.prepared_hash=digest;self.prepared_app="_login";self.state="prepared"
         return self._submit("preparing",prepare)
 
-    def start_login(self,mode:str,timeout_seconds:int=600) -> dict:
+    def start_login(self,mode:str,timeout_seconds:int=600,auto_launch:bool=False) -> dict:
         if not self.ctx.ready_for_application or self.prepared_app!="_login" or mode!=self.login_mode:
             raise ValueError("请先准备所选登录方式。")
         if type(timeout_seconds)is not int or not 30<=timeout_seconds<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+        if type(auto_launch)is not bool:raise ValueError("启动游戏选项必须为布尔值。")
         def run():
             try:
                 with RunLock():
@@ -301,8 +308,26 @@ class OneDragonExecution:
                     from zzz_od.operation.enter_game.switch_account import SwitchAccount
                     self.login_control.reset(mode)
                     self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
+                    identity=None
+                    if auto_launch:
+                        from .onedragon_startup import GameStartup
+                        def elapsed(seconds):
+                            self.active_seconds+=seconds
+                            if self.active_seconds>=self.time_limit:
+                                self.time_limited=True;self.cancelled.set()
+                        def attempt(action):
+                            with self.lock:
+                                if self.cancelled.is_set() or self.manual_pause.is_set():return False
+                                action();return True
+                        self.startup=GameStartup(self.ctx.game_account_config.game_path,cancelled=self.cancelled,
+                                                paused=self.manual_pause,poll_keys=self._poll_task_keys,elapsed=elapsed,
+                                                phase=lambda text:setattr(self,"preparation_step",text),attempt=attempt)
+                        try:identity=self.startup.run(auto_launch=True)
+                        finally:self.startup=None;self.preparation_step=""
+                        if identity is None:self.state="stopped";return
                     def factory(ctx):return SwitchAccount(ctx) if mode=="switch" else EnterGame(ctx,switch=mode=="forced_enter")
-                    self._run_bound_app("one_dragon",factory,display_name="账号登录")
+                    extra={} if identity is None else dict(expected_window=identity)
+                    self._run_bound_app("one_dragon",factory,display_name="账号登录",**extra)
                     if self.state not in ("failed","stopped") and not self.login_control.status()["world_verified"]:
                         self.state="failed";self.error="登录流程未核实进入大世界。"
             finally:self.prepared_app=self.prepared_hash=self.login_mode=""
@@ -378,10 +403,17 @@ class OneDragonExecution:
                     if self.resource_control is not None:self.resource_control.close()
         return self._submit("running", run)
 
-    def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试") -> None:
+    def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试",expected_window=None) -> None:
         self.ctx.push_service.reset_results()
         self.ctx.controller.bind(self.ctx.game_account_config.game_path)
-        self.control.reset()
+        if expected_window is not None:
+            window=self.ctx.controller.game_win
+            if window.bound is None or window.bound.hwnd!=expected_window["window_handle"] or window.process_id!=expected_window["process_id"]:
+                raise RuntimeError("启动后游戏窗口身份已变化，请重新准备登录。")
+        with self.lock:
+            self.control.reset()
+            self._input_ready=True
+            self.control.set_manual_pause(self.manual_pause.is_set())
         self.battle_control.allowed=False
         watch_stop = threading.Event()
         watcher = threading.Thread(target=self._watch,args=(watch_stop,),name="AutoZZZ-OneDragon-Hotkeys",daemon=True)
@@ -408,23 +440,32 @@ class OneDragonExecution:
             watch_stop.set()
             watcher.join(timeout=2)
             self.control.stop()
+            with self.lock:self._input_ready=False
             self.preparation_step = "等待通知发送" if self.ctx.push_service.pending else ""
             try: self.ctx.push_service.flush()
             finally: self.preparation_step = ""
 
+    def _poll_task_keys(self):
+        from .windows import user32
+        if user32.GetAsyncKeyState(0x79) & 0x8000:
+            self.cancelled.set()
+            if self._input_ready:self.control.stop()
+        pressed=bool(user32.GetAsyncKeyState(0x78)&0x8000)
+        if pressed and not self._f9_down:self._set_manual_pause(not self.manual_pause.is_set())
+        self._f9_down=pressed
+
+    def _set_manual_pause(self,paused):
+        with self.lock:
+            if paused:self.manual_pause.set()
+            else:self.manual_pause.clear()
+            if self._input_ready:self.control.set_manual_pause(paused)
+
     def _watch(self, watch_stop: threading.Event) -> None:
         from .windows import user32
-        f9 = False
         previous=time.monotonic()
         while not watch_stop.is_set():
             try:
-                if user32.GetAsyncKeyState(0x79) & 0x8000:
-                    self.cancelled.set()
-                    self.control.stop()
-                pressed = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
-                if pressed and not f9:
-                    self.control.toggle_pause()
-                f9 = pressed
+                self._poll_task_keys()
                 self.control.poll()
                 self.assistant_control.poll_keys(user32.GetAsyncKeyState)
                 now=time.monotonic()
@@ -458,7 +499,7 @@ class OneDragonExecution:
             result["window_handle"]=None if bound is None else bound.hwnd
             if self.charge_control is not None:result["budget"]=self.charge_control.status()
             if self.state in ("running", "stopping"):
-                result["control"] = self.control.status()
+                result["control"] = self.control.status() if self._input_ready else dict(state="paused" if self.manual_pause.is_set() else "starting",manual_paused=self.manual_pause.is_set(),focus_waiting=False)
                 result["run"] = asdict(self.backend.query_status())
             return result
 
@@ -467,7 +508,7 @@ class OneDragonExecution:
             raise ValueError("暂停状态必须为布尔值。")
         if self.state != "running" or not self.busy:
             raise RuntimeError("当前没有正在运行的游戏任务。")
-        self.control.set_manual_pause(paused)
+        self._set_manual_pause(paused)
         return self.status()
 
     def set_assistant_mode(self,mode:int,job_id:str) -> dict:

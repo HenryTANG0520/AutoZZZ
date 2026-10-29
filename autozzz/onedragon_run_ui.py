@@ -11,9 +11,11 @@ from .config import GAME_PATHS,ROOT,Settings
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
 
+LOGIN_MODES=(("进入当前登录","enter"),("登录页：重新登录","forced_enter"),("游戏内：登出换号","switch"))
+
 
 class ExecutionWindow:
-    def __init__(self,ui,app_id,app_name,profile,route_debug=None):
+    def __init__(self,ui,app_id,app_name,profile,route_debug=None,login_mode=None):
         self.ui,self.app_id,self.profile=ui,app_id,profile
         self.route_debug=route_debug
         self.closed=self.closing=self.busy=self.prepared=self.connected=False
@@ -43,7 +45,9 @@ class ExecutionWindow:
         same_profile=ui.server.get()==("国服" if profile=="cn" else "国际服")
         self.game_path=tk.StringVar(self.window,ui.game_path.get() if same_profile else GAME_PATHS[profile])
         self.region=tk.StringVar(self.window,"cn" if profile=="cn" else "asia")
+        self.login_mode=tk.StringVar(self.window,next((label for label,value in LOGIN_MODES if value==login_mode),LOGIN_MODES[0][0])) if app_id=="_login" else None
         self.traces=[(var,var.trace_add("write",self.connection_changed)) for var in (self.game_path,self.region)]
+        if self.login_mode is not None:self.traces.append((self.login_mode,self.login_mode.trace_add("write",self.login_mode_changed)))
         self.window.bind("<Destroy>",self.disposed,add="+")
         self.auto_launch=tk.BooleanVar(self.window,app_id not in ("auto_battle","dodge_assistant","commission_assistant","operation_debug"))
         self.timeout=tk.StringVar(self.window,"600")
@@ -70,12 +74,22 @@ class ExecutionWindow:
         browse.grid(row=0,column=2,padx=(d(8),0))
         row=ttk.Frame(settings)
         row.grid(row=1,column=0,columnspan=3,sticky="ew",pady=(d(12),0))
-        launch=ttk.Checkbutton(row,text="自动进入游戏",variable=self.auto_launch,style="Config.TCheckbutton")
+        launch=ttk.Checkbutton(row,text="未运行时启动游戏" if app_id=="_login" else "自动进入游戏",variable=self.auto_launch,style="Config.TCheckbutton")
         launch.pack(side="left",padx=(0,d(18)))
         ttk.Label(row,text="时限（秒，暂停不计）").pack(side="left",padx=(0,d(8)))
         timeout=ttk.Entry(row,textvariable=self.timeout,width=7)
         timeout.pack(side="left")
         self.settings_controls=[path,browse,launch,timeout]
+        if self.login_mode is not None:
+            login_row=ttk.Frame(settings)
+            login_row.grid(row=2,column=0,columnspan=3,sticky="ew",pady=(d(12),0))
+            ttk.Label(login_row,text="登录方式").pack(side="left",padx=(0,d(14)))
+            selector=ttk.Combobox(login_row,textvariable=self.login_mode,values=[label for label,_ in LOGIN_MODES],state="readonly",width=22)
+            selector.pack(side="left")
+            self.settings_controls.append(selector)
+            self.login_hint=tk.StringVar(self.window)
+            theme.wrapped_label(settings,textvariable=self.login_hint,style="Hint.TLabel").grid(row=3,column=0,columnspan=3,sticky="ew",pady=(d(8),0))
+            self.login_mode_changed()
         if profile=="global":
             region=ttk.Combobox(row,textvariable=self.region,values=("asia","us","eu","twhkmo"),state="readonly",width=8)
             region.pack(side="right")
@@ -165,6 +179,13 @@ class ExecutionWindow:
         if hasattr(self,"resource_accepted"):self.resource_accepted.set(False)
         if hasattr(self,"prepare_button"):self.update_buttons()
 
+    def login_mode_changed(self,*_):
+        if hasattr(self,"login_hint"):
+            self.login_hint.set({"enter":"沿用游戏保存的登录状态；验证码需手动完成。",
+                                 "forced_enter":"请先返回游戏登录页；使用此账号配置中已保存的登录设置。",
+                                 "switch":"将退出游戏当前账号，并使用此账号配置中已保存的登录设置。"}[dict(LOGIN_MODES)[self.login_mode.get()]])
+        self.connection_changed()
+
     def disposed(self,event):
         if event.widget is self.window:
             if self.poll_token is not None:
@@ -183,6 +204,7 @@ class ExecutionWindow:
     def update_buttons(self):
         self.prepare_button.configure(text="重新准备" if self.last_state else "准备运行", style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
+        self.start_button.configure(text="开始登录" if self.login_mode is not None else "开始运行")
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
         confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))
         self.start_button.state(["!disabled"] if self.connected and self.prepared and confirmed and not self.busy and not self.closing else ["disabled"])
@@ -219,6 +241,7 @@ class ExecutionWindow:
         self.resource_accepted.set(False)
         self.status.set("正在准备运行环境")
         extra={"route_debug":self.route_debug} if self.route_debug is not None else {}
+        if self.login_mode is not None:extra["login_mode"]=dict(LOGIN_MODES)[self.login_mode.get()]
         self.session.send("prepare",app_id=self.app_id,server=self.profile,game_path=self.game_path.get(),region=self.region.get(),instance_idx=self.instance_idx,instance_name=self.account_name,**extra)
         self.update_buttons()
 
@@ -337,6 +360,10 @@ class ExecutionWindow:
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
                     if state["state"]=="success" and state.get("redemption"):
                         name="流程结束 · 兑换奖励到账未核实"
+                    login=state.get("login",{})
+                    if self.login_mode is not None:
+                        if state["state"]=="success":name="已进入游戏" if login.get("world_verified") else "登录结果未核实"
+                        elif self.busy and login.get("phase") and not state.get("preparation_step"):name=login["phase"]
                     if state["state"]=="success" and any(not item["reward_verified"] for item in state.get("resource_results",[])):
                         name="流程结束 · 拆解结果未核实"
                     if control.get("focus_waiting"):name="等待游戏恢复焦点"
@@ -397,11 +424,14 @@ class ExecutionWindow:
         return True
 
 
-def open_execution(ui,app_id,app_name,profile,route_debug=None):
+def open_execution(ui,app_id,app_name,profile,route_debug=None,login_mode=None):
     existing=getattr(ui,"execution_window",None)
     if existing is not None and not existing.closed:
         existing.window.deiconify()
         existing.window.lift()
         return existing
-    ui.execution_window=ExecutionWindow(ui,app_id,app_name,profile,route_debug=route_debug) if route_debug is not None else ExecutionWindow(ui,app_id,app_name,profile)
+    extra={}
+    if route_debug is not None:extra["route_debug"]=route_debug
+    if login_mode is not None:extra["login_mode"]=login_mode
+    ui.execution_window=ExecutionWindow(ui,app_id,app_name,profile,**extra)
     return ui.execution_window

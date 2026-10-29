@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import platform
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -291,6 +292,84 @@ def main():
                 service.start_login('switch',timeout_seconds=30);manager.worker.join(5)
             assert seen==['SwitchAccount']
             checks.append('switch_mode_constructs_actual_switch_account_operation_without_executing_logout_in_fixture')
+
+            from zzz_od.operation.enter_game.switch_account import SwitchAccount
+            from zzz_od.operation.goto.goto_menu import GotoMenu
+            from one_dragon.base.operation.operation_base import OperationResult
+            reset();switch=SwitchAccount(ctx);switch.handle_init();attach(switch)
+            fixture.interruption=lose_focus
+            try:tick(switch.more_logout_confirm);raise AssertionError('logout confirmation did not pause')
+            except ObservationExpired:pass
+            fixture.focused=True;control.poll();tick(switch.more_logout_confirm)
+            assert fixture.clicks.count('更多登出确认')==1
+            checks.append('logout_confirmation_is_not_repeated_after_observed_press_is_interrupted_by_focus_loss')
+
+            reset();config.save()
+            original_switch=SwitchAccount.__init__
+            def constructed_switch(operation,context):
+                original_switch(operation,context);attach(operation)
+                operation.round_by_ocr_and_click=lambda screen,text,**kwargs:operation.round_by_click_area('菜单',text)
+                operation.round_by_find_area=lambda screen,screen_name,area_name,**kwargs:operation.round_success(area_name)
+            service.prepare_login('switch');manager.worker.join(5)
+            with patch.object(SwitchAccount,'__init__',constructed_switch),patch.object(EnterGame,'__init__',constructed),patch.object(GotoMenu,'execute',return_value=OperationResult(True)):
+                service.start_login('switch',timeout_seconds=30);manager.worker.join(15)
+            state=service.execution_status()
+            assert not state['busy'] and state['state']=='success' and state['login']['world_verified'],state
+            assert fixture.submits==1 and fixture.clicks.count('更多登出确认')==1
+            checks.append('actual_switch_account_graph_runs_logout_nodes_then_actual_enter_game_graph_in_one_run_slot')
+
+            # 启动等待、绑定和真实登录图交接；启动器与进程清单仍为替身。
+            from autozzz.onedragon_startup import GameStartup
+            operation=reset();config.data['game_region']='cn';config.save()
+            manager.connection=(ctx.current_instance_idx,config.game_path,config.game_region,config.game_language)
+            launches=[];bound=threading.Event();allow_bind=threading.Event()
+            original_bind=ctx.controller.bind
+            def startup_factory(*args,**kwargs):
+                return GameStartup(*args,**kwargs,inventory=lambda:[dict(pid=51,path=str(dummy),created=1.)] if launches else [],
+                                   launch=lambda path:launches.append(path),find_window=lambda _:SimpleNamespace(hwnd=999))
+            def delayed_bind(path):
+                bound.set()
+                if not allow_bind.wait(4):raise AssertionError('fixture bind was not released')
+                ctx.controller.game_win.bound=SimpleNamespace(hwnd=999);ctx.controller.game_win.process_id=51
+            service.prepare_login('forced_enter');manager.worker.join(5)
+            with patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),patch.object(ctx.controller,'bind',delayed_bind),patch.object(EnterGame,'__init__',constructed),patch('autozzz.windows.user32.GetAsyncKeyState',side_effect=lambda key:0x8000 if key==0x78 else 0):
+                service.start_login('forced_enter',timeout_seconds=30,auto_launch=True)
+                deadline=time.monotonic()+3
+                while not manager.manual_pause.is_set() and time.monotonic()<deadline:time.sleep(.01)
+                assert manager.manual_pause.is_set() and not launches
+                manager.pause(False)  # F9 仍按下；交接时不可再次切换暂停。
+                assert bound.wait(4)
+                manager.pause(True);allow_bind.set()
+                deadline=time.monotonic()+3
+                while not manager._input_ready and time.monotonic()<deadline:time.sleep(.01)
+                assert manager._input_ready and manager.control.manual_paused and not fixture.clicks
+                assert manager.status()['control']['manual_paused']
+                manager.pause(False);manager.worker.join(15)
+            state=service.execution_status();assert not state['busy'] and state['state']=='success' and state['login']['world_verified'],state
+            assert len(launches)==1 and fixture.submits==1
+            checks.append('actual_startup_and_login_graph_share_one_job_and_launch_once_preserving_manual_pause_and_held_f9_across_binding')
+
+            reset();service.prepare_login('enter');manager.worker.join(5)
+            def replaced_bind(path):
+                ctx.controller.game_win.bound=SimpleNamespace(hwnd=998);ctx.controller.game_win.process_id=51
+            with patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),patch.object(ctx.controller,'bind',replaced_bind),patch.object(EnterGame,'__init__',side_effect=forbidden):
+                service.start_login('enter',timeout_seconds=30,auto_launch=True);manager.worker.join(5)
+            state=service.execution_status();assert not state['busy'] and state['state']=='failed' and '窗口身份已变化' in state['error'],state
+            assert not fixture.clicks
+            checks.append('window_identity_change_between_startup_and_binding_refuses_login_before_any_input')
+
+            reset();service.prepare_login('enter');manager.worker.join(5);launched=threading.Event()
+            def waiting_startup(*args,**kwargs):
+                def missing(_):
+                    from autozzz.models import AutomationError
+                    raise AutomationError('fixture waiting')
+                return GameStartup(*args,**kwargs,inventory=lambda:[],launch=lambda _:launched.set(),find_window=missing)
+            with patch('autozzz.onedragon_startup.GameStartup',side_effect=waiting_startup),patch.object(EnterGame,'__init__',side_effect=forbidden):
+                service.start_login('enter',timeout_seconds=30,auto_launch=True)
+                assert launched.wait(4);manager.stop();manager.worker.join(5)
+            state=service.execution_status();assert not state['busy'] and state['state']=='stopped' and not fixture.clicks,state
+            checks.append('stop_during_startup_wait_keeps_original_job_and_never_constructs_login_or_application')
+            ctx.controller.game_win.bound=None;ctx.controller.bind=original_bind
 
             current=ctx.game_account_config;current.password='';current.save();clicks=len(fixture.clicks)
             service.prepare_login('switch');manager.worker.join(5)

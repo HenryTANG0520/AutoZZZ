@@ -21,6 +21,7 @@ class AccountsWindow:
         self.callback=None
         self.preview_dialog=None
         self.poll_token=None
+        self.after_close=None
         self.window=tk.Toplevel(ui.root)
         self.window.title("AutoZZZ · 账号配置")
         d=lambda value:round(value*ui.ui_scale)
@@ -38,6 +39,8 @@ class AccountsWindow:
         ttk.Label(header,text="国服 / B服" if profile=="cn" else "国际服",style="Hint.TLabel").grid(row=0,column=1,padx=d(16))
         self.preview_button=ttk.Button(header,text="轮换预检…",command=self.preview_rotation)
         self.preview_button.grid(row=0,column=2)
+        self.login_button=ttk.Button(header,text="登录此账号…",command=self.login_game)
+        self.login_button.grid(row=0,column=3,padx=(d(8),0))
         table_area=ttk.Frame(self.window,padding=(d(18),0))
         table_area.grid(row=1,column=0,sticky="ew")
         table_area.columnconfigure(0,weight=1)
@@ -123,6 +126,27 @@ class AccountsWindow:
 
     def edit_preview_account(self,idx):
         self.table.selection_set(str(idx));self.select()
+
+    def login_game(self):
+        if self.busy or self.closing or self.dirty:return
+        if self.selected()!=self.snapshot.get("current"):
+            self.status.set("请先点击“使用此配置”，再登录此账号。")
+            return
+        from .onedragon_run_ui import open_execution
+        existing=getattr(self.ui,"execution_window",None)
+        if existing is not None and not existing.closed:
+            existing.window.deiconify();existing.window.lift()
+            self.status.set("请先关闭原运行窗口，再打开账号登录。")
+            return
+        self.after_close=lambda:open_execution(self.ui,"_login","账号登录",self.profile,login_mode="enter")
+        self.close()
+
+    def finished_close(self):
+        self.closed=True
+        self.window.destroy()
+        self.on_close()
+        callback,self.after_close=self.after_close,None
+        if callback is not None and not self.ui.closing:callback()
 
     def loaded(self,result,select=None):
         self.snapshot=result
@@ -231,6 +255,7 @@ class AccountsWindow:
         for widget in self.actions+[self.reload_button,self.table]:widget.state(["disabled"] if locked else ["!disabled"])
         self.save_button.state(["!disabled"] if not locked and self.dirty else ["disabled"])
         self.preview_button.state(["!disabled"] if not locked and not self.dirty else ["disabled"])
+        self.login_button.state(["!disabled"] if not locked and not self.dirty and row is not None else ["disabled"])
         if self.form is not None:
             for control in self.form.controls.values():
                 widget=getattr(control,"widget",control)
@@ -257,9 +282,7 @@ class AccountsWindow:
                 elif event["type"]=="closed":
                     self.connected=False
                     if self.closing:
-                        self.closed=True
-                        self.window.destroy()
-                        self.on_close()
+                        self.finished_close()
                         return
                 self.update_buttons()
         except queue.Empty:pass
@@ -279,9 +302,7 @@ class AccountsWindow:
         self.session.close()
         self.update_buttons()
         if not self.worker.is_alive():
-            self.closed=True
-            self.window.destroy()
-            self.on_close()
+            self.finished_close()
         return True
 
 
