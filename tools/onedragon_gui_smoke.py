@@ -96,6 +96,32 @@ def main():
                     assert "请先读取或保存" in dialog.status.get() and not dialog.busy
                     checks.append("name_change_cannot_select_unread_content")
                     dialog.name.set(dialog.loaded_name)
+                    previous=dialog.editor.get('1.0','end-1c');dialog.dirty=True;dialog.kind.set('闪避')
+                    with patch('autozzz.onedragon_ui.messagebox.askokcancel',return_value=False):dialog.change_kind()
+                    assert dialog.kind.get()=='自动战斗' and dialog.policy_kind=='auto_battle' and dialog.dirty
+                    assert dialog.editor.get('1.0','end-1c')==previous
+                    dialog.dirty=False;dialog.kind.set('闪避')
+                    with patch.object(dialog,'_initial',side_effect=RuntimeError('fixture load failed')):
+                        dialog.change_kind();pump(root,lambda:not dialog.busy)
+                    assert dialog.policy_kind=='auto_battle' and dialog.kind.get()=='自动战斗' and dialog.editor.get('1.0','end-1c')==previous
+                    checks.append('kind_change_cancel_and_error_preserve_current_draft')
+                dialog.kind.set('闪避');dialog.change_kind();pump(root,lambda:not dialog.busy)
+                assert dialog.policy_kind=='dodge' and '闪避' in dialog.names and str(dialog.kind_selector.cget('state'))=='readonly',(dialog.policy_kind,dialog.names,dialog.kind_selector.cget('state'),dialog.status.get())
+                for size in ('default','minimum'):
+                    if size=='minimum':dialog.window.geometry('%dx%d' % dialog.window.minsize())
+                    root.update();check_layout(dialog.window);checks.append(f'{round(scale*100)}_{size}_dodge_layout')
+                if scale==1:
+                    dialog.name.set('自定义闪避策略');button(dialog,'保存策略').invoke();pump(root,lambda:not dialog.busy)
+                    assert (paths.data/'config/dodge/自定义闪避策略.yml').is_file()
+                    assert not (paths.data/'config/auto_battle/自定义闪避策略.yml').exists()
+                    button(dialog,'设为闪避默认').invoke();pump(root,lambda:not dialog.busy)
+                    assert dialog.status.get()=='已设为闪避默认策略'
+                    if args.preview:
+                        from PIL import ImageGrab
+                        ImageGrab.grab(window=dialog.window.winfo_id()).save(args.preview.with_name('dodge.png'))
+                    checks.append('dodge_save_and_select_actual_upstream')
+                dialog.kind.set('自动战斗');dialog.change_kind();pump(root,lambda:not dialog.busy)
+                assert dialog.policy_kind=='auto_battle' and dialog.name.get()==imported.stem
                 assert config.read_bytes() == before
                 assert dialog.worker is not None and not dialog.worker.is_alive()
                 if scale == 2:
@@ -111,6 +137,8 @@ def main():
                     assert dialog.closed
             finally:
                 ui.closing = True
+                if not dialog.closed:
+                    dialog.dirty=False;dialog.close();pump(root,lambda:dialog.closed)
                 ui.overlay.close()
                 for token in root.tk.splitlist(root.tk.call("after", "info")):
                     root.after_cancel(token)

@@ -383,44 +383,51 @@ class OneDragonService:
             raise ValueError("策略名称无效。")
         return name
 
-    def _policy_path(self, name: str, merged: bool = True) -> Path:
+    @staticmethod
+    def _policy_kind(kind: str) -> str:
+        if kind not in ('auto_battle','dodge'):raise ValueError('策略类型须为自动战斗或闪避。')
+        return kind
+
+    def _policy_path(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> Path:
         self._name(name)
+        kind=self._policy_kind(kind)
         from one_dragon.base.conditional_operation.loader import ConditionalOperatorLoader
-        path = Path(ConditionalOperatorLoader.get_yaml_file_path(["auto_battle"], name, merged)).resolve()
-        directory = (self.data / "config" / "auto_battle").resolve()
+        path = Path(ConditionalOperatorLoader.get_yaml_file_path([kind], name, merged)).resolve()
+        directory = (self.data / "config" / kind).resolve()
         if path.parent != directory or not path.is_file():
             raise ValueError(f"条件策略不存在：{name}")
         return path
 
-    def policies(self) -> list[dict]:
-        directory = self.data / "config" / "auto_battle"
+    def policies(self, kind: str = 'auto_battle') -> list[dict]:
+        kind=self._policy_kind(kind)
+        directory = self.data / "config" / kind
         names = set()
         for path in directory.glob("*.yml"):
             name = path.name.removesuffix(".yml").removesuffix(".merged").removesuffix(".sample")
             if not name.startswith("autozzz-check-"):
                 names.add(name)
-        return [dict(name=name, format=self._policy_path(name).name,
+        return [dict(name=name, format=self._policy_path(name,kind=kind).name,
                      custom=not (directory / (name + ".merged.yml")).exists()
                             and not (directory / (name + ".sample.yml")).exists())
                 for name in sorted(names)]
 
-    def policy_read(self, name: str, merged: bool = True) -> dict:
-        path = self._policy_path(name, merged)
+    def policy_read(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> dict:
+        path = self._policy_path(name, merged,kind)
         return dict(name=name, filename=path.name, content=path.read_text(encoding="utf-8"))
 
-    def policy_validate(self, name: str, merged: bool = True) -> dict:
+    def policy_validate(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
         self.ctx
         from .run_lock import profile_lock
         with profile_lock(self.data):
-            return self._policy_validate(name,merged)
+            return self._policy_validate(name,merged,kind)
 
-    def _policy_validate(self, name: str, merged: bool = True) -> dict:
+    def _policy_validate(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
-        self._policy_path(name, merged)  # 上游会在缺失时回退；桥接层必须先拒绝错误名称。
+        self._policy_path(name, merged,kind)  # 上游会在缺失时回退；桥接层必须先拒绝错误名称。
         from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
         from one_dragon.base.conditional_operation.operator import ConditionalOperator
-        operator = AutoBattleOperator(self.ctx.auto_battle_context, "auto_battle", name, merged)
+        operator = AutoBattleOperator(self.ctx.auto_battle_context, kind, name, merged)
         try:
             ConditionalOperator.init(operator)  # 真正构建状态树与原子操作，不启动它们。
             scenes = []
@@ -438,19 +445,19 @@ class OneDragonService:
         finally:
             operator.dispose()
 
-    def policy_save(self, name: str, content: str) -> dict:
+    def policy_save(self, name: str, content: str, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
         self.ctx
         from .run_lock import profile_lock
         with profile_lock(self.data):
-            return self._policy_save(name, content)
+            return self._policy_save(name, content,kind)
 
-    def _policy_save(self, name: str, content: str) -> dict:
+    def _policy_save(self, name: str, content: str, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
         name = self._name(name)
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
-        directory = self.data / "config" / "auto_battle"
+        directory = self.data / "config" / self._policy_kind(kind)
         if any((directory / (name + suffix)).exists() for suffix in (".sample.yml", ".merged.yml")):
             raise ValueError("内置策略请使用新名称另存，保留原策略及作者信息。")
         temporary_name = "autozzz-check-" + uuid.uuid4().hex
@@ -460,30 +467,30 @@ class OneDragonService:
             raise ValueError("策略文件路径指向数据目录外。")
         temporary.write_text(content, encoding="utf-8")
         try:
-            validation = self._policy_validate(temporary_name, merged=False)
+            validation = self._policy_validate(temporary_name, merged=False,kind=kind)
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
         validation["name"] = name
         return validation
 
-    def policy_check(self, content: str) -> dict:
+    def policy_check(self, content: str, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
         self.ctx
         from .run_lock import profile_lock
         with profile_lock(self.data):
-            return self._policy_check(content)
+            return self._policy_check(content,kind)
 
-    def _policy_check(self, content: str) -> dict:
+    def _policy_check(self, content: str, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
         if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
             raise ValueError("策略必须为不超过 1 MiB 的 YAML 文本。")
-        directory = self.data / "config" / "auto_battle"
+        directory = self.data / "config" / self._policy_kind(kind)
         name = "autozzz-check-" + uuid.uuid4().hex
         temporary = directory / (name + ".yml")
         temporary.write_text(content, encoding="utf-8")
         try:
-            result = self._policy_validate(name, merged=False)
+            result = self._policy_validate(name, merged=False,kind=kind)
             result["name"] = "草稿"
             return result
         finally:

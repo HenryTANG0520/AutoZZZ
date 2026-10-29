@@ -33,6 +33,8 @@ class StrategyWindow:
         self.names: list[str] = []
         self.loaded_name = ""
         self.merged = True
+        self.policy_kind='auto_battle'
+        self.kind=tk.StringVar(self.window,'自动战斗')
         self.name = tk.StringVar(self.window)
         self.status = tk.StringVar(self.window, "正在读取策略…")
         server = "global" if ui.server.get() == "国际服" else "cn"
@@ -52,6 +54,10 @@ class StrategyWindow:
         self.controls.append(self.selector)
         self._button(form, "读取", self.load).grid(row=0, column=2, padx=(12, 0))
         self._button(form, "导入 YAML…", self.import_file).grid(row=0, column=3, padx=(8, 0))
+        ttk.Label(form,text='策略类型').grid(row=1,column=0,padx=(0,12),pady=(12,0))
+        self.kind_selector=ttk.Combobox(form,textvariable=self.kind,values=('自动战斗','闪避'),state='readonly',width=16)
+        self.kind_selector.grid(row=1,column=1,sticky='w',pady=(12,0));self.controls.append(self.kind_selector)
+        self.kind_selector.bind('<<ComboboxSelected>>',self.change_kind)
         area = ttk.Frame(self.window, padding=(16, 0))
         area.grid(row=2, column=0, sticky="nsew")
         self.editor = tk.Text(area, wrap="none", undo=True, font=("Consolas", 11),
@@ -75,7 +81,8 @@ class StrategyWindow:
         buttons.grid(row=2, column=0, sticky="w")
         self._button(buttons, "校验草稿", self.validate).pack(side="left", padx=(0, 8))
         self._button(buttons, "保存策略", self.save).pack(side="left", padx=(0, 8))
-        self._button(buttons, "设为条件战斗默认", self.select).pack(side="left", padx=(0, 8))
+        self.default_button=self._button(buttons, "设为条件战斗默认", self.select)
+        self.default_button.pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="关闭", command=self.close).pack(side="left")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.window.bind("<Destroy>", self._destroyed, add="+")
@@ -142,16 +149,26 @@ class StrategyWindow:
             except RequestPending:
                 continue  # 查询同一请求；不能因等待超时重复保存或初始化。
 
-    def _initial(self, client: OneDragonClient) -> dict:
-        policies = self._call(client, "policies")
+    def _initial(self, client: OneDragonClient,kind: str = 'auto_battle') -> dict:
+        policies = self._call(client, "policies",kind=kind)
         config = self._call(client, "configuration", app_id="battle_assistant")
-        name = config["fields"]["auto_battle_config"]
+        name = config["fields"]["auto_battle_config" if kind=='auto_battle' else 'dodge_assistant_config']
         merged = config["fields"]["use_merged_file"]
-        return dict(policies=policies, merged=merged,
-                    policy=self._call(client, "policy_read", name=name, merged=merged))
+        return dict(policies=policies, merged=merged,kind=kind,
+                    policy=self._call(client, "policy_read", name=name, merged=merged,kind=kind))
+
+    def change_kind(self,_event=None):
+        selected={'自动战斗':'auto_battle','闪避':'dodge'}[self.kind.get()]
+        if self.busy or selected==self.policy_kind:return
+        if self.dirty and not messagebox.askokcancel('放弃草稿','切换策略类型将替换当前未保存草稿。',parent=self.window):
+            self.kind.set('自动战斗' if self.policy_kind=='auto_battle' else '闪避');return
+        self._run(lambda client:self._initial(client,selected),self._loaded)
 
     def _loaded(self, result: dict) -> None:
         if "policies" in result:
+            self.policy_kind=result.get('kind','auto_battle')
+            self.kind.set('自动战斗' if self.policy_kind=='auto_battle' else '闪避')
+            self.default_button.configure(text='设为条件战斗默认' if self.policy_kind=='auto_battle' else '设为闪避默认')
             self.names = [policy["name"] for policy in result["policies"]]
             self.selector.configure(values=self.names)
             self.merged = result["merged"]
@@ -165,7 +182,7 @@ class StrategyWindow:
         if self.dirty and not messagebox.askokcancel("放弃草稿", "读取其他策略将替换当前未保存草稿。", parent=self.window):
             return
         name = self.name.get()
-        self._run(lambda client: self._call(client, "policy_read", name=name, merged=self.merged), self._loaded)
+        self._run(lambda client: self._call(client, "policy_read", name=name, merged=self.merged,kind=self.policy_kind), self._loaded)
 
     def import_file(self) -> None:
         if self.dirty and not messagebox.askokcancel("放弃草稿", "导入将替换当前未保存草稿。", parent=self.window):
@@ -189,7 +206,7 @@ class StrategyWindow:
     def validate(self) -> None:
         content = self.editor.get("1.0", "end-1c")
         # 草稿校验使用单独方法，不写用户策略。
-        self._run(lambda client: self._call(client, "policy_check", content=content),
+        self._run(lambda client: self._call(client, "policy_check", content=content,kind=self.policy_kind),
                   lambda result: self.status.set(f"校验通过 · {len(result['scenes'])} 个场景"))
 
     def save(self) -> None:
@@ -200,15 +217,16 @@ class StrategyWindow:
             self.names = sorted(set(self.names + [name]))
             self.selector.configure(values=self.names)
             self.status.set(f"已保存 · {len(result['scenes'])} 个场景")
-        self._run(lambda client: self._call(client, "policy_save", name=name, content=content), saved)
+        self._run(lambda client: self._call(client, "policy_save", name=name, content=content,kind=self.policy_kind), saved)
 
     def select(self) -> None:
         if self.dirty or self.name.get() != self.loaded_name:
             self.status.set("请先读取或保存该策略，再设为默认。")
             return
         name = self.name.get()
-        self._run(lambda client: self._call(client, "set_battle_options", values={"auto_battle_config": name}),
-                  lambda _result: self.status.set("已设为条件战斗默认策略"))
+        field='auto_battle_config' if self.policy_kind=='auto_battle' else 'dodge_assistant_config'
+        self._run(lambda client: self._call(client, "set_battle_options", values={field: name}),
+                  lambda _result: self.status.set('已设为条件战斗默认策略' if self.policy_kind=='auto_battle' else '已设为闪避默认策略'))
 
     def _poll(self) -> None:
         while not self.events.empty():
@@ -217,11 +235,13 @@ class StrategyWindow:
                 self.busy = False
                 for control in self.controls:
                     control.state(["!disabled"])
+                self.kind_selector.configure(state='readonly')
                 self.editor.configure(state="normal")
                 if self.closing:
                     self.window.destroy()
                     return
             elif error:
+                self.kind.set('自动战斗' if self.policy_kind=='auto_battle' else '闪避')
                 self.status.set(error)
             elif callback and not self.closing:
                 callback(result)
