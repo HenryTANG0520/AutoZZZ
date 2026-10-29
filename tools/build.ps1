@@ -74,11 +74,13 @@ try {
             if (Test-Path -LiteralPath $taskSavedPath) { Copy-Item -LiteralPath $taskSavedPath -Destination $taskStagingOutput -Recurse }
         }
         New-Item -ItemType Directory -Path (Split-Path -Parent $taskOutputDirectory) -Force | Out-Null
-        if (Test-Path -LiteralPath $taskOutputDirectory) { Move-Item -LiteralPath $taskOutputDirectory -Destination $taskArchive }
-        try { Move-Item -LiteralPath $taskStagingOutput -Destination $taskOutputDirectory }
+        # Same-volume directory rename: the Windows PowerShell provider's Move-Item
+        # can enumerate and partially move a tree when a deep Qt path exceeds MAX_PATH.
+        if (Test-Path -LiteralPath $taskOutputDirectory) { [IO.Directory]::Move($taskOutputDirectory, $taskArchive) }
+        try { [IO.Directory]::Move($taskStagingOutput, $taskOutputDirectory) }
         catch {
             if ((Test-Path -LiteralPath $taskArchive) -and -not (Test-Path -LiteralPath $taskOutputDirectory)) {
-                Move-Item -LiteralPath $taskArchive -Destination $taskOutputDirectory
+                [IO.Directory]::Move($taskArchive, $taskOutputDirectory)
             }
             throw
         }

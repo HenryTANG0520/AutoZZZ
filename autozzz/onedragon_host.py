@@ -558,6 +558,11 @@ class ManagedZContext(ZContext):
         return managed_patrol_service(self)
 
     @cached_property
+    def factory_manager(self):
+        from .onedragon_plugins import factory_manager
+        return factory_manager(self)
+
+    @cached_property
     def application_plugin_dirs(self):
         from one_dragon.base.operation.application.plugin_info import PluginSource
         from one_dragon.utils import os_utils
@@ -565,8 +570,7 @@ class ManagedZContext(ZContext):
         builtin = Path(inspect.getfile(ZContext)).parent.parent / "application"
         result = [(builtin, PluginSource.BUILTIN)]
         plugins = Path(os_utils.get_work_dir()) / "plugins"
-        if plugins.is_dir():
-            result.append((plugins, PluginSource.THIRD_PARTY))
+        result.append((plugins, PluginSource.THIRD_PARTY))
         return result
 
     def register_application_factory(self) -> None:

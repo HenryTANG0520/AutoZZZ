@@ -5,6 +5,7 @@ import ast
 from datetime import datetime
 from enum import Enum
 import inspect
+import json
 import math
 from pathlib import Path
 import textwrap
@@ -106,16 +107,22 @@ def _getter_metadata(prop: property) -> tuple[str | None, list[dict]]:
     return label, []
 
 
-def _field(name: str, value: Any, prop: property | None = None) -> dict:
-    doc, options = _getter_metadata(prop) if prop is not None else (None, [])
-    label = LABELS.get(name) or doc
+def _field(name: str, value: Any, prop: property | None = None,plugin:bool=False) -> dict:
+    try:doc, options = _getter_metadata(prop) if prop is not None else (None, [])
+    except (OSError,TypeError,SyntaxError):
+        if not plugin:raise
+        doc,options=None,[]
+    label = (doc or name) if plugin else LABELS.get(name) or doc
     if not label:
         raise ValueError(f"尚未定义配置字段的显示名称：{name}")
     annotation = str(prop.fget.__annotations__.get("return", "")) if prop else ""
     kind = "bool" if type(value) is bool else "float" if "float" in annotation or type(value) is float else "int" if type(value) is int else "lines" if isinstance(value, list) else "str"
     result = dict(name=name, label=label, kind=kind, value=_plain(value), options=options)
-    if options: result["kind"] = "enum"
-    if kind in ("float", "int"):
+    if plugin:
+        result['plugin']=True
+        if isinstance(value,(list,dict)) or value is None:result.update(kind='json',hint='JSON 格式')
+    if options and result['kind']!='json': result["kind"] = "enum"
+    if kind in ("float", "int") and not plugin:
         result["minimum"] = .001 if name in ("screenshot_interval", "frequency_second") else -1 if name == "predefined_team_idx" else 0
     return result
 
@@ -203,18 +210,20 @@ class ConfigurationStore:
 
     def _describe(self, app_id: str, config: Any) -> dict:
         fields = []
+        info=getattr(getattr(self.ctx,'factory_manager',None),'get_plugin_info',lambda _:None)(app_id)
+        plugin=getattr(info,'is_third_party',False)is True
         for name, prop in inspect.getmembers(type(config), lambda item: isinstance(item, property)):
-            if name.startswith("_") or prop.fset is None or name in READ_ONLY or name.endswith("_str"): continue
-            field = _field(name, getattr(config, name), prop)
-            self._choices(app_id, field)
-            if name == "combat_simulation_double_reward_config": field["kind"] = "plan"
+            if name.startswith("_") or prop.fset is None or not plugin and (name in READ_ONLY or name.endswith("_str")): continue
+            field = _field(name, getattr(config, name), prop,plugin=plugin)
+            if not plugin:self._choices(app_id, field)
+            if not plugin and name == "combat_simulation_double_reward_config": field["kind"] = "plan"
             fields.append(field)
         ranges = {"weekly_challenge_start_weekday": (1,7), "critical_max_node_idx": (1,10),
                   "screenshot_interval": (.01,1), "store_blood_min": (0,100)}
         for field in fields:
             if app_id == "suibian_temple" and field["name"].startswith("pawnshop_"):
                 field["supported_in_runtime"] = False
-            if field["name"] in ranges:
+            if not plugin and field["name"] in ranges:
                 field["minimum"], field["maximum"] = ranges[field["name"]]
         ranks = {}
         for group,names in FORM_GROUPS.get(app_id,()):
@@ -275,7 +284,7 @@ class ConfigurationStore:
         elif kind == "bool" and type(value) is not bool:
             raise ValueError(f"{field['label']}必须为开关值。")
         elif kind in ("int", "float"):
-            if type(value) not in ((int,) if kind == "int" else (int,float)) or not math.isfinite(value) or value < field.get("minimum",0) or value > field.get("maximum",float("inf")):
+            if type(value) not in ((int,) if kind == "int" else (int,float)) or not math.isfinite(value) or value < field.get("minimum",float('-inf') if field.get('plugin') else 0) or value > field.get("maximum",float("inf")):
                 raise ValueError(f"{field['label']}超出允许范围。")
         elif kind == "agents":
             valid = {o["value"] for o in field["options"]}|{None}
@@ -288,6 +297,9 @@ class ConfigurationStore:
                 raise ValueError(f"{field['label']}包含未知或重复物品。")
         elif kind == "str" and not isinstance(value, str):
             raise ValueError(f"{field['label']}需要文本。")
+        elif kind=='json':
+            try:json.dumps(value,ensure_ascii=False,allow_nan=False)
+            except (ValueError,TypeError,RecursionError) as exc:raise ValueError(f"{field['label']}需要有效 JSON 数据。") from exc
 
     def _plans(self, app_id: str, rows: list, existing: list) -> list:
         from zzz_od.application.charge_plan.charge_plan_config import ChargePlanItem, ChargePlanConfig, CardNumEnum

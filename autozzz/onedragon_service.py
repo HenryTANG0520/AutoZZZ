@@ -41,6 +41,7 @@ class OneDragonService:
         self._downloads = None
         self._rotation = None
         self._pip = None
+        self._plugins = None
         self._run_lease=run_lease
         self._rotation_guard=None
         self._rotation_sealed=False
@@ -52,9 +53,30 @@ class OneDragonService:
             with profile_lock(self.data):
                 from .onedragon_host import ManagedZContext
                 ctx = ManagedZContext()
+                ctx.plugin_run_lease=self._run_lease
                 ctx.register_application_factory()
                 self._ctx = ctx
+        else:
+            from .onedragon_plugins import verify_context_plugins
+            verify_context_plugins(self._ctx)
         return self._ctx
+
+    @property
+    def plugins(self):
+        if self._plugins is None:
+            from .onedragon_plugins import PluginManager
+            self._plugins=PluginManager(self.data)
+        return self._plugins
+
+    def plugin_catalog(self):return self.plugins.catalog()
+    def plugin_preview(self,path,kind):self._assert_idle();return self.plugins.preview(path,kind)
+    def plugin_status(self):return self.plugins.status()
+    def plugin_install(self,token,names,overwrites,revision,allow_downgrade=False):self._assert_idle();return self.plugins.install(token,names,overwrites,revision,allow_downgrade)
+    def plugin_enabled(self,name,enabled,revision):self._assert_idle();return self.plugins.enabled(name,enabled,revision)
+    def plugin_remove(self,name,revision):self._assert_idle();return self.plugins.remove(name,revision)
+    def plugin_archives(self):return self.plugins.archive_list()
+    def plugin_directory(self):return self.plugins.directory()
+    def plugin_restore(self,identifier,names,revision,overwrites):self._assert_idle();return self.plugins.restore(identifier,names,revision,overwrites)
 
     @property
     def pip_service(self):
@@ -82,9 +104,11 @@ class OneDragonService:
             "instance": ctx.current_instance_idx,
             "applications": [dict(id=key, name=factory.app_name,
                                   default_group=factory.default_group, internal=factory.internal_app,
+                                  third_party=bool(ctx.factory_manager.get_plugin_info(key).is_third_party),
                                   configurable=key == "notify" or type(factory).create_config is not ApplicationFactory.create_config)
                              for key, factory in factories.items()],
-            "failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures],
+            "failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures if not Path(path).resolve().is_relative_to(self.data/'plugins')],
+            "plugin_failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures if Path(path).resolve().is_relative_to(self.data/'plugins')],
             "ready_for_game": bool(ctx.ready_for_application),
         }
 
@@ -516,6 +540,7 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if self._plugins is not None and self._plugins.busy:raise RuntimeError('插件操作仍在处理，请等待原任务结束。')
         if self._downloads is not None and self._downloads.busy:
             raise RuntimeError("模型下载仍在处理，请等待或取消原任务。")
         if self._map_capture is not None and self._map_capture.busy:
@@ -650,6 +675,7 @@ class OneDragonService:
             if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
 
     def _close_resources(self) -> None:
+        if self._plugins is not None:self._plugins.close()
         if self._pip is not None:self._pip.close()
         if self._downloads is not None:self._downloads.close()
         if self._map_capture is not None:self._map_capture.close()
@@ -702,3 +728,4 @@ METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
 METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})
 METHODS.update({'trace_configure','trace_snapshot'})
+METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})

@@ -131,6 +131,8 @@ class OneDragonExecution:
             def work():
                 try:
                     with profile_lock(self.data):
+                        from .onedragon_plugins import verify_context_plugins
+                        verify_context_plugins(self.ctx)
                         from .map_transaction import MapTransaction
                         MapTransaction(self.data).assert_clear()
                         from .model_install import ModelInstall
@@ -195,7 +197,8 @@ class OneDragonExecution:
             if not self.ctx.ready_for_application or self.ctx.ocr._model is None or self.ctx.controller is None:
                 self.ctx.ready_for_application = False
                 raise RuntimeError("一条龙初始化未完成，请查看资源下载与模型加载日志。")
-            if not self.ctx.run_context._application_factory_map or self.ctx.factory_manager.scan_failures:
+            builtin_failures=[(path,error) for path,error in self.ctx.factory_manager.scan_failures if not Path(path).resolve().is_relative_to(self.data/'plugins')]
+            if not self.ctx.run_context._application_factory_map or builtin_failures:
                 self.ctx.ready_for_application = False
                 raise RuntimeError("一条龙应用注册不完整，请检查应用加载日志。")
             self.state = "ready"
@@ -203,6 +206,8 @@ class OneDragonExecution:
 
     def configuration_digest(self) -> str:
         digest=hashlib.sha256()
+        from .onedragon_plugins import PluginStore
+        digest.update(PluginStore(self.data).revision().encode('ascii'))
         paths = list((self.data/"config").rglob("*.yml"))
         maps = self.data/"assets/game_data/world_patrol"
         paths.extend(path for path in maps.rglob("*") if path.is_file() and path.suffix in (".png", ".yml"))

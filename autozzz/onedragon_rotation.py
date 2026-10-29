@@ -23,6 +23,8 @@ def rotation_revision(root: Path) -> str:
     paths.extend(path for path in maps.rglob('*') if path.is_file() and path.suffix in ('.png','.yml'))
     if len(paths)>20000:raise ValueError('轮换配置文件过多。')
     digest=hashlib.sha256();total=0
+    from .onedragon_plugins import PluginStore
+    digest.update(PluginStore(root).revision().encode('ascii'))
     for path in sorted(paths):
         if path.relative_to(root).as_posix()=='config/pip.yml':continue
         if path.resolve()!=path.absolute() or not path.resolve().is_relative_to(root):raise ValueError('轮换资料路径被重定向。')

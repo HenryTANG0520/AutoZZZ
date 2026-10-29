@@ -11,6 +11,8 @@ import threading
 def tracked(name):
     if name=='config/pip.yml':return False
     parts=PurePosixPath(name).parts
+    if name=='autozzz/plugin-state.json':return True
+    if parts and parts[0]=='plugins':return '__pycache__' not in parts and not name.endswith(('.pyc','.pyo'))
     return bool(parts and (parts[0]=='config' and name.endswith('.yml') or
                 parts[:3]==('assets','game_data','world_patrol') and name.endswith(('.png','.yml'))))
 
@@ -18,6 +20,10 @@ def tracked(name):
 def snapshot(root):
     root=Path(root).resolve();files=list((root/'config').rglob('*.yml'))
     files.extend(path for path in (root/'assets/game_data/world_patrol').rglob('*') if path.is_file() and path.suffix in ('.png','.yml'))
+    from .onedragon_plugins import files as plugin_files,digest_file,owned
+    plugins=plugin_files(root/'plugins')
+    state=root/'autozzz/plugin-state.json'
+    if state.exists():files.append(owned(state,root))
     if len(files)>20000:raise ValueError('轮换资料文件过多。')
     result={};total=0
     for path in sorted(files):
@@ -27,6 +33,7 @@ def snapshot(root):
         raw=path.read_bytes();total+=len(raw)
         if total>256*1024*1024:raise ValueError('轮换资料过大。')
         result[path.relative_to(root).as_posix()]=hashlib.sha256(raw).hexdigest()
+    for path in plugins:result[path.relative_to(root).as_posix()]=digest_file(path)
     return result
 
 

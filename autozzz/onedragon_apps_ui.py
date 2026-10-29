@@ -70,9 +70,11 @@ class ApplicationsPanel:
         self.profile_box.bind("<<ComboboxSelected>>",self.change_profile)
         self.accounts_button=ttk.Button(heading,text="账号…",command=self.accounts)
         self.accounts_button.grid(row=0,column=3,padx=(d(8),0))
+        self.plugins_button=ttk.Button(heading,text='插件…',command=self.plugins)
+        self.plugins_button.grid(row=0,column=4,padx=(d(8),0))
         self.load_button = ttk.Button(heading,text="读取配置",command=self.load)
-        self.load_button.grid(row=0,column=4,padx=(d(10),0))
-        self.controls += [self.profile_box,self.load_button,self.accounts_button]
+        self.load_button.grid(row=0,column=5,padx=(d(10),0))
+        self.controls += [self.profile_box,self.load_button,self.accounts_button,self.plugins_button]
         body = ttk.Frame(self.page)
         body.grid(row=1,column=0,sticky="nsew")
         body.columnconfigure(1,weight=1)
@@ -196,6 +198,11 @@ class ApplicationsPanel:
         if self.dirty:self._clear()
         open_accounts(self.ui,profile,lambda:self.load() if not self.closing else None)
 
+    def plugins(self):
+        if self.busy or not self.allow_leave():return
+        from .onedragon_plugins_ui import open_plugins
+        open_plugins(self.ui,'global' if self.profile.get()=='国际服' else 'cn')
+
     def library(self):
         if self.busy:return
         from .onedragon_library_ui import open_library
@@ -249,8 +256,14 @@ class ApplicationsPanel:
         options = self.call(client,"configuration_options")
         extras = [dict(id=k,name=n,configurable=True) for k,n in (("_group","执行顺序"),("teams","预编队伍"),("battle_assistant","战斗设置"),("_game_input","键位与镜头"),("_environment","网络与运行"),("_models","识别模型"))]
         apps = catalog["applications"]+extras+options["challenges"]
-        descriptions = {a["id"]:self.call(client,"describe_configuration",app_id=a["id"]) for a in apps if a["configurable"]}
-        return dict(apps=apps,options=options,descriptions=descriptions)
+        descriptions={};failures=list(catalog.get('plugin_failures',[]))
+        for app in apps:
+            if not app['configurable']:continue
+            try:descriptions[app['id']]=self.call(client,'describe_configuration',app_id=app['id'])
+            except Exception as exc:
+                if not app.get('third_party'):raise
+                app['configuration_error']=str(exc);failures.append(dict(path=app['name'],error=str(exc)))
+        return dict(apps=apps,options=options,descriptions=descriptions,plugin_failures=failures)
 
     def load(self):
         if self.allow_leave(): self._run(self._initial,self._loaded)
@@ -275,6 +288,10 @@ class ApplicationsPanel:
         self.dirty = False
         self.tree.selection_set("_group")
         self.select()
+        failures=result.get('plugin_failures',[])
+        if failures:
+            self.status.set(f'{len(failures)} 个插件加载失败；在插件管理中停用或更换后重新读取。')
+            for row in failures:self.ui._log('插件加载失败：'+row['path']+' · '+row['error'],'error')
 
     def select(self,_event=None):
         selection = self.tree.selection()
@@ -301,7 +318,7 @@ class ApplicationsPanel:
     def render(self,description):
         self._clear()
         self.title.set(self.apps[self.current_id]["name"])
-        self.note.set(NOTES.get(self.current_id,""))
+        self.note.set(self.apps[self.current_id].get('configuration_error') or NOTES.get(self.current_id,""))
         if self.note.get():self.note_label.grid()
         self.description = copy.deepcopy(description)
         if description is None:

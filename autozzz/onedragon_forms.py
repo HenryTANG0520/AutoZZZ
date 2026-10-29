@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable
@@ -94,6 +95,18 @@ class ScalarForm:
                     choices.append(choice)
                 reader = lambda choices=choices: [c.get() for c in choices]
                 variable = None
+            elif kind=='json':
+                container=ttk.Frame(line);container.columnconfigure(0,weight=1)
+                text=tk.Text(container,height=6,wrap='word',font=('Microsoft YaHei UI',10),background=theme.FIELD,foreground=theme.TEXT,insertbackground=theme.ACCENT,borderwidth=0,padx=d(8),pady=d(6))
+                text.grid(row=0,column=0,sticky='ew');scroll=ttk.Scrollbar(container,command=text.yview);scroll.grid(row=0,column=1,sticky='ns');text.configure(yscrollcommand=scroll.set)
+                text.insert('1.0',json.dumps(value,ensure_ascii=False,indent=2));text.edit_modified(False)
+                def modified_json(_event,widget=text):
+                    if widget.edit_modified():widget.edit_modified(False);self.ready and changed()
+                text.bind('<<Modified>>',modified_json)
+                def read_json(widget=text,label=field['label']):
+                    try:return json.loads(widget.get('1.0','end-1c'))
+                    except (ValueError,RecursionError) as exc:raise ValueError(label+'：JSON 格式无效。') from exc
+                widget,variable,reader=container,None,read_json;self.controls[name]=text
             elif kind in ("lines","priority"):
                 container = ttk.Frame(line)
                 text = tk.Text(container, height=4, wrap="word", font=("Microsoft YaHei UI",10),
