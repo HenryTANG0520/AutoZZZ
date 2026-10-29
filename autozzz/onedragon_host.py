@@ -47,10 +47,12 @@ class ControlledDevice:
         self.raw, self.control = raw, control
         self.pressed: set[Any] = set()
         self.lock = threading.RLock()
+        self.before_press = None
 
     def press(self, key: Any) -> None:
         def send():
             with self.lock:
+                if self.before_press is not None:self.before_press(key)
                 self.pressed.add(key)
                 self.raw.press(key)
         self.control.input(send)

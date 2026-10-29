@@ -473,6 +473,18 @@ class OneDragonService:
             return self._execution.prepare_route_debug(descriptor, digest)
         return self._execution.prepare_application(app_id)
 
+    def prepare_login(self,mode:str) -> dict:
+        self._assert_idle()
+        if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.prepare_login(mode)
+
+    def start_login(self,mode:str,timeout_seconds:int=600) -> dict:
+        self._assert_idle()
+        if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.start_login(mode,timeout_seconds)
+
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
         self._assert_idle()
         if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
@@ -562,6 +574,7 @@ METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
 METHODS.update({"model_catalog", "model_download_start", "model_download_status", "model_download_cancel", "model_install_recover"})
 METHODS.update({"rotation_preview", "rotation_validate"})
+METHODS.update({"prepare_login", "start_login"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})

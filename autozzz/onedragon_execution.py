@@ -38,7 +38,9 @@ class OneDragonExecution:
         self.script_control=ScriptPlaybackControl(self.control)
         self.assistant_control=AssistantModeControl(ctx,self.control)
         self.redemption_control=RedemptionControl(self.control)
-        for adapter in (self.script_control,self.assistant_control,self.redemption_control):adapter.install()
+        from .onedragon_login import LoginControl
+        self.login_control=LoginControl(ctx,self.control)
+        for adapter in (self.script_control,self.assistant_control,self.redemption_control,self.login_control):adapter.install()
         from .onedragon_push import NotificationControl
         self.notification_control = NotificationControl(ctx)
         self.notification_control.install()
@@ -51,6 +53,7 @@ class OneDragonExecution:
         self.hunt_control = None
         self.prepared_app = self.prepared_hash = ""
         self.route_debug = None
+        self.login_mode = ""
         self.prepared_applications=[]
         self.prepared_requirements={}
         self.preparation_step=""
@@ -144,6 +147,7 @@ class OneDragonExecution:
             self.charge_control=self.group_control=None
             self.script_control.reset()
             self.redemption_control.reset()
+            self.login_control.reset()
             self.resource_confirmation.prepare([], "")
             self.resource_control = None
             self.hunt_control = None
@@ -259,6 +263,51 @@ class OneDragonExecution:
             self.state="prepared"
         return self._submit("preparing",prepare)
 
+    def prepare_login(self,mode:str) -> dict:
+        if mode not in ("enter","switch","forced_enter"):raise ValueError("登录方式无效。")
+        if not self.ctx.ready_for_application:raise RuntimeError("请先初始化运行环境。")
+        def prepare():
+            self.ctx.push_service.reset_results()
+            self.prepared_app=self.prepared_hash=self.login_mode=""
+            self.prepared_applications=[];self.prepared_requirements={};self.route_debug=None
+            self.uses_charge=False;self.charge_control=self.group_control=self.hunt_control=self.resource_control=None
+            self.resource_confirmation.prepare([],"")
+            self.backend._refresh_runtime_config()
+            config=self.ctx.game_account_config
+            if self.connection!=(self.ctx.current_instance_idx,config.game_path,config.game_region,config.game_language):
+                raise ValueError("账号或登录设置已变化，请重新准备运行环境。")
+            if mode!="enter":
+                if not config.has_login_info:raise ValueError("自动换号需要完整登录资料。")
+                if config.game_region!="cn_b" and min(len(config.account.strip()),len(config.password.strip()))<=3:
+                    raise ValueError("登录账号与密码均须超过 3 个字符。")
+            self.ctx.push_service.protect_transient(config.account,config.password,config.bilibili_account_name)
+            self.ctx.on_switch_instance()
+            digest=self.configuration_digest()
+            self.login_control.reset(mode)
+            self.prepared_requirements=dict(login=dict(mode=mode),models=["onnx_ocr"],policies=[],resource_actions=[])
+            self.resource_confirmation.prepare([],digest)
+            self.login_mode=mode;self.prepared_hash=digest;self.prepared_app="_login";self.state="prepared"
+        return self._submit("preparing",prepare)
+
+    def start_login(self,mode:str,timeout_seconds:int=600) -> dict:
+        if not self.ctx.ready_for_application or self.prepared_app!="_login" or mode!=self.login_mode:
+            raise ValueError("请先准备所选登录方式。")
+        if type(timeout_seconds)is not int or not 30<=timeout_seconds<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+        def run():
+            try:
+                with RunLock():
+                    if self.prepared_hash!=self.configuration_digest():raise ValueError("登录配置已变化，请重新准备。")
+                    from zzz_od.operation.enter_game.enter_game import EnterGame
+                    from zzz_od.operation.enter_game.switch_account import SwitchAccount
+                    self.login_control.reset(mode)
+                    self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
+                    def factory(ctx):return SwitchAccount(ctx) if mode=="switch" else EnterGame(ctx,switch=mode=="forced_enter")
+                    self._run_bound_app("one_dragon",factory,display_name="账号登录")
+                    if self.state not in ("failed","stopped") and not self.login_control.status()["world_verified"]:
+                        self.state="failed";self.error="登录流程未核实进入大世界。"
+            finally:self.prepared_app=self.prepared_hash=self.login_mode=""
+        return self._submit("running",run)
+
     def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
                           resource_confirmation: str | None = None) -> dict:
         """通过已准备的配置启动实际上游应用，保留同一进程与任务锁。"""
@@ -283,6 +332,7 @@ class OneDragonExecution:
                 self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
                 self.script_control.reset()
                 self.redemption_control.reset()
+                self.login_control.reset()
                 self.charge_control=None
                 self.group_control=None
                 self.hunt_control=None
@@ -328,7 +378,7 @@ class OneDragonExecution:
                     if self.resource_control is not None:self.resource_control.close()
         return self._submit("running", run)
 
-    def _run_bound_app(self,app_id:str,op_factory=None) -> None:
+    def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试") -> None:
         self.ctx.push_service.reset_results()
         self.ctx.controller.bind(self.ctx.game_account_config.game_path)
         self.control.reset()
@@ -345,7 +395,7 @@ class OneDragonExecution:
                 self.state="stopped"
                 return
             if op_factory is None: ok,future=self.backend._start_app("autozzz",app_id,"one_dragon")
-            else: ok,future=self.backend.run_slot._start("autozzz",op_factory=op_factory,instance_idx=self.ctx.current_instance_idx,display_name="路线调试")
+            else: ok,future=self.backend.run_slot._start("autozzz",op_factory=op_factory,instance_idx=self.ctx.current_instance_idx,display_name=display_name)
             if not ok or future is None:raise RuntimeError("一条龙拒绝并发运行。")
             future.result()
             status=self.backend.query_status()
@@ -396,7 +446,7 @@ class OneDragonExecution:
                           ready=bool(self.ctx.ready_for_application), error=self.error)
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
-            result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts))
+            result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())
             result["resources"] = self.resource_confirmation.status()
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()
@@ -440,7 +490,7 @@ class OneDragonExecution:
         self.stop()
         if self.worker is not None:
             self.worker.join()  # 初始化下载或运行仍在退出时，保留同一线程与进程。
-        for adapter in (self.redemption_control,self.assistant_control,self.script_control):adapter.close()
+        for adapter in (self.login_control,self.redemption_control,self.assistant_control,self.script_control):adapter.close()
         self.notification_control.close()
         self.patrol_control.close()
         self.adapter.close()
