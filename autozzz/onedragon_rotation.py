@@ -123,7 +123,7 @@ class RotationPlans:
                         summary=requirements.summary()
                         row['uses_charge']=requirements.uses_charge
                         row['resources']=[dict(action,instance_idx=idx,instance_name=item.name,id=f'{idx}:'+action['id']) for action in requirements.resource_actions]
-                        row['requirements']={key:summary[key] for key in ('policies','models','challenges','routes','uses_hunt','plugins')}
+                        row['requirements']={key:summary[key] for key in ('policies','models','challenges','routes','uses_hunt','plugins','restore_charge')}
                     except Exception as exc:issue(idx,str(exc))
             finally:
                 ctx.current_instance_idx=old_index;ctx.reload_instance_config()

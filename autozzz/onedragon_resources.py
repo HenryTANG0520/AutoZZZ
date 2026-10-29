@@ -18,6 +18,7 @@ def resource_confirmation_label(actions: list[dict]) -> str:
     sensitive = [item for item in actions if item["requires_confirmation"]]
     plugins=any(item.get('kind')=='plugin' for item in sensitive)
     disc = any(item.get("app_id") == "drive_disc_dismantle" for item in sensitive)
+    if sensitive and all(item.get('kind')=='restore_charge' for item in sensitive):return '允许本轮按以上配置补充电量'
     if plugins:
         if disc:return '允许本轮执行以上插件和资源操作（拆解无法恢复）'
         return '允许本轮执行以上操作'

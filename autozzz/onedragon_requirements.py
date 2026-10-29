@@ -24,6 +24,7 @@ class ApplicationRequirements:
         self.plugins: list[dict] = []
         self.uses_charge = False
         self.uses_hunt = False
+        self.restore_charge='不使用'
 
     def policy(self, name: str, directory: str = "auto_battle") -> None:
         from .onedragon_service import OneDragonService
@@ -151,8 +152,10 @@ class ApplicationRequirements:
         from .onedragon_charge import ChargeBudgetControl
         from zzz_od.application.charge_plan.charge_plan_config import ChargePlanConfig
         config = self.store.get("charge_plan")
-        if config.restore_charge != "不使用":
-            raise ValueError("本轮仅使用现有电量，请将补充电量方式设为“不使用”。")
+        from .onedragon_restore import restore_action
+        self.restore_charge=config.restore_charge
+        action=restore_action(self.restore_charge)
+        if action is not None:self.resource_actions.append(action)
         plans = config.plan_list + ([config.combat_simulation_double_reward_config] if config.double_reward else [])
         if not plans:
             raise ValueError("请先添加刷本计划。")
@@ -240,4 +243,4 @@ class ApplicationRequirements:
         return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
                     models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
                     challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts),
-                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings), uses_hunt=self.uses_hunt,plugins=list(self.plugins))
+                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings), uses_hunt=self.uses_hunt,plugins=list(self.plugins),restore_charge=self.restore_charge)

@@ -139,7 +139,8 @@ class ExecutionWindow:
             entry=ttk.Entry(self.budget_frame,textvariable=var,width=6)
             entry.grid(row=0,column=col*2+1,sticky="w",padx=(0,d(18)))
             self.settings_controls.append(entry)
-        theme.wrapped_label(self.budget_frame,text="仅使用现有电量 · 不补充电量或合成电池",style="Hint.TLabel").grid(row=1,column=0,columnspan=5,sticky="ew",pady=(d(9),0))
+        self.budget_note=theme.wrapped_label(self.budget_frame,text="仅使用现有电量",style="Hint.TLabel")
+        self.budget_note.grid(row=1,column=0,columnspan=5,sticky="ew",pady=(d(9),0))
         self.budget_button=ttk.Button(self.budget_frame,text="预算记录…",command=self.budget_records)
         self.budget_button.grid(row=1,column=5,sticky="e",pady=(d(9),0))
         self.settings_controls.append(self.budget_button)
@@ -395,6 +396,8 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    if any(item.get('kind')=='restore_charge' for item in state.get('resources',{}).get('actions',[])):self.budget_note.grid_remove()
+                    else:self.budget_note.grid()
                     if self.trace_window is not None and not self.trace_window.closed:self.trace_window.update_state(state)
                     if self.battle_monitor is not None and self.battle_monitor.window.winfo_exists():self.battle_monitor.update(state.get('battle'))
                     if self.rotation_table is not None:
@@ -457,11 +460,15 @@ class ExecutionWindow:
                         if state["state"]=="success":name="已进入游戏" if login.get("world_verified") else "登录结果未核实"
                         elif self.busy and login.get("phase") and not state.get("preparation_step"):name=login["phase"]
                     if state["state"]=="success" and any(not item["reward_verified"] for item in state.get("resource_results",[])):
-                        name="流程结束 · 拆解结果未核实"
+                        unverified=[item for item in state['resource_results'] if not item['reward_verified']]
+                        name='流程结束 · 电量恢复结果未核实' if all(item.get('action')=='restore_charge' for item in unverified) else '流程结束 · 拆解结果未核实'
                     if control.get("focus_waiting"):name="等待游戏恢复焦点"
                     if self.paused:name="已暂停"
                     if state.get("time_limited"):name="已达到运行时限"
                     if state.get("budget",{}).get("limited"):name="已达到本轮预算"
+                    if not state.get('busy') and state['state'] in ('success','failed','stopped','interrupted'):
+                        if any(item.get('action')=='restore_charge' and not item.get('reward_verified') for item in state.get('resource_results',[])) and '电量恢复结果未核实' not in name:
+                            name+=' · 电量恢复结果未核实'
                     hunt=state.get("hunt",{})
                     fights=[]
                     if hunt.get("free_completed"):fights.append(f"免费 {hunt['free_completed']} 场")

@@ -259,6 +259,23 @@ def main():
                     window.session.state.update(state='success',busy=False,resource_results=[dict(reward_verified=False)])
                     window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
                     pump(root,lambda:'拆解结果未核实' in window.status.get())
+                    from autozzz.onedragon_restore import restore_action,BOTH
+                    window.session.state.update(state='prepared',busy=False,resource_results=[],resources=dict(actions=[restore_action(BOTH)],confirmation_required=True,confirmation_id='restore-1',confirmed=[]))
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:window.prepared and window.resource_confirmation_id=='restore-1')
+                    assert not window.budget_note.winfo_ismapped() and window.start_button.instate(['disabled'])
+                    for size in ('default','minimum'):
+                        if size=='minimum':window.window.geometry('%dx%d' % window.window.minsize())
+                        root.update();layout(window.window);cases.append([scale,size,'restore'])
+                    window.resource_check.invoke();window.start_button.invoke();pump(root,lambda:window.busy)
+                    assert window.session.commands[-1][1]['resource_confirmation']=='restore-1'
+                    window.stop_button.invoke();pump(root,lambda:not window.busy)
+                    window.session.state.update(state='success',busy=False,resource_results=[dict(action='restore_charge',reward_verified=False)])
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'电量恢复结果未核实' in window.status.get())
+                    window.session.state.update(state='stopped',budget=dict(limited=True))
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'已达到本轮预算' in window.status.get() and '电量恢复结果未核实' in window.status.get())
                     assert not errors,errors
                     window.close()
                     pump(root,lambda:window.closed)

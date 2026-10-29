@@ -13,13 +13,23 @@ from .onedragon_control import ExecutionStopped
 class ChargeBudgetControl:
     CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60}
 
-    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int):
+    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
         if type(max_per_battle)is not int or not 20<=max_per_battle<=100:raise ValueError("每场电量上限须为 20—100。")
         self.ctx,self.control,self.budget,self.maximum = ctx,control,budget,max_per_battle
         self.owner,self.cost,self.reservation = None,0,None
         self.originals = []
         self.limited = False
+        self.restore_mode,self.restore_authorized=restore_mode,restore_authorized
+        self.restore_control=None;self.restore_cost=0
+
+    def check_restore_budget(self):
+        if self.restore_mode=='不使用' or not self.restore_authorized:self._block('本轮未确认使用储蓄电量或以太电池。')
+        if self.reservation is not None:return
+        cost=self.restore_cost
+        if not cost or cost>self.maximum:self._block('尚未核实可执行的副本消耗，未恢复电量。')
+        if self.budget.remaining<cost or self.budget.rounds_left<=0:
+            self.limited=True;self.control.stop();raise ExecutionStopped('达到本轮电量或场次预算，未恢复电量。')
 
     def _block(self,message:str):
         self.control.stop(message)
@@ -54,7 +64,7 @@ class ChargeBudgetControl:
             allowed = {20,40,60,80,100}
             if operation.plan.card_num!="默认数量":allowed={20*int(operation.plan.card_num)}
         else:allowed={self.CATEGORIES[category]}
-        if cost not in allowed or available<cost:raise ValueError("当前电量或副本消耗与所选计划不一致。")
+        if cost not in allowed:raise ValueError("当前副本消耗与所选计划不一致。")
         return available,cost
 
     def _reserve(self,owner,cost:int):
@@ -86,6 +96,7 @@ class ChargeBudgetControl:
             if isinstance(operation, NotoriousHunt) and not operation.use_charge_power:
                 return original(operation)
             screen=operation.last_screenshot
+            if operation.round_by_find_area(screen,'恢复电量','标题-恢复电量').is_success:return original(operation)
             deploying=operation.round_by_find_area(screen,"实战模拟室","出战").is_success
             next_button=operation.round_by_find_area(screen,"实战模拟室","下一步").is_success
             if deploying:
@@ -94,8 +105,10 @@ class ChargeBudgetControl:
             elif not next_button:
                 return operation.round_retry("等待可核实消耗的副本选择画面",wait=.5)
             if next_button and not deploying:
-                try:_,cost=self._read_cost(operation)
+                try:available,cost=self._read_cost(operation)
                 except ValueError as exc:return operation.round_retry(str(exc),wait=.5)
+                self.restore_cost=cost
+                if available<cost:return original(operation)
                 self._reserve(operation,cost)
             return original(operation)
 
@@ -139,7 +152,10 @@ class ChargeBudgetControl:
             self._patch_node(cls,"after_battle",after_battle)
         self._patch_node(ChooseNextOrFinishAfterBattle,"check_next",repeat)
         self._patch_node(ChargePlanApp,"find_next_plan",next_plan)
-        for cls in (RestoreCharge,ExchangeEtherBattery):
+        if self.restore_mode!='不使用':
+            from .onedragon_restore import RestoreChargeControl
+            self.restore_control=RestoreChargeControl(self.ctx,self.control,self.restore_mode,self);self.restore_control.install()
+        for cls in ((RestoreCharge,ExchangeEtherBattery) if self.restore_control is None else (ExchangeEtherBattery,)):
             original=cls.execute
             self.originals.append((cls,"execute",original))
             def forbidden(_operation):self._block("本轮仅授权现有电量，不能补充电量或合成电池。")
@@ -150,5 +166,6 @@ class ChargeBudgetControl:
                     rounds_left=self.budget.rounds_left,pending=len(self.budget.pending),limited=self.limited)
 
     def close(self):
+        if self.restore_control is not None:self.restore_control.close()
         for cls,name,original in reversed(self.originals):setattr(cls,name,original)
         self.originals.clear()
