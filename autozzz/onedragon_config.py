@@ -323,7 +323,7 @@ class ConfigurationStore:
             for name in ("run_times", "plan_times"):
                 if type(getattr(plan,name)) is not int or getattr(plan,name)<0: raise ValueError("计划次数必须为非负整数。")
             if type(plan.predefined_team_idx) is not int or not -1 <= plan.predefined_team_idx < 20: raise ValueError("预编队伍序号无效。")
-            if plan.auto_battle_config not in policies: raise ValueError("战斗策略不存在。")
+            if plan.category_name != '合成电池' and plan.auto_battle_config not in policies: raise ValueError("战斗策略不存在。")
             if plan.card_num not in {item.value.value for item in CardNumEnum}: raise ValueError("怪物卡数量无效。")
             if plan.notorious_hunt_buff_num not in (1,2,3) or type(plan.notorious_hunt_buff_num) is not int: raise ValueError("恶名狩猎增益无效。")
             if plan.tab_name != "训练": raise ValueError("体力计划应位于训练页。")

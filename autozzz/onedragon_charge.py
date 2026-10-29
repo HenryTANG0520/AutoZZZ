@@ -11,17 +11,18 @@ from .onedragon_control import ExecutionStopped
 
 
 class ChargeBudgetControl:
-    CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60}
+    CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60,"合成电池":60}
 
-    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False):
+    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False,synthesis_authorized=False):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
-        if type(max_per_battle)is not int or not 20<=max_per_battle<=100:raise ValueError("每场电量上限须为 20—100。")
+        if type(max_per_battle)is not int or not 20<=max_per_battle<=100:raise ValueError("单次电量上限须为 20—100。")
         self.ctx,self.control,self.budget,self.maximum = ctx,control,budget,max_per_battle
         self.owner,self.cost,self.reservation = None,0,None
         self.originals = []
         self.limited = False
         self.restore_mode,self.restore_authorized=restore_mode,restore_authorized
         self.restore_control=None;self.restore_cost=0
+        self.synthesis_authorized=synthesis_authorized;self.synthesis_control=None
 
     def check_restore_budget(self):
         if self.restore_mode=='不使用' or not self.restore_authorized:self._block('本轮未确认使用储蓄电量或以太电池。')
@@ -72,7 +73,7 @@ class ChargeBudgetControl:
         if self.reservation is not None:
             if self.owner is not owner or self.cost!=cost:self._block("未结算的出战与当前副本不一致。")
             return
-        if cost>self.maximum:self._block("实际副本消耗超过每场电量上限。")
+        if cost>self.maximum:self._block("实际单次消耗超过电量上限。")
         if self.budget.remaining<cost or self.budget.rounds_left<=0:
             self.limited=True
             self.control.stop()
@@ -155,10 +156,13 @@ class ChargeBudgetControl:
         if self.restore_mode!='不使用':
             from .onedragon_restore import RestoreChargeControl
             self.restore_control=RestoreChargeControl(self.ctx,self.control,self.restore_mode,self);self.restore_control.install()
-        for cls in ((RestoreCharge,ExchangeEtherBattery) if self.restore_control is None else (ExchangeEtherBattery,)):
+        if self.synthesis_authorized:
+            from .onedragon_synthesis import SynthesisControl
+            self.synthesis_control=SynthesisControl(self.ctx,self.control,self);self.synthesis_control.install()
+        for cls in tuple(cls for cls,enabled in ((RestoreCharge,self.restore_control),(ExchangeEtherBattery,self.synthesis_control)) if enabled is None):
             original=cls.execute
             self.originals.append((cls,"execute",original))
-            def forbidden(_operation):self._block("本轮仅授权现有电量，不能补充电量或合成电池。")
+            def forbidden(_operation):self._block("本轮未确认此项补电或合成操作。")
             cls.execute=forbidden
 
     def status(self) -> dict:
@@ -166,6 +170,7 @@ class ChargeBudgetControl:
                     rounds_left=self.budget.rounds_left,pending=len(self.budget.pending),limited=self.limited)
 
     def close(self):
+        if self.synthesis_control is not None:self.synthesis_control.close()
         if self.restore_control is not None:self.restore_control.close()
         for cls,name,original in reversed(self.originals):setattr(cls,name,original)
         self.originals.clear()

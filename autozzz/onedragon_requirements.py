@@ -160,13 +160,16 @@ class ApplicationRequirements:
         if not plans:
             raise ValueError("请先添加刷本计划。")
         self.ctx.compendium_service.reload()
+        from .onedragon_synthesis import synthesis_action,CATEGORY
+        action=synthesis_action(config.plan_list,config.loop)
+        if action is not None:self.resource_actions.append(action)
         for plan in plans:
             if plan.category_name not in ChargeBudgetControl.CATEGORIES:
                 raise ValueError("该训练模式的预算适配尚未完成。")
             error = ChargePlanConfig.validate_item(self.ctx, plan)
             if error:
                 raise ValueError(error)
-            self.team_policy(plan.predefined_team_idx, plan.auto_battle_config)
+            if plan.category_name != CATEGORY:self.team_policy(plan.predefined_team_idx, plan.auto_battle_config)
             if plan.category_name == "恶名狩猎":
                 self.uses_hunt = True
                 self.models.add("lost_void_det")

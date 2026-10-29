@@ -467,8 +467,10 @@ class OneDragonExecution:
                         server="cn" if self.ctx.game_account_config.game_region in ("cn","cn_b") else "global"
                         ledger=BattleBudget(budget_directory(),budget["id"],server,budget["allowance"],budget["battle_limit"])
                         from .onedragon_restore import ACTION
+                        from .onedragon_synthesis import ACTION as SYNTHESIS
                         self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"],
-                            restore_mode=self.prepared_requirements.get('restore_charge','不使用'),restore_authorized=ACTION in self.resource_confirmation.accepted)
+                            restore_mode=self.prepared_requirements.get('restore_charge','不使用'),restore_authorized=ACTION in self.resource_confirmation.accepted,
+                            synthesis_authorized=SYNTHESIS in self.resource_confirmation.accepted)
                         self.charge_control.install()
                     if self.prepared_requirements.get("uses_hunt"):
                         from .onedragon_hunt import NotoriousHuntControl
@@ -592,6 +594,8 @@ class OneDragonExecution:
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             if self.charge_control is not None and self.charge_control.restore_control is not None:
                 result['resource_results'].extend(dict(item) for item in self.charge_control.restore_control.results)
+            if self.charge_control is not None and self.charge_control.synthesis_control is not None:
+                result['resource_results'].extend(dict(item) for item in self.charge_control.synthesis_control.results)
             result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()
             result["notifications"] = self.ctx.push_service.status()
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]

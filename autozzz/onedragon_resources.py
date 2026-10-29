@@ -19,6 +19,7 @@ def resource_confirmation_label(actions: list[dict]) -> str:
     plugins=any(item.get('kind')=='plugin' for item in sensitive)
     disc = any(item.get("app_id") == "drive_disc_dismantle" for item in sensitive)
     if sensitive and all(item.get('kind')=='restore_charge' for item in sensitive):return '允许本轮按以上配置补充电量'
+    if sensitive and all(item.get('kind')=='synthesize_battery' for item in sensitive):return '允许本轮合成以太电池（消耗电量、储值电卡和丁尼）'
     if plugins:
         if disc:return '允许本轮执行以上插件和资源操作（拆解无法恢复）'
         return '允许本轮执行以上操作'
@@ -28,6 +29,14 @@ def resource_confirmation_label(actions: list[dict]) -> str:
     if disc:
         return "允许本轮拆解以上驱动盘（无法恢复）"
     return "允许本轮按以上配置消费"
+
+
+def resource_result_warning(results):
+    names={'restore_charge':'电量恢复','synthesize_battery':'电池合成','dismantle':'拆解'}
+    unverified=[item for item in results if not item.get('reward_verified')]
+    if not unverified:return ''
+    labels=list(dict.fromkeys(names.get(item.get('action'),'拆解' if item.get('app_id')=='drive_disc_dismantle' else '资源操作') for item in unverified))
+    return '、'.join(labels)+'结果未核实'
 
 
 class ResourceConfirmation:

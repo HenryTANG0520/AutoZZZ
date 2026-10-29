@@ -101,6 +101,18 @@ def main():
                             assert dialog is not None
                             layout(dialog.window)
                             dialog.form.values()
+                            if key=='charge_plan':
+                                form=dialog.form;choice=form.selectors['category_name'];previous=choice.variable.get()
+                                choice.variable.set(next(item['label'] for item in choice.options if item['value']=='合成电池'))
+                                choice.widget.event_generate('<<ComboboxSelected>>');root.update();layout(dialog.window)
+                                values=form.values();assert values['mission_type_name']=='' and values['mission_name'] is None
+                                assert form.synthesis_note.winfo_ismapped()
+                                assert not form.selectors['mission_type_name'].widget.winfo_ismapped()
+                                assert not form.form.lines['auto_battle_config'].winfo_ismapped()
+                                assert form.form.lines['plan_times'].winfo_ismapped()
+                                choice.variable.set(previous);choice.widget.event_generate('<<ComboboxSelected>>');root.update()
+                                assert form.selectors['mission_type_name'].widget.winfo_ismapped() and form.form.lines['auto_battle_config'].winfo_ismapped()
+                                assert not form.synthesis_note.winfo_ismapped();form.values();layout(dialog.window)
                             dialog.window.destroy()
                             dialogs+=1
                         panel.tree.selection_set("shiyu_defense")

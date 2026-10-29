@@ -51,7 +51,7 @@ class ScalarForm:
     def __init__(self, parent, fields: list[dict], changed: Callable, scale=1.):
         self.frame = ttk.Frame(parent)
         self.frame.columnconfigure(1, weight=1)
-        self.fields, self.readers, self.controls = fields, {}, {}
+        self.fields, self.readers, self.controls, self.lines = fields, {}, {}, {}
         self.traces = []
         self.frame.bind("<Destroy>",self._destroyed,add="+")
         self.ready = False
@@ -65,6 +65,7 @@ class ScalarForm:
                 last_group=group
             name, kind, value = field["name"], field["kind"], field["value"]
             line = ttk.Frame(self.frame)
+            self.lines[name] = line
             line.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0,d(14)))
             line.columnconfigure(0, minsize=d(205))
             line.columnconfigure(1, weight=1)
@@ -175,10 +176,12 @@ class ScalarForm:
         # 让持有 Tcl 变量的读取器在主线程释放，不能留给下一次后台垃圾回收。
         self.readers.clear()
         self.controls.clear()
+        self.lines.clear()
 
-    def values(self) -> dict:
+    def values(self, names=None) -> dict:
         result = {}
         for field in self.fields:
+            if names is not None and field['name'] not in names:continue
             try: result[field["name"]] = self.readers[field["name"]]()
             except ValueError as exc: raise ValueError(field["label"]+"："+str(exc)) from None
         return result
@@ -195,6 +198,7 @@ class PlanForm:
         self.frame = ttk.Frame(parent)
         self.frame.columnconfigure(1,weight=1)
         self.selectors = {}
+        self.selector_labels = {}
         self.ready = False
         d = lambda n: round(n*scale)
         categories = [dict(label=v["label"],value=k) for k,v in self.training.items() if app_id!="notorious_hunt" or k=="恶名狩猎"]
@@ -203,7 +207,8 @@ class PlanForm:
             ("mission_type_name","训练项目",[],row.get("mission_type_name")),
             ("mission_name","目标副本",[],row.get("mission_name")),
         )):
-            ttk.Label(self.frame,text=label,style="Config.TLabel").grid(row=number,column=0,sticky="w",padx=(0,d(20)),pady=d(7))
+            self.selector_labels[name]=ttk.Label(self.frame,text=label,style="Config.TLabel")
+            self.selector_labels[name].grid(row=number,column=0,sticky="w",padx=(0,d(20)),pady=d(7))
             choice = Choice(self.frame,choices,value)
             choice.widget.grid(row=number,column=1,sticky="ew",pady=d(7))
             self.selectors[name] = choice
@@ -226,6 +231,18 @@ class PlanForm:
         self.form = ScalarForm(self.frame,fields,changed,scale)
         self.form.frame.grid(row=3,column=0,columnspan=2,sticky="ew",pady=(d(12),0))
         self.ready = True
+        self.synthesis_note=theme.wrapped_label(self.frame,text='每次：60 电量 + 100 储值电卡 + 丁尼',style='Hint.TLabel')
+        self.synthesis_note.grid(row=4,column=0,columnspan=2,sticky='ew',pady=(d(8),0))
+        self._visibility()
+
+    def _visibility(self):
+        synthesis=self.selectors['category_name'].get()=='合成电池'
+        for name in ('mission_type_name','mission_name'):
+            for widget in (self.selector_labels[name],self.selectors[name].widget):
+                widget.grid_remove() if synthesis else widget.grid()
+        for name,line in self.form.lines.items():
+            line.grid_remove() if synthesis and name not in ('plan_times','run_times') else line.grid()
+        self.synthesis_note.grid() if synthesis else self.synthesis_note.grid_remove()
 
     def _refresh_type(self, preferred, mission):
         category = self.selectors["category_name"].get()
@@ -233,6 +250,7 @@ class PlanForm:
         choices = [dict(label=v["label"],value=k) for k,v in types.items()] or [dict(label="无需选择",value="")]
         self.selectors["mission_type_name"].set_options(choices,preferred if preferred in types else choices[0]["value"])
         self._refresh_mission(mission)
+        if self.ready:self._visibility()
 
     def _refresh_mission(self, preferred):
         types = self.training[self.selectors["category_name"].get()]["types"]
@@ -241,7 +259,8 @@ class PlanForm:
         self.selectors["mission_name"].set_options(choices,preferred if preferred in [v["value"] for v in choices] else choices[0]["value"])
 
     def values(self):
-        row = dict(self.original,tab_name="训练",**self.form.values())
+        synthesis=self.selectors['category_name'].get()=='合成电池'
+        row = dict(self.original,tab_name="训练",**self.form.values(('plan_times','run_times') if synthesis else None))
         row.update({name:choice.get() for name,choice in self.selectors.items()})
         for name in ("plan_times","run_times"):
             if row[name]<0: raise ValueError("次数必须为非负整数。")
