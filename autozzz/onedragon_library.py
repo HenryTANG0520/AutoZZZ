@@ -362,6 +362,8 @@ class LibraryStore:
     def save(self, kind, key, data, revision, source_key="", source_revision=""):
         self.service._assert_idle()
         with profile_lock(self.root):
+            from .map_transaction import MapTransaction
+            MapTransaction(self.root).assert_clear()
             return self._save(kind, key, data, revision, source_key, source_revision)
 
     def _save(self, kind, key, data, revision, source_key="", source_revision=""):
@@ -396,6 +398,8 @@ class LibraryStore:
     def remove(self, kind, key, revision):
         self.service._assert_idle()
         with profile_lock(self.root):
+            from .map_transaction import MapTransaction
+            MapTransaction(self.root).assert_clear()
             path, template = self._path(kind, key), self._template(kind, key)
             if not path.is_file(): raise ValueError("内置原件不需要恢复；可先另存为自定义资料。")
             if self._revision(kind, key) != revision: raise ValueError("资料已变化，请重新读取。")
@@ -446,6 +450,8 @@ class LibraryStore:
     def rename(self, kind, key, name, revision):
         self.service._assert_idle()
         with profile_lock(self.root):
+            from .map_transaction import MapTransaction
+            MapTransaction(self.root).assert_clear()
             if kind == "world_patrol_route": raise ValueError("路线使用地图与序号标识；跨地图请复制路线。")
             if self._template(kind, key) is not None: raise ValueError("内置资料请使用另存为。")
             if self._revision(kind, key) != revision: raise ValueError("资料已变化，请重新读取。")

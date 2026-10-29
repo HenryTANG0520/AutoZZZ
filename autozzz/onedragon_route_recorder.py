@@ -51,6 +51,8 @@ def encode_client_image(path):
 
 
 def route_map(service, area_id, anchor):
+    from .map_transaction import MapTransaction
+    MapTransaction(service.data).assert_clear()
     from .onedragon_library import LibraryStore
     from one_dragon.base.geometry.point import Point
     store = LibraryStore(service)
@@ -102,10 +104,14 @@ class RouteCaptureJob:
 
     def start(self, area_id, anchor, game_path):
         self.service._assert_idle()
+        large_map, point = route_map(self.service, area_id, anchor)
+        return self._start(large_map, point, game_path)
+
+    def _start(self, large_map, point, game_path):
+        self.service._assert_idle()
         if self.closed: raise RuntimeError("截图会话已关闭。")
         game = Path(game_path)
         if game.name.casefold() != "zenlesszonezero.exe" or not game.is_file(): raise ValueError("请选择有效的 ZenlessZoneZero.exe。")
-        large_map, point = route_map(self.service, area_id, anchor)
         with self.lock:
             if self.busy: raise RuntimeError("截图任务仍在处理，请继续观察原任务。")
             self.job_id, self.state, self.error = uuid.uuid4().hex, "capturing", ""
@@ -116,6 +122,9 @@ class RouteCaptureJob:
             self.worker.start()
         return self.status(self.job_id)
 
+    def _calculate(self, large_map, anchor, screen):
+        return locate_position(self.service.ctx, large_map, anchor, screen)
+
     def _probe(self):
         return self.controller.probe() if self.controller is not None else WindowState(False, False, reason="截图器尚未绑定。")
 
@@ -125,6 +134,8 @@ class RouteCaptureJob:
     def _work(self, large_map, anchor, game_path):
         try:
             with RunLock(), profile_lock(self.service.data):
+                from .map_transaction import MapTransaction
+                MapTransaction(self.service.data).assert_clear()
                 from .onedragon_host import ManagedController
                 self.controller = ManagedController(self.service.ctx, self.control)
                 watch_stop = threading.Event()
@@ -141,7 +152,7 @@ class RouteCaptureJob:
                         try:
                             with self.control.scope():
                                 _, screen = self.controller.screenshot()
-                                result = locate_position(self.service.ctx, large_map, anchor, screen)
+                                result = self._calculate(large_map, anchor, screen)
                                 self.control.checkpoint(require_frame=True)
                         except ObservationExpired:
                             continue  # 保留同一任务，恢复焦点后重新获取画面。

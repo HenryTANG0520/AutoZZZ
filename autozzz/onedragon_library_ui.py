@@ -15,8 +15,9 @@ from .config import ROOT
 from .onedragon_forms import Choice, ScalarForm, enable_scroll
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
+from .onedragon_map_ui import MapEditor
 
-KINDS = {"迷失之地方案": "lost_void_challenge", "枯萎之都方案": "hollow_zero_challenge", "巡逻路线组": "world_patrol_route_list", "巡逻路线": "world_patrol_route"}
+KINDS = {"迷失之地方案": "lost_void_challenge", "枯萎之都方案": "hollow_zero_challenge", "巡逻路线组": "world_patrol_route_list", "巡逻路线": "world_patrol_route", "大地图": "world_patrol_map"}
 
 
 class DiagnosticsDialog:
@@ -40,7 +41,7 @@ class DiagnosticsDialog:
 
 
 class SelectionDialog:
-    def __init__(self, parent, title, rows, accept, scale):
+    def __init__(self, parent, title, rows, accept, scale, confirm_label="打开恢复草稿"):
         d = lambda n: round(n * scale)
         self.rows, self.accept = rows, accept
         self.window = tk.Toplevel(parent)
@@ -58,7 +59,7 @@ class SelectionDialog:
         for i, row in enumerate(rows): self.table.insert("", "end", iid=str(i), values=(row["key"], row["created_at"]))
         if rows: self.table.selection_set("0")
         actions = ttk.Frame(self.window, padding=d(16)); actions.grid(row=1, column=0, sticky="e")
-        ttk.Button(actions, text="打开恢复草稿", command=self.confirm).pack(side="left", padx=(0, d(8)))
+        ttk.Button(actions, text=confirm_label, command=self.confirm).pack(side="left", padx=(0, d(8)))
         ttk.Button(actions, text="取消", command=self.window.destroy).pack(side="left")
         self.table.bind("<Double-1>", lambda _: self.confirm())
         self.window.bind("<Return>", lambda _: self.confirm())
@@ -347,6 +348,7 @@ class LibraryWindow:
         self.document, self.editor, self.callback, self.dialog = None, None, None, None
         self.catalog, self.frozen, self.events = dict(items=[], archives=[], areas=[]), [], queue.Queue()
         self.capture=None;self.capture_cancel=False;self.capture_pause=None;self.next_capture_poll=0.
+        self.map_view=None
         self.window = tk.Toplevel(ui.root); self.window.title("AutoZZZ · 方案与路线"); self.window.transient(ui.root)
         self.window.configure(background=theme.PANEL)
         d = lambda n: round(n * ui.ui_scale)
@@ -362,6 +364,7 @@ class LibraryWindow:
         for label, command in (("新建…", self.new), ("另存为…", self.copy), ("改名…", self.rename), ("导入 YAML…", self.import_file), ("导出 YAML…", self.export_file), ("从归档恢复…", self.archives), ("归档 / 恢复内置", self.remove)):
             self.menu.add_command(label=label, command=command)
         self.menu.add_command(label="资料问题…", command=self.diagnostics)
+        self.menu.add_command(label="恢复中断的地图保存…",command=self.recover_map)
         body = ttk.Frame(self.window, padding=(d(18), 0)); body.grid(row=1, column=0, sticky="nsew"); body.columnconfigure(1, weight=1); body.rowconfigure(0, weight=1)
         nav = ttk.Frame(body); nav.grid(row=0, column=0, sticky="ns", padx=(0, d(18))); nav.rowconfigure(2, weight=1)
         self.kind_var = tk.StringVar(self.window, next(label for label, value in KINDS.items() if value == kind))
@@ -413,6 +416,7 @@ class LibraryWindow:
         for index in range(7): self.menu.entryconfigure(index, state="normal" if allowed else "disabled")
         issue_count = len(self.catalog.get("issues", []))
         self.menu.entryconfigure(7, label=f"资料问题（{issue_count}）…", state="normal" if allowed and issue_count else "disabled")
+        self.menu.entryconfigure(8,state='normal' if allowed and self.catalog.get('map_pending') else 'disabled')
         for index in (1, 2, 4, 6):
             if document is None: self.menu.entryconfigure(index, state="disabled")
         if document is not None:
@@ -421,8 +425,12 @@ class LibraryWindow:
             if document["builtin"] or self.kind == "world_patrol_route": self.menu.entryconfigure(2, state="disabled")
             self.menu.entryconfigure(6, label="恢复内置" if document["builtin"] else "归档资料")
             if document["builtin"] and not document["overridden"]: self.menu.entryconfigure(6, state="disabled")
-        if self.kind == "world_patrol_route": self.area_selector.master.grid()
+        if self.kind in ("world_patrol_route","world_patrol_map"): self.area_selector.master.grid()
         else: self.area_selector.master.grid_remove()
+        if self.kind=='world_patrol_map':
+            for index in (0,1,2,3,4,5):self.menu.entryconfigure(index,state='disabled')
+            self.menu.entryconfigure(6,label='移除地图')
+            if document is not None and not document.get('preview',{}).get('width'):self.menu.entryconfigure(6,state='disabled')
 
     def request(self, method, callback, **params):
         if self.busy or self.closing or not self.connected: return
@@ -439,7 +447,7 @@ class LibraryWindow:
             elif isinstance(widget, tk.Text): self.frozen.append((widget, widget.cget("state"))); widget.configure(state="disabled")
             for child in widget.winfo_children(): freeze(child)
         freeze(self.content)
-        if isinstance(self.editor, (RouteEditor, GroupEditor)): self.editor.enabled = False
+        if isinstance(self.editor, (RouteEditor, GroupEditor, MapEditor)): self.editor.enabled = False
 
     def thaw(self):
         for widget, state in self.frozen:
@@ -447,7 +455,7 @@ class LibraryWindow:
                 if isinstance(widget, tk.Text): widget.configure(state=state)
                 else: widget.state(["!disabled", "!readonly"]); widget.state(state)
         self.frozen.clear()
-        if isinstance(self.editor, (RouteEditor, GroupEditor)): self.editor.enabled = True
+        if isinstance(self.editor, (RouteEditor, GroupEditor, MapEditor)): self.editor.enabled = True
 
     def loaded(self, catalog, preferred=""):
         self.catalog = catalog
@@ -461,13 +469,27 @@ class LibraryWindow:
         return next((a["id"] for a in self.catalog["areas"] if a["entry_name"] + " · " + a["name"] == self.area_var.get()), "")
 
     def refresh_nav(self, preferred="", auto_select=True):
+        if self.kind=='world_patrol_map':
+            entries=list(dict.fromkeys(a['entry_name'] for a in self.catalog['areas']))
+            self.area_selector.configure(values=entries)
+            preferred_area=next((a for a in self.catalog['areas'] if a['id']==preferred),None)
+            if preferred_area:self.area_var.set(preferred_area['entry_name'])
+            elif self.area_var.get() not in entries and entries:self.area_var.set(entries[0])
+        else:
+            areas=[a['entry_name']+' · '+a['name'] for a in self.catalog['areas']]
+            self.area_selector.configure(values=areas)
+            if self.area_var.get() not in areas and areas:self.area_var.set(areas[0])
         self.table.delete(*self.table.get_children())
         for row in self.catalog["items"]:
+            if self.kind=='world_patrol_map':
+                area=next((a for a in self.catalog['areas'] if a['id']==row['key']),None)
+                if area is None or area['entry_name']!=self.area_var.get():continue
             if row["kind"] == self.kind and (self.kind != "world_patrol_route" or row["area_id"] == self.current_area()):
-                self.table.insert("", "end", iid=row["key"], text=row.get("short_name", row["name"]) if self.kind == "world_patrol_route" else row["name"])
+                self.table.insert("", "end", iid=row["key"], text=row.get("short_name", row["name"]) if self.kind in ("world_patrol_route","world_patrol_map") else row["name"])
         values = self.table.get_children()
         if preferred in values: self.table.selection_set(preferred)
         elif values and auto_select: self.table.selection_set(values[0])
+        if self.table.selection():self.table.see(self.table.selection()[0])
         if auto_select: self.select()
         self.buttons()
 
@@ -485,8 +507,9 @@ class LibraryWindow:
         if self.busy or self.capture is not None or not self.allow_leave():
             if self.document is not None:
                 area = self.document["data"].get("tp_area_id")
+                if self.kind=='world_patrol_map':area=self.document['key']
                 row = next((r for r in self.catalog["areas"] if r["id"] == area), None)
-                if row: self.area_var.set(row["entry_name"] + " · " + row["name"])
+                if row: self.area_var.set(row['entry_name'] if self.kind=='world_patrol_map' else row["entry_name"] + " · " + row["name"])
             return
         self.clear(); self.document = None; self.refresh_nav()
 
@@ -525,8 +548,11 @@ class LibraryWindow:
         metadata = "内置资料 · 保存为本地覆盖" if document["builtin"] else "自定义资料"
         author = document["data"].get("author")
         if author: metadata += " · 作者：" + ("、".join(map(str, author)) if isinstance(author, list) else str(author))
-        self.info.set(metadata)
+        self.info.set('地图资料' if document['kind']=='world_patrol_map' else metadata)
         if document["kind"] == "world_patrol_route": self.editor = RouteEditor(self.content, document, preview, self.changed, self.ui.ui_scale, self.locate, self.debug)
+        elif document['kind']=='world_patrol_map':
+            view=self.map_view[1] if self.map_view is not None and self.map_view[0]==document['key'] else None
+            self.editor=MapEditor(self.content,document,self.map_action,self.map_capture,self.map_archives,self.ui.ui_scale,view)
         elif document["kind"] == "world_patrol_route_list": self.editor = GroupEditor(self.content, document, self.catalog, self.changed, self.ui.ui_scale)
         else: self.editor = ScalarForm(self.content, document["fields"], self.changed, self.ui.ui_scale)
         self.editor.frame.grid(row=0, column=0, sticky="ew")
@@ -539,7 +565,7 @@ class LibraryWindow:
 
     def values(self):
         if self.document is None or self.editor is None: raise ValueError("请先读取或新建资料。")
-        if isinstance(self.editor, (RouteEditor, GroupEditor)): return self.editor.values()
+        if isinstance(self.editor, (RouteEditor, GroupEditor, MapEditor)): return self.editor.values()
         return dict(copy.deepcopy(self.document["data"]), **self.editor.values())
 
     def save(self):
@@ -562,10 +588,7 @@ class LibraryWindow:
     def refresh_catalog(self, document=None):
         def loaded(catalog):
             self.catalog = catalog
-            self.table.delete(*self.table.get_children())
-            for row in catalog["items"]:
-                if row["kind"] == self.kind and (self.kind != "world_patrol_route" or row["area_id"] == self.current_area()): self.table.insert("", "end", iid=row["key"], text=row.get("short_name", row["name"]) if self.kind == "world_patrol_route" else row["name"])
-            if document and self.table.exists(document["key"]): self.table.selection_set(document["key"])
+            self.refresh_nav(document['key'] if document else '',auto_select=False)
             if document: self.status.set(document.get("notice") or "已保存")
         self.request("library_catalog", loaded)
 
@@ -671,7 +694,9 @@ class LibraryWindow:
             self.status.set("正在取消截图…" if self.capture_cancel else {"focus_wait":"等待游戏恢复焦点 · F9 暂停 / F10 停止","paused":"截图已暂停 · F9 继续","success":"等待截图器退出…"}.get(result["state"],"正在识别位置 · F9 暂停 / F10 停止"))
         else:
             self.capture=None;self.capture_cancel=False;self.capture_pause=None;self.thaw()
-            if result["state"]=="success" and result.get("result") is not None:self.position_result(result["result"])
+            if result["state"]=="success" and result.get("result") is not None:
+                if result.get('kind')=='map':self.map_action('captured',result['result'])
+                else:self.position_result(result["result"])
             else:self.status.set(result.get("error") or "截图已取消")
         self.buttons()
 
@@ -681,6 +706,58 @@ class LibraryWindow:
 
     def cancel_capture(self):
         if self.capture is not None:self.capture_cancel=True;self.next_capture_poll=0.;self.buttons()
+
+    def map_action(self,action,value=None):
+        if self.busy or self.capture is not None or not isinstance(self.editor,MapEditor):return
+        if action=='invalid_import':self.status.set(str(value));return
+        self.map_view=(self.document['key'],self.editor.view())
+        if action=='import' and len(value)==2:
+            def first_imported(document):
+                self.display(document)
+                self.request('map_edit',self.display,data=document['data'],action='append_frame',value=value[1])
+            self.request('map_edit',first_imported,data=self.editor.values(),action='import',value=[value[0]])
+            return
+        self.request('map_edit',self.display,data=self.editor.values(),action=action,value=value)
+
+    def map_capture(self,rotate):
+        if self.busy or self.capture is not None or not isinstance(self.editor,MapEditor):return
+        from .config import GAME_PATHS
+        game_path=self.ui.game_path.get() if self.ui.server.get()==('国服' if self.profile=='cn' else '国际服') else GAME_PATHS[self.profile]
+        self.map_view=(self.document['key'],self.editor.view())
+        self.capture_cancel=False;self.capture_pause=None
+        self.request('map_capture_start',self.capture_result,data=self.editor.values(),game_path=game_path,rotate=rotate)
+
+    def map_archives(self):
+        if self.busy or self.capture is not None or self.document is None or not self.allow_leave():return
+        key,revision=self.document['key'],self.document['revision']
+        def loaded(result):
+            if result['issues']:
+                existing={row['file']:row for row in self.catalog.get('issues',[])}
+                existing.update({row['file']:row for row in result['issues']});self.catalog['issues']=list(existing.values())
+                self.status.set(f"{len(result['issues'])} 项地图归档无法读取，可从资料问题查看。")
+            if not result['items']:
+                if result['issues']:self.dialog=DiagnosticsDialog(self.window,result['issues'],self.ui.ui_scale)
+                else:self.status.set('暂无地图归档')
+                return
+            def selected(row):
+                if not row['restorable']:self.status.set('归档后地图或路线已有修改，不能覆盖。');return
+                if messagebox.askyesno('恢复地图归档',f"恢复此地图归档，并同时恢复 {row['route_count']} 条关联路线？",parent=self.window):
+                    self.request('map_restore',self.display,key=key,identifier=row['id'],revision=revision)
+            rows=[dict(row,key=row['key']+(' · 可恢复' if row['restorable'] else ' · 已有后续修改')) for row in result['items']]
+            self.dialog=SelectionDialog(self.window,'恢复地图归档',rows,selected,self.ui.ui_scale,confirm_label='恢复此归档')
+        self.request('map_archives',loaded,key=key)
+
+    def recover_map(self):
+        if self.busy or self.capture is not None or not self.allow_leave():return
+        if not messagebox.askyesno('恢复中断保存','恢复上次中断保存之前的地图和关联路线？',parent=self.window):return
+        def recovered(result):
+            key=result.get('area_id')
+            if key:
+                self.kind='world_patrol_map';self.kind_var.set('大地图')
+                self.request('library_read',self.display,kind=self.kind,key=key)
+            else:self.status.set('没有待恢复的地图保存。')
+            self.catalog['map_pending']=False
+        self.request('map_recover',recovered)
 
     def debug(self):
         if self.busy or self.capture is not None or self.document is None:return
@@ -718,9 +795,10 @@ class LibraryWindow:
                 self.buttons()
         except queue.Empty: pass
         if self.capture is not None and not self.busy and not self.closing and time.monotonic()>=self.next_capture_poll:
-            method="route_capture_cancel" if self.capture_cancel else "route_capture_pause" if self.capture_pause is not None else "route_capture_status"
+            prefix='map_capture_' if self.capture.get('kind')=='map' else 'route_capture_'
+            method=prefix+('cancel' if self.capture_cancel else 'pause' if self.capture_pause is not None else 'status')
             params=dict(job_id=self.capture["job_id"])
-            if method=="route_capture_pause":params["paused"]=self.capture_pause;self.capture_pause=None
+            if method.endswith('_pause'):params["paused"]=self.capture_pause;self.capture_pause=None
             self.next_capture_poll=time.monotonic()+.3
             self.request(method,self.capture_result,**params)
         # 地图读取保持同一请求；完成后才刷新目录，避免覆盖 display 的回调。

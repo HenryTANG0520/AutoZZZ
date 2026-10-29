@@ -36,6 +36,8 @@ class OneDragonService:
         self._environment_changed = False
         self._binding = None
         self._route_capture = None
+        self._maps = None
+        self._map_capture = None
 
     @property
     def ctx(self) -> Any:
@@ -133,7 +135,38 @@ class OneDragonService:
 
     def library_catalog(self):
         from .onedragon_library import LibraryStore
-        return LibraryStore(self).catalog()
+        result=LibraryStore(self).catalog()
+        maps=self._map_store();result['items'].extend(maps.catalog());result['map_pending']=maps.tx.pending.exists()
+        return result
+
+    def _map_store(self):
+        if self._maps is None:
+            from .onedragon_maps import MapStore
+            self._maps=MapStore(self)
+        return self._maps
+
+    def map_edit(self,data:dict,action:str,value=None):return self._map_store().edit(data,action,value)
+    def map_archives(self,key:str):return self._map_store().archives(key)
+    def map_restore(self,key:str,identifier:str,revision:str):return self._map_store().restore(key,identifier,revision)
+    def map_recover(self):return self._map_store().recover()
+
+    def map_capture_start(self,data:dict,game_path:str,rotate:bool=False):
+        self._assert_idle()
+        from .onedragon_map_capture import MapCaptureJob
+        if self._map_capture is None:self._map_capture=MapCaptureJob(self)
+        return self._map_capture.start_map(data,game_path,rotate)
+
+    def map_capture_status(self,job_id:str):
+        if self._map_capture is None:raise ValueError('地图取景尚未开始。')
+        return self._map_capture.status(job_id)
+
+    def map_capture_pause(self,job_id:str,paused:bool):
+        if self._map_capture is None:raise ValueError('地图取景尚未开始。')
+        return self._map_capture.pause(job_id,paused)
+
+    def map_capture_cancel(self,job_id:str):
+        if self._map_capture is None:raise ValueError('地图取景尚未开始。')
+        return self._map_capture.cancel(job_id)
 
     def route_locate(self, area_id: str, anchor: list, image: str):
         self._assert_idle()
@@ -162,6 +195,7 @@ class OneDragonService:
         return self._route_capture.pause(job_id, paused)
 
     def library_read(self, kind: str, key: str):
+        if kind=='world_patrol_map':return self._map_store().read(key)
         from .onedragon_library import LibraryStore
         return LibraryStore(self).read(kind, key)
 
@@ -170,10 +204,12 @@ class OneDragonService:
         return LibraryStore(self).draft(kind, key, source_key, source_revision, area_id, text, data)
 
     def library_save(self, kind: str, key: str, data: dict, revision: str, source_key: str = "", source_revision: str = ""):
+        if kind=='world_patrol_map':return self._map_store().save(key,data,revision)
         from .onedragon_library import LibraryStore
         return LibraryStore(self).save(kind, key, data, revision, source_key, source_revision)
 
     def library_remove(self, kind: str, key: str, revision: str):
+        if kind=='world_patrol_map':return self._map_store().remove(key,revision)
         from .onedragon_library import LibraryStore
         return LibraryStore(self).remove(kind, key, revision)
 
@@ -359,6 +395,8 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if self._map_capture is not None and self._map_capture.busy:
+            raise RuntimeError("地图取景仍在处理，请等待或取消原任务。")
         if self._route_capture is not None and self._route_capture.busy:
             raise RuntimeError("路线截图仍在处理，请等待或取消原任务。")
         if self._binding is not None and self._binding.busy:
@@ -368,6 +406,8 @@ class OneDragonService:
 
     def initialize_execution(self, server: str, game_path: str, region: str | None = None,instance_idx:int|None=None) -> dict:
         self._assert_idle()
+        from .map_transaction import MapTransaction
+        MapTransaction(self.data).assert_clear()
         if self._environment_changed:
             raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         from .onedragon_environment import EnvironmentStore, validate_environment
@@ -456,6 +496,7 @@ class OneDragonService:
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
+        if self._map_capture is not None:self._map_capture.close()
         if self._route_capture is not None: self._route_capture.close()
         if self._binding is not None:
             self._binding.close()
@@ -492,3 +533,5 @@ METHODS.update({"notification_channels", "notification_channel", "notification_c
 METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
+METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
+METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
