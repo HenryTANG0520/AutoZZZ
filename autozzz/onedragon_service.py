@@ -38,6 +38,7 @@ class OneDragonService:
         self._route_capture = None
         self._maps = None
         self._map_capture = None
+        self._downloads = None
 
     @property
     def ctx(self) -> Any:
@@ -124,6 +125,18 @@ class OneDragonService:
             from .onedragon_qq_binding import QQBinding
             self._binding = QQBinding(self)
         return self._binding.start(is_group, revision)
+
+    def _download_service(self):
+        if self._downloads is None:
+            from .onedragon_downloads import ModelDownloads
+            self._downloads = ModelDownloads(self)
+        return self._downloads
+
+    def model_catalog(self): return self._download_service().catalog()
+    def model_download_start(self, resource_id: str, revision: str): return self._download_service().start(resource_id,revision)
+    def model_download_status(self, job_id: str): return self._download_service().status(job_id)
+    def model_download_cancel(self, job_id: str): return self._download_service().cancel(job_id)
+    def model_install_recover(self): return self._download_service().recover()
 
     def qq_bind_status(self, job_id: str):
         if self._binding is None: raise ValueError("QQ 绑定尚未开始。")
@@ -395,6 +408,8 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if self._downloads is not None and self._downloads.busy:
+            raise RuntimeError("模型下载仍在处理，请等待或取消原任务。")
         if self._map_capture is not None and self._map_capture.busy:
             raise RuntimeError("地图取景仍在处理，请等待或取消原任务。")
         if self._route_capture is not None and self._route_capture.busy:
@@ -408,6 +423,8 @@ class OneDragonService:
         self._assert_idle()
         from .map_transaction import MapTransaction
         MapTransaction(self.data).assert_clear()
+        from .model_install import ModelInstall
+        ModelInstall(self.data).assert_clear()
         if self._environment_changed:
             raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         from .onedragon_environment import EnvironmentStore, validate_environment
@@ -496,6 +513,7 @@ class OneDragonService:
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
+        if self._downloads is not None:self._downloads.close()
         if self._map_capture is not None:self._map_capture.close()
         if self._route_capture is not None: self._route_capture.close()
         if self._binding is not None:
@@ -532,6 +550,7 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
 METHODS.update({"notification_channels", "notification_channel", "notification_channel_save", "notification_test"})
 METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
+METHODS.update({"model_catalog", "model_download_start", "model_download_status", "model_download_cancel", "model_install_recover"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})

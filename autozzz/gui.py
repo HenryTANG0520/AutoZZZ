@@ -653,7 +653,9 @@ class AutoZZZWindow:
         notification_worker_alive=notifications is not None and notifications.worker.is_alive()
         library=getattr(self,"library_window",None)
         library_worker_alive=library is not None and library.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive:
+        downloads=getattr(self,"downloads_window",None)
+        downloads_worker_alive=downloads is not None and downloads.worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
@@ -677,6 +679,8 @@ class AutoZZZWindow:
         if notifications is not None and not notifications.closed and not notifications.close():return
         library=getattr(self,"library_window",None)
         if library is not None and not library.closed and not library.close():return
+        downloads=getattr(self,"downloads_window",None)
+        if downloads is not None and not downloads.closed:downloads.close()
         if applications is not None:
             applications.close(discard=True)
         execution=getattr(self,"execution_window",None)
@@ -688,7 +692,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()):
             self._destroy_root()
 
     def _destroy_root(self):

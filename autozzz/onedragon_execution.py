@@ -105,6 +105,8 @@ class OneDragonExecution:
                     with profile_lock(self.data):
                         from .map_transaction import MapTransaction
                         MapTransaction(self.data).assert_clear()
+                        from .model_install import ModelInstall
+                        ModelInstall(self.data).assert_clear()
                         operation()
                         with self.lock:
                             if self.cancelled.is_set():
