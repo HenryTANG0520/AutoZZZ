@@ -314,7 +314,7 @@ class ManagedController(ZPcController):
         bound = self.game_win.bound
         if bound is None:
             raise ValueError("尚未绑定游戏窗口。")
-        watch = bound.request_close(lambda: self.control.checkpoint(require_frame=True))
+        watch = bound.request_close(lambda: self.control.checkpoint(require_frame=True),submit=self.control.input)
         watch.close()
 
 

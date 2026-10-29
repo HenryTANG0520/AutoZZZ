@@ -74,6 +74,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.client.call("count"), 1)
         self.assertEqual(self.popen.call_count, 1)
 
+    def test_ordinary_worker_does_not_inherit_a_foreign_task_lease(self):
+        from autozzz.task_lease import LEASE_ENV
+        import os
+        with patch.dict(os.environ,{LEASE_ENV:'fixture foreign lease'}):
+            other=OneDragonClient(self.paths)
+            try:other.start()
+            finally:other.close()
+        self.assertNotIn(LEASE_ENV,self.popen.call_args.kwargs['env'])
+
+    def test_missing_worker_acknowledgement_rejects_requested_lease(self):
+        from types import SimpleNamespace
+        other=OneDragonClient(self.paths,run_lease=SimpleNamespace(export=lambda:'fixture requested lease'))
+        with self.assertRaisesRegex(RuntimeUnavailable,'未确认轮换任务锁'):other.start()
+        self.assertFalse(other.alive)
+
     def test_remote_error_does_not_restart_process(self):
         with self.assertRaisesRegex(RemoteError, "配置无效"):
             self.client.call("error")

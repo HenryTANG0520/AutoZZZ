@@ -10,6 +10,16 @@ import sys
 from .onedragon_runtime import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, UPSTREAM_REVISION
 
 
+def close_service(service):
+    try:
+        execution=getattr(service,'_execution',None)
+        if execution is not None:
+            try:execution.stop()
+            finally:
+                if execution.worker is not None:execution.worker.join()
+    finally:service.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True, type=Path)
@@ -18,11 +28,14 @@ def main() -> int:
     output = sys.stdout
     sys.stdout = sys.stderr
     service = None
+    run_lease = None
     try:
         if sys.version_info[:2] != (3, 11):
             raise RuntimeError("一条龙必须使用独立的 Python 3.11 环境。")
         from .onedragon_service import METHODS, OneDragonService
-        service = OneDragonService(args.source, args.data)
+        from .task_lease import JoinedRunLease
+        run_lease=JoinedRunLease.from_environment()
+        service = OneDragonService(args.source, args.data,run_lease=run_lease)
         while True:
             line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1)
             if not line:
@@ -40,7 +53,7 @@ def main() -> int:
                 method = request["method"]
                 if method == "hello":
                     result = dict(protocol=PROTOCOL_VERSION, revision=UPSTREAM_REVISION,
-                                  python=sys.version.split()[0], pid=os.getpid(), input_enabled=False)
+                                  python=sys.version.split()[0], pid=os.getpid(), input_enabled=False,task_lease=run_lease is not None)
                 elif method in METHODS:
                     result = getattr(service, method)(**request["params"])
                 else:
@@ -54,8 +67,10 @@ def main() -> int:
             output.write(encoded + "\n")
             output.flush()
     finally:
-        if service:
-            service.close()
+        try:
+            if service:close_service(service)
+        finally:
+            if run_lease is not None:run_lease.close()
     return 0
 
 

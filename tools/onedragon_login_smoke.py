@@ -33,15 +33,17 @@ def main():
     from autozzz.onedragon_execution import OneDragonExecution
     from zzz_od.operation.enter_game.enter_game import EnterGame
     from test_clipboard_fixture import Clipboard
-    service=OneDragonService(defaults.source,data);manager=None;checks=[]
+    from autozzz.task_lease import JoinedRunLease
+    run_lease=JoinedRunLease.from_environment()
+    service=OneDragonService(defaults.source,data,run_lease=run_lease);manager=None;checks=[]
     def forbidden(*_,**__):raise AssertionError('登录回放禁止真实输入、剪贴板或外部操作')
     with ExitStack() as blocks:
-        for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','autozzz.windows.find_game','pynput.keyboard.Controller.press','pynput.mouse.Controller.press','win32clipboard.OpenClipboard'):
+        for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','autozzz.windows.find_game','autozzz.windows.user32.PostMessageW','pynput.keyboard.Controller.press','pynput.mouse.Controller.press','win32clipboard.OpenClipboard'):
             blocks.enter_context(patch(name,side_effect=forbidden))
         blocks.enter_context(patch('autozzz.windows.user32.GetAsyncKeyState',return_value=0))
         try:
             ctx=service.ctx;ctx.screen_loader.reload()
-            manager=OneDragonExecution(ctx);service._execution=manager;control=manager.control;login=manager.login_control
+            manager=OneDragonExecution(ctx,run_lease=run_lease);service._execution=manager;control=manager.control;login=manager.login_control
             clip=Clipboard('original clipboard fixture');login.clipboard=ClipboardPaste(clip)
             fixture=SimpleNamespace(focused=True,world=False,current='',fields={},selected=False,modifiers=set(),clicks=[],submits=0,
                                     interruption=None,keyboard_hook=None,word=None,manual_b=False,menu=False,region='America',target='Asia',dragged=0)
@@ -371,6 +373,45 @@ def main():
             checks.append('stop_during_startup_wait_keeps_original_job_and_never_constructs_login_or_application')
             ctx.controller.game_win.bound=None;ctx.controller.bind=original_bind
 
+            # 退出只作用于预先核实的 HWND/PID，关闭窗口后仍等待原进程退出证据。
+            reset();config.save();exit_wait=threading.Event();allow_exit=threading.Event();posts=[];closed=[]
+            game_window=SimpleNamespace(hwnd=555)
+            def request_close(checkpoint,submit):
+                checkpoint();submit(lambda:posts.append('wm_close') or True)
+                def exited():exit_wait.set();return allow_exit.is_set()
+                return SimpleNamespace(exited=exited,close=lambda:closed.append(True))
+            game_window.request_close=request_close
+            def bind_exit(path):ctx.controller.game_win.bound=game_window;ctx.controller.game_win.process_id=51
+            original_probe=ctx.controller.probe
+            target=dict(window_handle=555,process_id=51)
+            service.prepare_client_close(target);manager.worker.join(5)
+            assert service.execution_status()['state']=='prepared'
+            with patch.object(ctx.controller,'bind',bind_exit),patch.object(ctx.controller,'probe',side_effect=lambda:WindowState(False,False) if posts else original_probe()),patch.object(ctx.controller.game_win,'clear_binding',create=True,side_effect=lambda:setattr(ctx.controller.game_win,'bound',None)):
+                started=service.start_client_close(timeout_seconds=5)
+                assert exit_wait.wait(3)
+                state=service.execution_status();assert state['job_id']==started['job_id'] and state['busy'] and posts==['wm_close'] and not state['client_exit']['process_exited'],state
+                allow_exit.set();manager.worker.join(5)
+            state=service.execution_status();assert state['state']=='success' and state['client_exit']['process_exited'] and len(closed)==1,state
+            assert ctx.controller.game_win.bound is None
+            try:service.start_client_close();raise AssertionError('old close preparation reused')
+            except ValueError:pass
+            checks.append('client_close_uses_one_verified_window_request_and_waits_original_process_exit_in_same_job_without_duplicate_submission')
+
+            service.prepare_client_close(target);manager.worker.join(5);posts.clear()
+            with patch.object(ctx.controller,'bind',replaced_bind):
+                service.start_client_close(timeout_seconds=5);manager.worker.join(5)
+            state=service.execution_status();assert state['state']=='failed' and '窗口身份已变化' in state['error'] and not posts,state
+            checks.append('client_close_refuses_rebound_window_identity_before_sending_close_request')
+
+            service.prepare_client_close(target);manager.worker.join(5);posts.clear();closed.clear();allow_exit.clear();exit_wait.clear()
+            with patch.object(ctx.controller,'bind',bind_exit):
+                service.start_client_close(timeout_seconds=5);assert exit_wait.wait(3)
+                manager.stop();manager.worker.join(5)
+            state=service.execution_status();assert state['state']=='stopped' and state['client_exit']['requested'] and not state['client_exit']['process_exited'],state
+            assert posts==['wm_close'] and closed==[True]
+            checks.append('stop_after_close_request_keeps_unverified_exit_in_report_and_never_retries_or_force_terminates')
+            ctx.controller.game_win.bound=None
+
             current=ctx.game_account_config;current.password='';current.save();clicks=len(fixture.clicks)
             service.prepare_login('switch');manager.worker.join(5)
             state=service.execution_status();assert state['state']=='failed' and '完整登录资料' in state['error'],state
@@ -380,7 +421,8 @@ def main():
             if manager is not None:manager.close();service._execution=None
             if service._ctx is not None:service._ctx.controller=None
             service.close()
-    result=dict(checks=checks,count=len(checks),game_accessed=False,real_clipboard_accessed=False,network_blocked=True)
+            if run_lease is not None:run_lease.close()
+    result=dict(checks=checks,count=len(checks),game_accessed=False,real_clipboard_accessed=False,network_blocked=True,leased_worker=run_lease is not None)
     (data/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(result,ensure_ascii=False))
 
 

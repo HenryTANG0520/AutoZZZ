@@ -14,7 +14,7 @@ from .run_lock import RunLock, profile_lock
 
 
 class OneDragonExecution:
-    def __init__(self, ctx: Any):
+    def __init__(self, ctx: Any,run_lease=None):
         from zzz_od.backend.backend_context import ZzzBackendContext
         self.ctx = ctx
         from one_dragon.utils import os_utils
@@ -28,8 +28,13 @@ class OneDragonExecution:
         self._input_ready=False
         self._f9_down=False
         self.startup=None
+        self.client_exit=None
+        self.client_exit_result={}
+        self.close_target=None
         self.control = ExecutionControl(self._probe, self._release, self._pause_backend,
                                         self._resume_backend, self._stop_backend)
+        self.run_lease=run_lease
+        self.control.input_validator=self._validate_task_input
         self.ctx.execution_control = self.control
         self.adapter = UpstreamControlAdapter(self.control)
         self.adapter.install()
@@ -72,7 +77,15 @@ class OneDragonExecution:
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
+    def _run_scope(self):
+        return RunLock() if self.run_lease is None else self.run_lease.scope()
+
+    def _validate_task_input(self):
+        if self.run_lease is not None:self.run_lease.check()
+        if self.client_exit is not None:self.client_exit.input_guard()
+
     def _probe(self) -> WindowState:
+        if self.client_exit is not None:return self.client_exit.probe()
         if self.ctx.controller is None:
             return WindowState(False, False, reason="控制器尚未初始化。")
         return self.ctx.controller.probe()
@@ -105,7 +118,7 @@ class OneDragonExecution:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
-            if state=="running":self.manual_pause.clear();self._input_ready=False;self._f9_down=False
+            if state=="running":self.manual_pause.clear();self._input_ready=False;self._f9_down=False;self.client_exit_result={}
             self.ctx.download_cancel.clear()
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
@@ -302,7 +315,7 @@ class OneDragonExecution:
         if type(auto_launch)is not bool:raise ValueError("启动游戏选项必须为布尔值。")
         def run():
             try:
-                with RunLock():
+                with self._run_scope():
                     if self.prepared_hash!=self.configuration_digest():raise ValueError("登录配置已变化，请重新准备。")
                     from zzz_od.operation.enter_game.enter_game import EnterGame
                     from zzz_od.operation.enter_game.switch_account import SwitchAccount
@@ -318,6 +331,7 @@ class OneDragonExecution:
                         def attempt(action):
                             with self.lock:
                                 if self.cancelled.is_set() or self.manual_pause.is_set():return False
+                                if self.run_lease is not None:self.run_lease.check()
                                 action();return True
                         self.startup=GameStartup(self.ctx.game_account_config.game_path,cancelled=self.cancelled,
                                                 paused=self.manual_pause,poll_keys=self._poll_task_keys,elapsed=elapsed,
@@ -331,6 +345,65 @@ class OneDragonExecution:
                     if self.state not in ("failed","stopped") and not self.login_control.status()["world_verified"]:
                         self.state="failed";self.error="登录流程未核实进入大世界。"
             finally:self.prepared_app=self.prepared_hash=self.login_mode=""
+        return self._submit("running",run)
+
+    def prepare_client_close(self,expected_window:dict) -> dict:
+        if not isinstance(expected_window,dict) or set(expected_window)!={"window_handle","process_id"} or any(type(value)is not int or value<=0 for value in expected_window.values()):
+            raise ValueError("请提供已核实的游戏窗口和进程编号。")
+        if not self.ctx.ready_for_application:raise RuntimeError("请先初始化运行环境。")
+        target=dict(expected_window)
+        def prepare():
+            self.prepared_app=self.prepared_hash=self.login_mode="";self.close_target=None
+            self.client_exit_result={};self.uses_charge=False
+            self.charge_control=self.group_control=self.hunt_control=self.resource_control=None
+            self.prepared_applications=[];self.prepared_requirements={};self.route_debug=None
+            self.resource_confirmation.prepare([],"")
+            self.backend._refresh_runtime_config()
+            config=self.ctx.game_account_config
+            if self.connection!=(self.ctx.current_instance_idx,config.game_path,config.game_region,config.game_language):
+                raise ValueError("账号或客户端配置已变化，请重新准备运行环境。")
+            self.close_target=target;self.prepared_hash=self.configuration_digest()
+            self.prepared_requirements=dict(client_close=target,models=[],policies=[],resource_actions=[])
+            self.prepared_app="_client_close";self.state="prepared"
+        return self._submit("preparing",prepare)
+
+    def start_client_close(self,timeout_seconds:int=60) -> dict:
+        if self.prepared_app!="_client_close" or self.close_target is None:raise ValueError("请先准备关闭已核实的客户端。")
+        if type(timeout_seconds)is not int or not 5<=timeout_seconds<=300:raise ValueError("退出等待时限须为 5—300 秒。")
+        target=dict(self.close_target)
+        def run():
+            watch_stop=threading.Event();watcher=None;transition=None
+            try:
+                with self._run_scope():
+                    try:
+                        if self.prepared_hash!=self.configuration_digest():raise ValueError("客户端配置已变化，请重新准备。")
+                        self.ctx.controller.bind(self.ctx.game_account_config.game_path)
+                        window=self.ctx.controller.game_win
+                        if window.bound is None or window.bound.hwnd!=target['window_handle'] or window.process_id!=target['process_id']:
+                            raise RuntimeError("待关闭窗口身份已变化，未发送关闭请求。")
+                        from .onedragon_client_exit import ClientExit
+                        transition=ClientExit(self.ctx.controller,self.control)
+                        with self.lock:
+                            self.client_exit=transition;self.control.reset();self._input_ready=True
+                            self.control.set_manual_pause(self.manual_pause.is_set())
+                        self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
+                        watcher=threading.Thread(target=self._watch,args=(watch_stop,),name="AutoZZZ-Client-Exit",daemon=True)
+                        watcher.start();self.preparation_step="等待原游戏进程退出"
+                        exited=transition.run(self.cancelled,watch_stop.wait)
+                        if self.control.error:self.state="failed";self.error=self.control.error
+                        elif self.cancelled.is_set() or self.control.stopped:self.state="stopped"
+                        elif exited:self.state="success"
+                        else:self.state="failed";self.error="尚未核实原游戏进程退出。"
+                    finally:
+                        watch_stop.set()
+                        if watcher is not None:watcher.join()
+                        if transition is not None:
+                            self.client_exit_result=transition.status()
+                            self.control.stop()
+                            if self.client_exit_result['process_exited']:self.ctx.controller.game_win.clear_binding()
+                        with self.lock:self.client_exit=None;self._input_ready=False
+                        self.preparation_step=""
+            finally:self.prepared_app=self.prepared_hash="";self.close_target=None
         return self._submit("running",run)
 
     def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
@@ -352,7 +425,7 @@ class OneDragonExecution:
         elif budget is not None:raise ValueError("当前应用不需要战斗预算。")
         self.resource_confirmation.verify(resource_confirmation, self.prepared_hash)
         def run():
-            with RunLock():
+            with self._run_scope():
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
                 self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
                 self.script_control.reset()
@@ -447,6 +520,7 @@ class OneDragonExecution:
 
     def _poll_task_keys(self):
         from .windows import user32
+        if self.run_lease is not None:self.run_lease.check()
         if user32.GetAsyncKeyState(0x79) & 0x8000:
             self.cancelled.set()
             if self._input_ready:self.control.stop()
@@ -488,6 +562,7 @@ class OneDragonExecution:
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())
+            result['client_exit']=self.client_exit.status() if self.client_exit is not None else dict(self.client_exit_result)
             result["resources"] = self.resource_confirmation.status()
             result["resource_results"] = [] if self.resource_control is None else [dict(item) for item in self.resource_control.results]
             result["hunt"] = {} if self.hunt_control is None else self.hunt_control.status()

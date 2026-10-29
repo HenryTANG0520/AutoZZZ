@@ -127,8 +127,9 @@ class _Reply:
 
 class OneDragonClient:
     """保留原请求的客户端；超时不重启、不重发。"""
-    def __init__(self, paths: RuntimePaths, log: Callable[[str], None] | None = None):
+    def __init__(self, paths: RuntimePaths, log: Callable[[str], None] | None = None,run_lease=None):
         self.paths, self.log = paths, log
+        self.run_lease=run_lease
         self.process: subprocess.Popen | None = None
         self._replies: dict[str, _Reply] = {}
         self._lock = threading.RLock()
@@ -157,6 +158,9 @@ class OneDragonClient:
                 raise RuntimeError("该一条龙客户端已经启动过；请查询现有进程状态。")
             self.paths.prepare()
             environment = os.environ.copy()
+            from .task_lease import LEASE_ENV
+            environment.pop(LEASE_ENV,None)
+            if self.run_lease is not None:environment[LEASE_ENV]=self.run_lease.export()
             environment["PYTHONUTF8"] = "1"
             # 独立解释器只通过明确的模块路径加载桥接代码。
             package_root = Path(__file__).resolve().parent.parent
@@ -175,6 +179,9 @@ class OneDragonClient:
         if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != UPSTREAM_REVISION:
             self.close()
             raise RuntimeUnavailable("一条龙通信协议或源码版本不一致。")
+        if self.run_lease is not None and hello.get("task_lease") is not True:
+            self.close()
+            raise RuntimeUnavailable("工作进程未确认轮换任务锁，不能开始执行。")
         self.worker_pid = hello.get("pid")
         if os.name == "nt":
             if type(self.worker_pid) is not int or self.worker_pid <= 0:

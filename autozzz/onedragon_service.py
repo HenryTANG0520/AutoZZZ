@@ -26,7 +26,7 @@ def plain(value: Any) -> Any:
 
 
 class OneDragonService:
-    def __init__(self, source: Path, data: Path):
+    def __init__(self, source: Path, data: Path,run_lease=None):
         self.source, self.data = source.resolve(), data.resolve()
         sys.path.insert(0, str(self.source / "src"))
         from one_dragon.utils import os_utils
@@ -40,6 +40,7 @@ class OneDragonService:
         self._map_capture = None
         self._downloads = None
         self._rotation = None
+        self._run_lease=run_lease
 
     @property
     def ctx(self) -> Any:
@@ -442,7 +443,7 @@ class OneDragonService:
         EnvironmentStore(self).validate_models(self.ctx.model_config)
         if self._execution is None:
             from .onedragon_execution import OneDragonExecution
-            self._execution = OneDragonExecution(self.ctx)
+            self._execution = OneDragonExecution(self.ctx,run_lease=self._run_lease) if self._run_lease is not None else OneDragonExecution(self.ctx)
         return self._execution.initialize(server, game_path, region,instance_idx)
 
     def execution_status(self) -> dict:
@@ -484,6 +485,18 @@ class OneDragonService:
         if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.start_login(mode,timeout_seconds,auto_launch=auto_launch)
+
+    def prepare_client_close(self,expected_window:dict) -> dict:
+        self._assert_idle()
+        if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.prepare_client_close(expected_window)
+
+    def start_client_close(self,timeout_seconds:int=60) -> dict:
+        self._assert_idle()
+        if self._environment_changed:raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
+        if self._execution is None:raise RuntimeError("请先初始化运行环境。")
+        return self._execution.start_client_close(timeout_seconds)
 
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
         self._assert_idle()
@@ -575,6 +588,7 @@ METHODS.update({"library_catalog", "library_read", "library_draft", "library_sav
 METHODS.update({"model_catalog", "model_download_start", "model_download_status", "model_download_cancel", "model_install_recover"})
 METHODS.update({"rotation_preview", "rotation_validate"})
 METHODS.update({"prepare_login", "start_login"})
+METHODS.update({"prepare_client_close", "start_client_close"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})

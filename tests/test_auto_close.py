@@ -255,6 +255,16 @@ class NormalExitTests(unittest.TestCase):
             user.PostMessageW.assert_not_called()
             kernel.CloseHandle.assert_called_once_with(123)
 
+    def test_close_submission_must_pass_control_guard_before_post_message(self):
+        window=object.__new__(GameWindow);window.path=r'E:\Game\ZenlessZoneZero.exe';window.hwnd=321;window.guard=Mock()
+        with patch('autozzz.windows.process_path',return_value=window.path),patch('autozzz.windows.user32') as user,patch('autozzz.windows.kernel32') as kernel:
+            kernel.OpenProcess.return_value=123
+            def query(handle,flags,buffer,length):buffer.value=window.path;return True
+            kernel.QueryFullProcessImageNameW.side_effect=query
+            def stopped(action):raise RuntimeError('fixture stopped before post')
+            with self.assertRaisesRegex(RuntimeError,'stopped before post'):window.request_close(Mock(),submit=stopped)
+            user.PostMessageW.assert_not_called();kernel.CloseHandle.assert_called_once_with(123)
+
 
 if __name__ == "__main__":
     unittest.main()

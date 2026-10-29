@@ -248,7 +248,7 @@ class GameWindow:
             raise AutomationError("游戏客户区有部分位于屏幕外，请移动窗口后重试。")
         return g
 
-    def request_close(self, checkpoint):
+    def request_close(self, checkpoint,submit=None):
         self.guard()
         if (Path(self.path).name.casefold() != "zenlesszonezero.exe"
                 or process_path(self.hwnd).casefold() != self.path.casefold()):
@@ -267,7 +267,8 @@ class GameWindow:
                 raise AutomationError("游戏进程身份已变化，拒绝关闭。")
             checkpoint()
             self.guard()
-            if not user32.PostMessageW(self.hwnd, 0x0010, 0, 0):  # WM_CLOSE, no process termination
+            action=lambda:user32.PostMessageW(self.hwnd,0x0010,0,0)  # WM_CLOSE, no process termination
+            if not (action() if submit is None else submit(action)):
                 raise AutomationError("Windows 未接受正常关闭请求；未强制结束。")
         except BaseException:
             kernel32.CloseHandle(handle)
