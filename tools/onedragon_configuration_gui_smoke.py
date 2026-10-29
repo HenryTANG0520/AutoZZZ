@@ -63,7 +63,7 @@ def main():
                 root.tk.call("tk","scaling",scale*96/72)
                 errors = []
                 root.report_callback_exception = lambda kind,value,traceback:errors.append(value)
-                ui = AutoZZZWindow(root,config)
+                ui = AutoZZZWindow(root,config,background_helpers=False)
                 panel = ui.onedragon_panel
                 try:
                     ui.overlay.set_enabled(False)

@@ -53,7 +53,7 @@ def main():
             root.report_callback_exception = lambda kind, value, tb: (_ for _ in ()).throw(value.with_traceback(tb))
             root.tk.call("tk", "scaling", scale * 96 / 72)
             with patch("autozzz.gui.AutoZZZWindow._discover_report"), patch("autozzz.onedragon_ui.RuntimePaths.discover", return_value=paths):
-                ui = AutoZZZWindow(root, config)
+                ui = AutoZZZWindow(root,config,background_helpers=False)
                 ui.overlay.set_enabled(False)
                 open_strategies(ui)
                 dialog = ui.condition_strategies

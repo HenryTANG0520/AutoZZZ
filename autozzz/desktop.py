@@ -20,7 +20,10 @@ def build_window(ui, task_names, server_names):
     ui.style = t.apply_theme(root, s)
     root.columnconfigure(0, weight=1)
     root.rowconfigure(1, weight=1)
-    Header(root, s, background=t.BG, height=d(65)).grid(row=0, column=0, sticky="ew")
+    heading=ttk.Frame(root);heading.grid(row=0,column=0,sticky='ew');heading.columnconfigure(0,weight=1)
+    Header(heading, s, background=t.BG, height=d(65)).grid(row=0, column=0, sticky="ew")
+    ui.pip_button=ttk.Checkbutton(heading,text='画中画',variable=ui.pip_enabled,command=ui._pip_toggle)
+    ui.pip_button.grid(row=0,column=1,sticky='e',padx=d(18));ui.pip_button.state(['disabled'])
     ui.compendium = Compendium(root, s)
     ui.compendium.grid(row=1, column=0, sticky="nsew", padx=d(18))
     body = ui.compendium.content

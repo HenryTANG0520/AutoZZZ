@@ -207,6 +207,7 @@ class OneDragonExecution:
         maps = self.data/"assets/game_data/world_patrol"
         paths.extend(path for path in maps.rglob("*") if path.is_file() and path.suffix in (".png", ".yml"))
         for path in sorted(paths):
+            if path.relative_to(self.data).as_posix()=='config/pip.yml':continue
             digest.update(str(path.relative_to(self.data)).encode("utf-8"))
             digest.update(path.read_bytes())
         return digest.hexdigest()
@@ -589,6 +590,7 @@ class OneDragonExecution:
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
             bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
             result["window_handle"]=None if bound is None else bound.hwnd
+            result['window_path']=None if bound is None else getattr(bound,'path',None)
             pid=getattr(getattr(self.ctx.controller,'game_win',None),'process_id',None)
             result['window_identity']=None if bound is None or pid is None else dict(window_handle=bound.hwnd,process_id=pid)
             controller=self.ctx.controller

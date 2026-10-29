@@ -24,6 +24,7 @@ def rotation_revision(root: Path) -> str:
     if len(paths)>20000:raise ValueError('轮换配置文件过多。')
     digest=hashlib.sha256();total=0
     for path in sorted(paths):
+        if path.relative_to(root).as_posix()=='config/pip.yml':continue
         if path.resolve()!=path.absolute() or not path.resolve().is_relative_to(root):raise ValueError('轮换资料路径被重定向。')
         raw=path.read_bytes();total+=len(raw)
         if total>256*1024*1024:raise ValueError('轮换配置资料过大。')

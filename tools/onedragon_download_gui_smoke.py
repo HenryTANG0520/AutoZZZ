@@ -62,7 +62,7 @@ def main():
             for scale in (1.,1.5,2.):
                 root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[]
                 root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-                ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False)
+                ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False)
                 with patch('autozzz.onedragon_download_ui.open_downloads') as opened:
                     ui.onedragon_panel.dirty=True;ui.onedragon_panel.downloads()
                     assert not opened.called and '保存配置' in ui.onedragon_panel.status.get()
@@ -120,7 +120,7 @@ def main():
         defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);paths=RuntimePaths(defaults.source,defaults.python,Path(folder)/'actual-sdk')
         with patch('autozzz.gui.AutoZZZWindow._discover_report'),patch('autozzz.onedragon_download_ui.RuntimePaths.discover',return_value=paths):
             root=tk.Tk();errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-            ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False);dialog=open_downloads(ui,'global')
+            ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False);dialog=open_downloads(ui,'global')
             try:
                 pump(root,lambda:dialog.catalog is not None and not dialog.busy)
                 assert len(dialog.table.get_children())==7 and not list(paths.data.rglob('*.onnx'))

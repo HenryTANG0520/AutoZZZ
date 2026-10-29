@@ -45,7 +45,7 @@ def main():
     with tempfile.TemporaryDirectory() as directory,patch('autozzz.app.Runner',FakeRunner):
         config=Path(directory)/'config.json';Settings().save(config)
         before=hashlib.sha256(config.read_bytes()).hexdigest()
-        root=tk.Tk();ui=AutoZZZWindow(root,config)
+        root=tk.Tk();ui=AutoZZZWindow(root,config,background_helpers=False)
         try:
             ui.overlay.set_enabled(False)
             ui.combat_panel.vars['strategy_file'].set('builtin:cn-team1')

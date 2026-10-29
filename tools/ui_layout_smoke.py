@@ -47,7 +47,7 @@ def main():
                 raise value.with_traceback(traceback)
             root.report_callback_exception = callback_error
             root.tk.call("tk", "scaling", scale * 96 / 72)
-            ui = AutoZZZWindow(root, config)
+            ui = AutoZZZWindow(root,config,background_helpers=False)
             try:
                 ui.overlay.set_enabled(False)
                 for size in ("default", "minimum"):

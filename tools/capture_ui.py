@@ -24,7 +24,7 @@ def main():
         root = tk.Tk()
         root.tk.call("tk", "scaling", 96/72)
         with patch("autozzz.gui.AutoZZZWindow._discover_report"), patch("autozzz.battle_ui.ROOT", Path(directory)):
-            ui = AutoZZZWindow(root, config)
+            ui = AutoZZZWindow(root,config,background_helpers=False)
         try:
             ui.overlay.set_enabled(False)
             root.update()

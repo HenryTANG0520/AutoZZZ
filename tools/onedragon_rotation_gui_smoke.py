@@ -30,7 +30,7 @@ def main():
             for scale in (1.,1.5,2.):
                 root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[]
                 root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-                ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False);selected=[]
+                ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False);selected=[]
                 dialog=RotationPreviewDialog(root,copy.deepcopy(plan),ui.ui_scale,selected.append)
                 for size in ('default','minimum'):
                     if size=='minimum':dialog.window.geometry('%dx%d'%dialog.window.minsize())
@@ -66,7 +66,7 @@ def main():
             defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);paths=RuntimePaths(defaults.source,defaults.python,Path(folder)/'actual-sdk')
             with patch('autozzz.onedragon_accounts_ui.RuntimePaths.discover',return_value=paths):
                 root=tk.Tk();errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-                ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False);accounts=AccountsWindow(ui,'cn');ui.account_window=accounts
+                ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False);accounts=AccountsWindow(ui,'cn');ui.account_window=accounts
                 try:
                     pump(root,lambda:accounts.description is not None and not accounts.busy)
                     accounts.dirty=True;accounts.preview_rotation();assert accounts.preview_dialog is None and '先保存' in accounts.status.get()

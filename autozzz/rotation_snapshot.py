@@ -9,6 +9,7 @@ import threading
 
 
 def tracked(name):
+    if name=='config/pip.yml':return False
     parts=PurePosixPath(name).parts
     return bool(parts and (parts[0]=='config' and name.endswith('.yml') or
                 parts[:3]==('assets','game_data','world_patrol') and name.endswith(('.png','.yml'))))
@@ -20,6 +21,7 @@ def snapshot(root):
     if len(files)>20000:raise ValueError('轮换资料文件过多。')
     result={};total=0
     for path in sorted(files):
+        if not tracked(path.relative_to(root).as_posix()):continue
         if path.resolve()!=path.absolute() or not path.resolve().is_relative_to(root) or path.stat().st_nlink>1:
             raise ValueError('轮换资料包含重定向或共享硬链接。')
         raw=path.read_bytes();total+=len(raw)

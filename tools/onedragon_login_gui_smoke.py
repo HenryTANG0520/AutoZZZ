@@ -53,7 +53,7 @@ def main():
             for scale in (1.,1.5,2.):
                 root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[]
                 root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-                ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False)
+                ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False)
                 with patch('autozzz.onedragon_run_ui.RuntimeSession',LoginSession):
                     window=ExecutionWindow(ui,'_login','账号登录','global',login_mode='enter');ui.execution_window=window
                 try:
@@ -107,7 +107,7 @@ def main():
             if cached.is_dir():shutil.copytree(cached,data/'assets/models',dirs_exist_ok=True)
             dummy=base/'client/ZenlessZoneZero.exe';dummy.parent.mkdir();dummy.write_bytes(b'fixture only')
             root=tk.Tk();errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-            ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False);accounts=None;window=None
+            ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False);accounts=None;window=None
             with patch('autozzz.onedragon_accounts_ui.RuntimePaths.discover',return_value=paths),patch('autozzz.onedragon_run_ui.RuntimePaths.discover',return_value=paths):
                 accounts=AccountsWindow(ui,'cn');ui.account_window=accounts
                 try:

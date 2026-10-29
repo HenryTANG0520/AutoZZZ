@@ -97,7 +97,7 @@ def main():
             root=tk.Tk(); root.tk.call('tk','scaling',scale*96/72)
             errors=[]; root.report_callback_exception=lambda kind,value,tb: errors.append(value)
             with patch('autozzz.gui.AutoZZZWindow._discover_report'), patch('autozzz.onedragon_library_ui.RuntimeSession',Session):
-                ui=AutoZZZWindow(root,config); ui.overlay.set_enabled(False)
+                ui=AutoZZZWindow(root,config,background_helpers=False); ui.overlay.set_enabled(False)
                 dialog=LibraryWindow(ui,'global'); ui.library_window=dialog
                 pump(root,lambda: dialog.document is not None and not dialog.busy)
                 dialog.catalog['issues']=[dict(file='config/100/one_dragon/lost_void.yml', error='应用引用格式无效；修复后重新读取。')]
@@ -251,7 +251,7 @@ def main():
         root=tk.Tk();errors=[]
         root.report_callback_exception=lambda kind,value,tb: errors.append(value)
         with patch('autozzz.gui.AutoZZZWindow._discover_report'), patch('autozzz.onedragon_library_ui.RuntimePaths.discover',return_value=live_paths):
-            ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False)
+            ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False)
             dialog=LibraryWindow(ui,'cn');ui.library_window=dialog
             try:
                 pump(root,lambda:dialog.document is not None and not dialog.busy)

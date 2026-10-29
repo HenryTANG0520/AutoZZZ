@@ -25,7 +25,7 @@ def main():
     config = output / "config.json"
     settings.save(config)
     root = tk.Tk()
-    ui = AutoZZZWindow(root, config)
+    ui = AutoZZZWindow(root,config,background_helpers=False)
     started = time.monotonic()
     observed = {"overlay_visible": False, "focus_preserved": True}
     requested = False

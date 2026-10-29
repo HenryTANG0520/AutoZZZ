@@ -29,7 +29,7 @@ def main():
         for scale in (1.,1.5,2.):
             root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[]
             root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-            ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False)
+            ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False)
             with patch('autozzz.onedragon_run_ui.RuntimeSession',Session):window=ExecutionWindow(ui,'auto_battle','自动战斗','cn')
             ui.execution_window=window
             try:

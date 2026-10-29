@@ -83,7 +83,7 @@ def main():
             errors = []
             root.report_callback_exception = lambda kind, value, tb: errors.append(value)
             with patch('autozzz.gui.AutoZZZWindow._discover_report'), patch('autozzz.onedragon_notify_ui.RuntimeSession', Session):
-                ui = AutoZZZWindow(root, config)
+                ui = AutoZZZWindow(root,config,background_helpers=False)
                 ui.overlay.set_enabled(False)
                 ui._show_page('applications')
                 panel = ui.onedragon_panel

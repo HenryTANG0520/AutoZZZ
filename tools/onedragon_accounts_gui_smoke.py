@@ -40,7 +40,7 @@ def main():
                 root.tk.eval('set autozzz_bgerrors {}; proc bgerror {message} {lappend ::autozzz_bgerrors $message}')
                 errors=[]
                 root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-                ui=AutoZZZWindow(root,config)
+                ui=AutoZZZWindow(root,config,background_helpers=False)
                 ui.overlay.set_enabled(False)
                 window=AccountsWindow(ui,'cn')
                 ui.account_window=window

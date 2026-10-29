@@ -40,6 +40,7 @@ class OneDragonService:
         self._map_capture = None
         self._downloads = None
         self._rotation = None
+        self._pip = None
         self._run_lease=run_lease
         self._rotation_guard=None
         self._rotation_sealed=False
@@ -54,6 +55,21 @@ class OneDragonService:
                 ctx.register_application_factory()
                 self._ctx = ctx
         return self._ctx
+
+    @property
+    def pip_service(self):
+        if self._pip is None:
+            from .onedragon_pip import PipService
+            self._pip=PipService(self.data)
+        return self._pip
+
+    def pip_settings(self):return self.pip_service.settings()
+    def pip_save(self,values,revision):return self.pip_service.save(values,revision)
+    def pip_start(self,server,game_path):return self.pip_service.start(server,game_path)
+    def pip_status(self,after_sequence=-1):return self.pip_service.status(after_sequence)
+    def pip_dismiss(self):return self.pip_service.dismiss()
+    def pip_activate(self,epoch):return self.pip_service.activate(epoch)
+    def pip_stop(self):return self.pip_service.stop()
 
     def catalog(self) -> dict:
         from one_dragon.base.operation.application.application_factory import ApplicationFactory
@@ -631,6 +647,7 @@ class OneDragonService:
             if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
 
     def _close_resources(self) -> None:
+        if self._pip is not None:self._pip.close()
         if self._downloads is not None:self._downloads.close()
         if self._map_capture is not None:self._map_capture.close()
         if self._route_capture is not None: self._route_capture.close()
@@ -678,3 +695,4 @@ METHODS.update({"prepare_client_close", "start_client_close"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
+METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})

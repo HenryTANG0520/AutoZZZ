@@ -28,7 +28,7 @@ STATUS_NAMES = {
 
 class AutoZZZWindow:
     def __init__(self, root: tk.Tk, config_path: Path = CONFIG_PATH, *, server: str | None = None,
-                 game_path: str | None = None):
+                 game_path: str | None = None, background_helpers: bool = True):
         self.root, self.config_path = root, Path(config_path)
         load_error = None
         try:
@@ -59,6 +59,8 @@ class AutoZZZWindow:
         self.auto_launch = tk.BooleanVar(root, self.settings.auto_launch)
         self.close_game_on_success = tk.BooleanVar(root, self.settings.close_game_on_success)
         self.overlay_logs = tk.BooleanVar(root, self.settings.overlay_logs)
+        self.pip_enabled=tk.BooleanVar(root,False)
+        self.pip_controller=None
         self.tasks = {name: tk.BooleanVar(root, getattr(self.settings, name)) for name in TASK_NAMES}
         self.action_delay = tk.StringVar(root, str(self.settings.action_delay))
         self.transition_timeout = tk.StringVar(root, str(self.settings.transition_timeout))
@@ -82,6 +84,11 @@ class AutoZZZWindow:
         from .overlay import GameLogOverlay
         self.overlay = GameLogOverlay(root, lambda: self.overlay_game_handle, self._log)
         self.overlay.set_enabled(self.overlay_logs.get())
+        if background_helpers:
+            try:
+                from .onedragon_pip_ui import PipController
+                self.pip_controller=PipController(self)
+            except Exception as exc:self._log('画中画暂不可用：'+str(exc))
         self.overlay_logs.trace_add("write", self._overlay_enabled)
         self.status.trace_add("write", self._overlay_status)
         self._saved_form = self._form_signature()
@@ -128,6 +135,9 @@ class AutoZZZWindow:
         for group in (self.footer_daily,self.footer_save):
             if self.current_page in ("applications","combat"):group.grid_remove()
             else:group.grid()
+
+    def _pip_toggle(self):
+        if self.pip_controller is not None:self.pip_controller.toggle()
 
     def _overlay_status(self, *_args: Any) -> None:
         if getattr(self, "overlay", None):
@@ -655,7 +665,8 @@ class AutoZZZWindow:
         library_worker_alive=library is not None and library.worker.is_alive()
         downloads=getattr(self,"downloads_window",None)
         downloads_worker_alive=downloads is not None and downloads.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive:
+        pip_alive=self.pip_controller is not None and self.pip_controller.worker_alive
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
@@ -686,13 +697,14 @@ class AutoZZZWindow:
         execution=getattr(self,"execution_window",None)
         if execution is not None and not execution.closed:execution.close()
         self.closing = True
+        if self.pip_controller is not None:self.pip_controller.close()
         if getattr(self, "overlay", None):
             self.overlay.close()
         if self.running:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive):
             self._destroy_root()
 
     def _destroy_root(self):

@@ -85,7 +85,7 @@ def main():
         for scale in (1.,1.5,2.):
             root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
             with patch('autozzz.gui.AutoZZZWindow._discover_report'),patch('autozzz.onedragon_library_ui.RuntimeSession',Session):
-                ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False)
+                ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False)
                 dialog=LibraryWindow(ui,'global',kind='world_patrol_map');ui.library_window=dialog
                 pump(root,lambda:isinstance(dialog.editor,MapEditor) and not dialog.busy)
                 for size in ('default','minimum'):
@@ -151,7 +151,7 @@ def main():
         defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);live=RuntimePaths(defaults.source,defaults.python,Path(folder)/'actual-sdk')
         root=tk.Tk();errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
         with patch('autozzz.gui.AutoZZZWindow._discover_report'),patch('autozzz.onedragon_library_ui.RuntimePaths.discover',return_value=live):
-            ui=AutoZZZWindow(root,config);ui.overlay.set_enabled(False);dialog=LibraryWindow(ui,'cn',kind='world_patrol_map');ui.library_window=dialog
+            ui=AutoZZZWindow(root,config,background_helpers=False);ui.overlay.set_enabled(False);dialog=LibraryWindow(ui,'cn',kind='world_patrol_map');ui.library_window=dialog
             try:
                 pump(root,lambda:isinstance(dialog.editor,MapEditor) and not dialog.busy)
                 key=Session.snapshot['map']['key']

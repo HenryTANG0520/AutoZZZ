@@ -76,7 +76,7 @@ def main():
             root.tk.call('tk','scaling',scale*96/72)
             errors=[]
             root.report_callback_exception=lambda kind,value,tb:errors.append(value)
-            ui=AutoZZZWindow(root,config)
+            ui=AutoZZZWindow(root,config,background_helpers=False)
             ui.overlay.set_enabled(False)
             with patch('autozzz.onedragon_run_ui.RuntimeSession',Session):
                 window=ExecutionWindow(ui,'charge_plan','体力刷本','cn')
@@ -312,7 +312,7 @@ def main():
         if cached.is_dir():shutil.copytree(cached,data/'assets/models',dirs_exist_ok=True)
         root=tk.Tk()
         root.tk.eval('set autozzz_bgerrors {}; proc bgerror {message} {lappend ::autozzz_bgerrors $message}')
-        ui=AutoZZZWindow(root,config)
+        ui=AutoZZZWindow(root,config,background_helpers=False)
         ui.overlay.set_enabled(False)
         with patch('autozzz.onedragon_run_ui.RuntimePaths.discover',return_value=RuntimePaths(defaults.source,defaults.python,data)):
             window=ExecutionWindow(ui,'email','邮件','cn')
@@ -337,7 +337,7 @@ def main():
         # 退出主窗口也须等运行进程结束，不能只隐藏窗口后留下输入线程。
         root=tk.Tk()
         root.tk.eval('set autozzz_bgerrors {}; proc bgerror {message} {lappend ::autozzz_bgerrors $message}')
-        ui=AutoZZZWindow(root,config)
+        ui=AutoZZZWindow(root,config,background_helpers=False)
         ui.overlay.set_enabled(False)
         destroyed=threading.Event()
         root.bind('<Destroy>',lambda event:destroyed.set() if event.widget is root else None,add='+')

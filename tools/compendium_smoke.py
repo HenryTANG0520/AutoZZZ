@@ -26,7 +26,7 @@ def main():
             raise value.with_traceback(traceback)
         root.report_callback_exception = callback_error
         with patch("autozzz.gui.AutoZZZWindow._discover_report"):
-            ui = AutoZZZWindow(root, path)
+            ui = AutoZZZWindow(root,path,background_helpers=False)
         try:
             ui.overlay.set_enabled(False)
             root.update()
