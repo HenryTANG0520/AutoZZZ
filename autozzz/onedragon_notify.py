@@ -26,6 +26,7 @@ def credential_fragments(values):
     for value in values:
         if not value: continue
         add(value)
+        if not isinstance(value, str): continue
         try: add(json.loads(value))
         except (TypeError, ValueError): pass
         for line in value.splitlines():
@@ -34,6 +35,8 @@ def credential_fragments(values):
             try:
                 url = urlsplit(value)
                 add(url.hostname)
+                if url.username: add(unquote(url.username))
+                if url.password: add(unquote(url.password))
                 for fragment in url.path.split("/"):
                     if len(fragment) >= 4: add(unquote(fragment))
                 for _, fragment in parse_qsl(url.query): add(fragment)
@@ -45,7 +48,7 @@ def redact(text: Any, secrets=(), limit=2000) -> str:
     value = str(text)
     for secret in sorted({str(s) for s in secrets if s}, key=len, reverse=True):
         value = value.replace(secret, "[已隐藏]")
-    value = re.sub(r"(?i)\b(?:https?|socks5h?)://[^\s\]\)>\"']+", "[地址已隐藏]", value)
+    value = re.sub(r"(?i)\b(?:https?|wss?|socks(?:4a?|5h?))://[^\s\]\)>\"']+", "[地址已隐藏]", value)
     return value if limit is None else value[:limit]
 
 
@@ -166,7 +169,8 @@ class NotificationStore:
                     language=field.language))
             return dict(id=channel_id, name=channel.channel_name, revision=config_revision(config),
                         enabled=channel_id in push.enabled_channels(), valid=valid, error=error, fields=fields,
-                        binding_supported=False if channel_id == "QQ_BOT" else None)
+                        binding_supported=channel_id == "QQ_BOT",
+                        binding_ready=channel_id == "QQ_BOT" and all(isinstance(values.get(k), str) and values[k].strip() for k in ("APP_ID", "CLIENT_SECRET")))
 
     def save_channel(self, channel_id, values, revision):
         self.service._assert_idle()

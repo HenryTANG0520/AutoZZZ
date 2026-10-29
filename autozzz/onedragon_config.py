@@ -242,6 +242,9 @@ class ConfigurationStore:
         return dict(app_id=app_id, revision=config_revision(target), fields=fields)
 
     def describe(self, app_id: str) -> dict:
+        if app_id in {"_environment", "_models"}:
+            from .onedragon_environment import EnvironmentStore
+            return EnvironmentStore(self.service).describe(app_id)
         if app_id == "notify":
             from .onedragon_notify import NotificationStore
             return NotificationStore(self.service).describe()
@@ -316,6 +319,9 @@ class ConfigurationStore:
         return result
 
     def save(self, app_id: str, values: dict, revision: str) -> dict:
+        if app_id in {"_environment", "_models"}:
+            from .onedragon_environment import EnvironmentStore
+            return EnvironmentStore(self.service).save(app_id, values, revision)
         if app_id == "notify":
             from .onedragon_notify import NotificationStore
             return NotificationStore(self.service).save(values, revision)

@@ -33,6 +33,8 @@ class OneDragonService:
         os_utils.set_work_dir(self.data)
         self._ctx: Any = None
         self._execution: Any = None
+        self._environment_changed = False
+        self._binding = None
 
     @property
     def ctx(self) -> Any:
@@ -113,6 +115,20 @@ class OneDragonService:
     def notification_test(self, channel_id: str, revision: str):
         from .onedragon_notify import NotificationStore
         return NotificationStore(self).test(channel_id, revision)
+
+    def qq_bind_start(self, is_group: bool, revision: str):
+        if self._binding is None:
+            from .onedragon_qq_binding import QQBinding
+            self._binding = QQBinding(self)
+        return self._binding.start(is_group, revision)
+
+    def qq_bind_status(self, job_id: str):
+        if self._binding is None: raise ValueError("QQ 绑定尚未开始。")
+        return self._binding.status(job_id)
+
+    def qq_bind_cancel(self, job_id: str):
+        if self._binding is None: raise ValueError("QQ 绑定尚未开始。")
+        return self._binding.cancel(job_id)
 
     def training_options(self) -> dict:
         from .onedragon_config import ConfigurationStore
@@ -280,10 +296,18 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if self._binding is not None and self._binding.busy:
+            raise RuntimeError("QQ 绑定仍在处理中，请等待原连接退出。")
         if self._execution is not None and self._execution.busy:
             raise RuntimeError("一条龙任务仍在处理，暂时不能修改或重载配置。")
 
     def initialize_execution(self, server: str, game_path: str, region: str | None = None,instance_idx:int|None=None) -> dict:
+        self._assert_idle()
+        if self._environment_changed:
+            raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
+        from .onedragon_environment import EnvironmentStore, validate_environment
+        validate_environment(self.ctx.env_config, self.ctx.repo_config)
+        EnvironmentStore(self).validate_models(self.ctx.model_config)
         if self._execution is None:
             from .onedragon_execution import OneDragonExecution
             self._execution = OneDragonExecution(self.ctx)
@@ -295,10 +319,14 @@ class OneDragonService:
         return self._execution.status()
 
     def prepare_application(self,app_id:str) -> dict:
+        self._assert_idle()
+        if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.prepare_application(app_id)
 
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
+        self._assert_idle()
+        if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation)
 
@@ -338,13 +366,16 @@ class OneDragonService:
                 detectors[key]=dict(name=detector.model_name,providers=detector.session.get_providers(),objects=len(result.results))
         controller = self.ctx.controller
         capture = controller.screenshot_controller
-        return dict(ocr_text=text, controller=type(controller).__name__,
+        return dict(ocr_text=text, ocr_model=self.ctx.ocr._ocr_param.ocr_model_name,
+                    screenshot_method=controller.screenshot_method, controller=type(controller).__name__,
                     screenshot_window_bound=capture.game_win is controller.game_win and
                         all(strategy.game_win is controller.game_win for strategy in capture.strategies.values()),
                     window_bound=self.ctx.controller.game_win.bound is not None,
                     upstream_hotkeys_started=self.ctx._btn_listener_started,game_input_sent=False,flash_model=flash,detectors=detectors)
 
     def close(self) -> None:
+        if self._binding is not None:
+            self._binding.close()
         if self._execution is not None:
             self._execution.close()
         if self._ctx is not None:
@@ -375,3 +406,4 @@ METHODS = {"catalog", "configuration", "policies", "policy_read", "policy_valida
            "describe_configuration", "save_configuration", "training_options", "configuration_options",
            "prepare_application", "start_application","account_list","account_action","account_describe","account_save"}
 METHODS.update({"notification_channels", "notification_channel", "notification_channel_save", "notification_test"})
+METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})

@@ -20,6 +20,7 @@ GROUPS = (
     ("战斗与刷本", ("charge_plan","notorious_hunt","shiyu_defense","auto_battle","dodge_assistant","intel_board","life_on_line")),
     ("探索与经营", ("lost_void","withered_domain","suibian_temple","trigrams_collection","world_patrol")),
     ("辅助工具", ("drive_disc_dismantle","commission_assistant","predefined_team_checker","mouse_sensitivity_checker","operation_debug","screenshot_helper","notify")),
+    ("运行环境", ("_environment", "_models")),
 )
 NOTES = {
     "charge_plan":"刷本消耗电量。",
@@ -30,6 +31,8 @@ NOTES = {
     "shiyu_defense":"自动扫描游戏内编队并按弱点配队。",
     "commission_assistant":"模式快捷键使用单键；F9/F10 用于暂停和停止。",
     "redemption_code":"兑换流程结束后，奖励是否到账仍需核对。",
+    "_environment":"保存后重新准备任务。",
+    "_models":"保存后重新准备任务；缺少的模型会在准备时下载。",
 }
 COLLECTIONS = {"plans","plan","teams","defense_teams","applications","codes"}
 
@@ -228,7 +231,7 @@ class ApplicationsPanel:
         catalog = self.call(client,"catalog")
         if catalog["failures"]: raise RuntimeError("部分应用未能加载，请查看运行日志。")
         options = self.call(client,"configuration_options")
-        extras = [dict(id=k,name=n,configurable=True) for k,n in (("_group","执行顺序"),("teams","预编队伍"),("battle_assistant","战斗设置"))]
+        extras = [dict(id=k,name=n,configurable=True) for k,n in (("_group","执行顺序"),("teams","预编队伍"),("battle_assistant","战斗设置"),("_environment","网络与运行"),("_models","识别模型"))]
         apps = catalog["applications"]+extras+options["challenges"]
         descriptions = {a["id"]:self.call(client,"describe_configuration",app_id=a["id"]) for a in apps if a["configurable"]}
         return dict(apps=apps,options=options,descriptions=descriptions)

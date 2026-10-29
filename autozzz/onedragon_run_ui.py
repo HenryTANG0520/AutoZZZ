@@ -177,7 +177,7 @@ class ExecutionWindow:
         self.log.configure(state="disabled")
 
     def update_buttons(self):
-        self.prepare_button.configure(style="TButton" if self.prepared else "Accent.TButton")
+        self.prepare_button.configure(text="重新准备" if self.last_state else "准备运行", style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
         confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))

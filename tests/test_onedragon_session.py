@@ -53,6 +53,60 @@ class Client:
 
 
 class SessionTests(unittest.TestCase):
+    def test_explicit_reprepare_closes_old_process_before_new_initialization(self):
+        Client.instances=[]
+        observations=[]
+        class OrderedClient(Client):
+            def start(self):
+                observations.append(('start',len(self.instances)))
+                if len(self.instances)>1:
+                    self.assert_previous_exited = not self.instances[-2].alive
+            def close(self,timeout=5):
+                observations.append(('close',self.close_count))
+                return super().close(timeout)
+        events=queue.Queue()
+        with tempfile.TemporaryDirectory() as folder,patch('autozzz.onedragon_session.OneDragonClient',OrderedClient):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                for _ in range(2):
+                    session.send('prepare',app_id='email',server='global',game_path='game.exe',region='global')
+                    self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='prepared')
+                self.assertEqual(len(Client.instances),2)
+                self.assertTrue(Client.instances[-1].assert_previous_exited)
+                self.assertEqual(Client.instances[0].close_count,2)
+                self.assertEqual([m for m,_ in Client.instances[-1].calls].count('initialize_execution'),1)
+            finally:
+                session.close();session.worker.join(5)
+            self.assertFalse(session.worker.is_alive())
+
+    def test_stop_during_reprepare_wait_never_spawns_replacement_process(self):
+        Client.instances=[]
+        waiting,release=threading.Event(),threading.Event()
+        class SlowClose(Client):
+            def close(self,timeout=5):
+                if self.close_count==0:
+                    self.close_count+=1
+                    waiting.set();release.wait(4)
+                    raise RequestPending('close')
+                self.close_count+=1;self.alive=False
+        events=queue.Queue()
+        with tempfile.TemporaryDirectory() as folder,patch('autozzz.onedragon_session.OneDragonClient',SlowClose):
+            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            try:
+                params=dict(app_id='email',server='global',game_path='game.exe',region='global')
+                session.send('prepare',**params)
+                self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='prepared')
+                session.send('prepare',**params)
+                self.assertTrue(waiting.wait(4))
+                session.stop();release.set()
+                event=self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='stopped')
+                self.assertFalse(event['state']['ready'])
+                self.assertEqual(len(Client.instances),1)
+                self.assertEqual([m for m,_ in Client.instances[0].calls].count('initialize_execution'),1)
+            finally:
+                release.set();session.close();session.worker.join(5)
+            self.assertFalse(session.worker.is_alive())
+
     def test_one_client_and_job_survive_pending_replies_and_transient_query_error(self):
         Client.instances=[]
         events=queue.Queue()

@@ -37,6 +37,7 @@ class ManagedPushService(PushService):
         self.results = []
         self.pending = 0
         self.secrets = ()
+        self.transient_secrets = set()
         self.log_filter = _RedactFilter(self)
         log.addFilter(self.log_filter)
 
@@ -58,8 +59,13 @@ class ManagedPushService(PushService):
         for channel in self.channels:
             config = self.get_channel_config(channel.channel_id)
             values.extend(config[f.var_suffix] for f in channel.config_schema if f.field_type.value != "combo" and config[f.var_suffix])
-        if self.ctx.env_config.is_personal_proxy: values.append(self.ctx.env_config.personal_proxy)
-        self.secrets = credential_fragments(values)
+        values.extend((self.ctx.env_config.personal_proxy, self.ctx.env_config.gh_proxy_url))
+        self.secrets = (*credential_fragments(values), *self.transient_secrets)
+
+    def protect_transient(self, *values):
+        with self.result_lock:
+            self.transient_secrets.update(credential_fragments(values))
+            self._refresh_secrets()
 
     def enabled_channels(self):
         channels = self.push_config.get("autozzz_enabled_channels", [])

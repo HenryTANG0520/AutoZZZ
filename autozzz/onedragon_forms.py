@@ -143,6 +143,8 @@ class ScalarForm:
                 if "minimum" in field and "maximum" in field:
                     ttk.Label(line,text=f"{field['minimum']}—{field['maximum']}",style="Hint.TLabel").grid(row=1,column=1,sticky="w",pady=(d(5),0))
             widget.grid(row=0,column=0 if kind=="bool" else 1,columnspan=2 if kind=="bool" else 1,sticky="w" if kind=="bool" else "ew")
+            if field.get("hint"):
+                theme.wrapped_label(line,text=field["hint"],style="Hint.TLabel").grid(row=2,column=1,sticky="ew",pady=(d(5),0))
             if variable is not None:
                 token=variable.trace_add("write",lambda *_: self.ready and changed())
                 self.traces.append((variable,token))

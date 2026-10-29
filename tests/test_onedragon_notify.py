@@ -22,6 +22,12 @@ class NotificationRulesTests(unittest.TestCase):
         for text in ('{"a":1}', '{broken', 'missing colon'):
             with self.assertRaises(ValueError): validate_headers(text)
 
+    def test_proxy_userinfo_and_gateway_addresses_are_private(self):
+        secrets = credential_fragments(['socks5h://proxy-user:p%40ssword@proxy.invalid:1080'])
+        result = redact('proxy-user p@ssword socks4a://another.invalid:1080 wss://gateway.invalid/path?secret=value', secrets)
+        for private in ('proxy-user', 'p@ssword', 'another.invalid', 'gateway.invalid', 'secret=value'):
+            self.assertNotIn(private, result)
+
     def test_modes_reject_missing_duplicate_and_unknown_entries(self):
         rows = [dict(app_id='a', lifecycle='finish_only', detail='error_only')]
         validate_modes(rows, {'a': '应用'})

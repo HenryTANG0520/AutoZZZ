@@ -31,7 +31,7 @@ class RuntimeSession:
 
     def send(self,command:str,**params:Any):
         if not self.closing.is_set():
-            if command=="start":self.stop_requested.clear()
+            if command=="start" or command=="prepare" and not self.phase:self.stop_requested.clear()
             self.commands.put((command,params))
 
     def stop(self):
@@ -152,6 +152,7 @@ class RuntimeSession:
 
     def _work(self):
         client=OneDragonClient(self.paths,log=self._log)
+        prepared_once=False
         try:
             client.start()
             self.emit(dict(type="connected"))
@@ -159,7 +160,28 @@ class RuntimeSession:
                 try:command,params=self.commands.get(timeout=.2)
                 except queue.Empty:command=None
                 if command is not None:
-                    try:self._handle(client,command,params)
+                    try:
+                        if command=="prepare" and not self.phase:
+                            if prepared_once:
+                                self.emit(dict(type="phase",phase="正在重新准备：等待原进程退出"))
+                                while True:
+                                    try:client.close(timeout=5);break
+                                    except RequestPending:
+                                        self.emit(dict(type="phase",phase="正在重新准备：等待原进程退出"))
+                                # close 的等待超时只继续观察原进程。确认退出后，仍须保留新到的停止意图。
+                                if self.closing.is_set():break
+                                if self.stop_requested.is_set():
+                                    self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=False,uses_charge=False)))
+                                    continue
+                                client=OneDragonClient(self.paths,log=self._log)
+                                client.start()
+                            elif self.stop_requested.is_set():
+                                self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=False,uses_charge=False)))
+                                continue
+                            prepared_once=True
+                        # 重新准备期间取消，旧 client 已确认关闭；排队的 stop 不能向它提交新请求。
+                        if command=="stop" and not client.alive:continue
+                        self._handle(client,command,params)
                     except Exception as exc:
                         if command=="start" and self.stop_requested.is_set() and not self.phase:
                             self._finish_report(dict(state="stopped",error=str(exc),application_started=False))

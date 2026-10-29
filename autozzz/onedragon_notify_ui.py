@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import queue
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -91,6 +92,8 @@ class ChannelsWindow:
         self.description, self.form, self.callback = None, None, None
         self.events, self.inputs, self.traces = queue.Queue(), {}, []
         self.frozen = []
+        self.binding, self.binding_cancel_requested, self.next_binding_poll = None, False, 0.
+        self.binding_buttons = []
         self.current_id = "_settings"
         self.channels = {}
         self.poll_token = None
@@ -137,6 +140,9 @@ class ChannelsWindow:
         self.reload_button.grid(row=0, column=2, padx=d(8))
         self.test_button = ttk.Button(foot, text="发送测试通知", command=self.test)
         self.test_button.grid(row=0, column=3)
+        self.cancel_binding_button = ttk.Button(foot, text="取消绑定", command=self.cancel_binding)
+        self.cancel_binding_button.grid(row=1, column=0, sticky="w", pady=(d(10), 0))
+        self.cancel_binding_button.grid_remove()
         self.session = RuntimeSession(RuntimePaths.discover(ROOT, profile), self.events.put)
         self.worker = self.session.worker
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -145,16 +151,31 @@ class ChannelsWindow:
         self.poll_token = self.window.after(80, self.poll)
 
     def buttons(self):
-        allowed = self.connected and not self.busy and not self.closing
+        allowed = self.connected and not self.busy and not self.closing and self.binding is None
         self.selector.state(["!disabled"] if allowed else ["disabled"])
         self.save_button.state(["!disabled"] if allowed and self.dirty else ["disabled"])
         self.reload_button.state(["!disabled"] if allowed and self.description else ["disabled"])
         self.test_button.state(["!disabled"] if allowed and self.description and self.description.get("valid") and not self.dirty else ["disabled"])
         self.save_button.configure(text="保存设置" if self.current_id == "_settings" else "保存渠道", style="Accent.TButton" if self.dirty else "TButton")
+        for button in self.binding_buttons:
+            button.state(["!disabled"] if allowed and self.description and self.description.get("binding_ready") and not self.dirty else ["disabled"])
+        if self.binding is not None:
+            self.cancel_binding_button.grid()
+            self.cancel_binding_button.state(["!disabled"] if not self.closing and not self.binding_cancel_requested else ["disabled"])
+        else: self.cancel_binding_button.grid_remove()
 
     def request(self, method, callback, **params):
         if self.busy or self.closing or not self.connected: return
+        if self.binding is not None and method not in ("qq_bind_status", "qq_bind_cancel"): return
         self.busy, self.callback = True, callback
+        self.freeze()
+        if method not in ("qq_bind_status", "qq_bind_cancel"):
+            self.status.set("正在发送…" if method == "notification_test" else "正在读取…" if method == "notification_channel" else "正在连接…" if method == "qq_bind_start" else "正在保存…")
+        self.session.send("rpc", method=method, tag=method, params=params)
+        self.buttons()
+
+    def freeze(self):
+        if self.frozen: return
         def freeze(widget):
             if isinstance(widget, (ttk.Entry, ttk.Combobox, ttk.Checkbutton, ttk.Button)):
                 self.frozen.append((widget, widget.state()))
@@ -164,9 +185,6 @@ class ChannelsWindow:
                 widget.configure(state="disabled")
             for child in widget.winfo_children(): freeze(child)
         freeze(self.content)
-        self.status.set("正在发送…" if method == "notification_test" else "正在读取…" if method == "notification_channel" else "正在保存…")
-        self.session.send("rpc", method=method, tag=method, params=params)
-        self.buttons()
 
     def loaded(self, result):
         self.channels = {"发送设置": "_settings", **{row["name"]: row["id"] for row in result}}
@@ -195,6 +213,7 @@ class ChannelsWindow:
         if self.content.winfo_exists():
             for child in self.content.winfo_children(): child.destroy()
         self.inputs.clear()
+        self.binding_buttons.clear()
 
     def render(self, result):
         self.clear()
@@ -216,7 +235,14 @@ class ChannelsWindow:
             ttk.Checkbutton(self.content, text="显示本次输入", variable=self.show_inputs, command=self.visibility).grid(row=2, column=0, sticky="w", pady=(0, d(12)))
             row = 3
             if result["id"] == "QQ_BOT":
-                theme.wrapped_label(self.content, text="收件方需已有 OpenID；QQ 网关绑定尚未接入。", style="Hint.TLabel").grid(row=row, column=0, sticky="ew", pady=(0, d(12)))
+                binding = ttk.Frame(self.content)
+                binding.grid(row=row, column=0, sticky="ew", pady=(0, d(16)))
+                for column, (label, group) in enumerate((("绑定单聊", False), ("绑定群聊", True))):
+                    button = ttk.Button(binding, text=label, command=lambda group=group: self.bind_recipient(group))
+                    button.grid(row=0, column=column, padx=(0, d(8)))
+                    self.binding_buttons.append(button)
+                if not result.get("binding_ready"):
+                    theme.wrapped_label(binding, text="先保存机器人 AppID 和 AppSecret。", style="Hint.TLabel").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(d(8), 0))
                 row += 1
             for field in result["fields"]:
                 line = ttk.Frame(self.content)
@@ -294,6 +320,37 @@ class ChannelsWindow:
         self.request("notification_test", tested,
                      channel_id=self.current_id, revision=self.description["revision"])
 
+    def bind_recipient(self, is_group):
+        if self.binding is not None or self.dirty or self.description is None or not self.description.get("binding_ready"): return
+        self.binding_cancel_requested = False
+        self.request("qq_bind_start", self.binding_result, is_group=is_group, revision=self.description["revision"])
+
+    def cancel_binding(self):
+        if self.binding is None or self.closing: return
+        self.binding_cancel_requested = True
+        self.next_binding_poll = 0.
+        self.status.set("正在取消，等待原连接退出…")
+        self.buttons()
+
+    def binding_result(self, result):
+        self.binding = result
+        self.next_binding_poll = time.monotonic() + .35
+        if result["busy"]:
+            self.freeze()
+            code = result.get("code", "")
+            self.status.set("正在取消，等待原连接退出…" if self.binding_cancel_requested else
+                            (f"匹配码 {code} · " if code else "") + result["detail"] + f"（{result['remaining_seconds']} 秒）")
+        else:
+            detail = result["detail"]
+            self.binding = None
+            self.binding_cancel_requested = False
+            self.thaw()
+            def reloaded(description):
+                self.render(description)
+                self.status.set(detail)
+            self.request("notification_channel", reloaded, channel_id="QQ_BOT")
+        self.buttons()
+
     def poll(self):
         if self.closed: return
         try:
@@ -304,14 +361,14 @@ class ChannelsWindow:
                     self.request("notification_channels", self.loaded)
                 elif event["type"] == "rpc_result":
                     self.busy = False
-                    self.thaw()
+                    if self.binding is None: self.thaw()
                     callback, self.callback = self.callback, None
                     if not self.closing and callback:
                         try: callback(event["result"])
                         except Exception as exc: self.status.set("显示失败：" + str(exc))
                 elif event["type"] == "error":
                     self.busy = False
-                    self.thaw()
+                    if self.binding is None: self.thaw()
                     self.callback = None
                     self.status.set(event["message"])
                 elif event["type"] == "closed":
@@ -320,6 +377,9 @@ class ChannelsWindow:
                     return
                 self.buttons()
         except queue.Empty: pass
+        if self.binding is not None and not self.busy and not self.closing and time.monotonic() >= self.next_binding_poll:
+            method = "qq_bind_cancel" if self.binding_cancel_requested and self.binding["state"] != "cancelling" else "qq_bind_status"
+            self.request(method, self.binding_result, job_id=self.binding["job_id"])
         self.poll_token = self.window.after(80, self.poll)
 
     def thaw(self):
@@ -341,7 +401,7 @@ class ChannelsWindow:
         if self.closing: return True
         if not self.allow_leave(): return False
         self.closing = True
-        self.status.set("正在等待发送与进程退出…")
+        self.status.set("正在取消绑定并等待原连接退出…" if self.binding is not None else "正在等待发送与进程退出…")
         self.session.close()
         self.buttons()
         if not self.worker.is_alive(): self.closed = True; self.window.destroy()
