@@ -132,7 +132,7 @@ class OneDragonExecution:
                 try:
                     with profile_lock(self.data):
                         from .onedragon_plugins import verify_context_plugins
-                        verify_context_plugins(self.ctx)
+                        verify_context_plugins(self.ctx,code=True)
                         from .map_transaction import MapTransaction
                         MapTransaction(self.data).assert_clear()
                         from .model_install import ModelInstall
@@ -251,8 +251,8 @@ class OneDragonExecution:
 
     def prepare_application(self,app_id:str) -> dict:
         if not self.ctx.ready_for_application:raise RuntimeError("请先初始化运行环境。")
-        from .onedragon_runtime import EXECUTABLE_APPLICATIONS
-        if app_id not in EXECUTABLE_APPLICATIONS:raise ValueError("该应用的执行适配尚未完成。")
+        from .onedragon_plugins import executable_application
+        if not executable_application(self.ctx,app_id):raise ValueError("该应用未注册或尚未启用执行。")
         def prepare():
             self.route_debug = None
             self.ctx.push_service.reset_results()
@@ -279,7 +279,7 @@ class OneDragonExecution:
             if app_id=="one_dragon":
                 applications=[item.app_id for item in store.get("_group").app_list if item.enabled]
                 if not applications:raise ValueError("请先在执行顺序中启用应用。")
-                unsupported=[self.ctx.run_context.get_application_name(key) for key in applications if key not in EXECUTABLE_APPLICATIONS]
+                unsupported=[self.ctx.run_context.get_application_name(key) for key in applications if not executable_application(self.ctx,key)]
                 if unsupported:raise ValueError("以下应用的执行适配尚未完成："+"、".join(unsupported))
             self.prepared_applications=applications
             from .onedragon_requirements import ApplicationRequirements

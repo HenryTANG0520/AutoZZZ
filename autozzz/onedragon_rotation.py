@@ -79,7 +79,7 @@ class RotationPlans:
             self.plan=None
             from .onedragon_config import ConfigurationStore
             from .onedragon_requirements import ApplicationRequirements
-            from .onedragon_runtime import EXECUTABLE_APPLICATIONS
+            from .onedragon_plugins import executable_application
             from one_dragon.base.config.game_account_config import GameAccountConfig
             registry=AccountStore(self.service)._registry();order,original=instance_order(registry)
             old_index=ctx.current_instance_idx
@@ -116,14 +116,14 @@ class RotationPlans:
                         applications=[app.app_id for app in store.get('_group').app_list if app.enabled]
                         row['applications']=[dict(id=key,name=ctx.run_context.get_application_name(key)) for key in applications]
                         if not applications:issue(idx,'该账号没有启用一条龙应用。');continue
-                        unsupported=[key for key in applications if key not in EXECUTABLE_APPLICATIONS]
+                        unsupported=[key for key in applications if not executable_application(ctx,key)]
                         if unsupported:issue(idx,'存在尚未完成执行适配的应用：'+'、'.join(unsupported));continue
                         requirements=ApplicationRequirements(ctx,self.root,store);requirements.collect(applications)
                         requirements.validate_policy_files()
                         summary=requirements.summary()
                         row['uses_charge']=requirements.uses_charge
                         row['resources']=[dict(action,instance_idx=idx,instance_name=item.name,id=f'{idx}:'+action['id']) for action in requirements.resource_actions]
-                        row['requirements']={key:summary[key] for key in ('policies','models','challenges','routes','uses_hunt')}
+                        row['requirements']={key:summary[key] for key in ('policies','models','challenges','routes','uses_hunt','plugins')}
                     except Exception as exc:issue(idx,str(exc))
             finally:
                 ctx.current_instance_idx=old_index;ctx.reload_instance_config()

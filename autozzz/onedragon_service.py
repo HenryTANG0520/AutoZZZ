@@ -100,11 +100,13 @@ class OneDragonService:
         from one_dragon.base.operation.application.application_factory import ApplicationFactory
         ctx = self.ctx
         factories = ctx.run_context._application_factory_map
+        from .onedragon_plugins import executable_application
         return {
             "instance": ctx.current_instance_idx,
             "applications": [dict(id=key, name=factory.app_name,
                                   default_group=factory.default_group, internal=factory.internal_app,
                                   third_party=bool(ctx.factory_manager.get_plugin_info(key).is_third_party),
+                                  executable=executable_application(ctx,key),
                                   configurable=key == "notify" or type(factory).create_config is not ApplicationFactory.create_config)
                              for key, factory in factories.items()],
             "failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures if not Path(path).resolve().is_relative_to(self.data/'plugins')],

@@ -115,6 +115,11 @@ class RuntimeSession:
             self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
         elif command=="prepare":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
+            from .onedragon_runtime import EXECUTABLE_APPLICATIONS
+            if params['app_id'] not in EXECUTABLE_APPLICATIONS and params['app_id']!='_login':
+                catalog=self._call(client,'catalog')
+                if not any(app['id']==params['app_id'] and app.get('executable')is True for app in catalog['applications']):
+                    raise ValueError('插件应用未注册或尚未启用执行。')
             self.parameters=params
             result=self._call(client,"initialize_execution",server=params["server"],game_path=params["game_path"],region=params["region"],instance_idx=params.get("instance_idx"))
             self.phase="initializing"

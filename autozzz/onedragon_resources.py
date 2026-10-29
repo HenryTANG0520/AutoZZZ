@@ -16,7 +16,11 @@ _resource_app: ContextVar[str | None] = ContextVar("autozzz_resource_app", defau
 
 def resource_confirmation_label(actions: list[dict]) -> str:
     sensitive = [item for item in actions if item["requires_confirmation"]]
+    plugins=any(item.get('kind')=='plugin' for item in sensitive)
     disc = any(item.get("app_id") == "drive_disc_dismantle" for item in sensitive)
+    if plugins:
+        if disc:return '允许本轮执行以上插件和资源操作（拆解无法恢复）'
+        return '允许本轮执行以上操作'
     consumption = any(item.get("app_id") != "drive_disc_dismantle" for item in sensitive)
     if disc and consumption:
         return "允许本轮消费并拆解驱动盘（拆解无法恢复）"

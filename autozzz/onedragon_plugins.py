@@ -338,8 +338,31 @@ def factory_manager(ctx):
     return Manager(ctx,ctx.application_plugin_dirs)
 
 
-def verify_context_plugins(ctx):
+def verify_context_plugins(ctx,code=False):
     generation=getattr(ctx,'plugin_generation',None)
     if generation is None:return
     from one_dragon.utils import os_utils
-    if PluginStore(os_utils.get_work_dir()).generation()!=generation:raise RuntimeError('插件已变化，请关闭原工作进程并重新读取或准备。')
+    store=PluginStore(os_utils.get_work_dir())
+    if (store.generation()!=generation or code and getattr(ctx,'plugin_code_signature',None)is not None
+            and ctx.plugin_code_signature!=digest_tree(store.plugins,code_only=True)):
+        raise RuntimeError('插件已变化，请关闭原工作进程并重新读取或准备。')
+
+
+def plugin_application(ctx,app_id):
+    """只接受实际管理器已经注册、且当前仍允许加载的第三方工厂。"""
+    from .onedragon_runtime import EXECUTABLE_APPLICATIONS
+    if app_id in EXECUTABLE_APPLICATIONS:return None
+    manager=getattr(ctx,'factory_manager',None)
+    info=getattr(manager,'get_plugin_info',lambda _:None)(app_id)
+    if info is None or getattr(info,'is_third_party',False)is not True:return None
+    if app_id not in ctx.run_context._application_factory_map:return None
+    verify_context_plugins(ctx,code=True)
+    from one_dragon.utils import os_utils
+    store=PluginStore(os_utils.get_work_dir());path=owned(info.plugin_dir,store.plugins)
+    if path.parent!=store.plugins or not store.enabled(path.name):raise ValueError('插件尚未启用加载，请重新读取插件状态。')
+    return info
+
+
+def executable_application(ctx,app_id):
+    from .onedragon_runtime import EXECUTABLE_APPLICATIONS
+    return app_id in EXECUTABLE_APPLICATIONS or plugin_application(ctx,app_id)is not None

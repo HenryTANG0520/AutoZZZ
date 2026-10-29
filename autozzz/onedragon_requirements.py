@@ -21,6 +21,7 @@ class ApplicationRequirements:
         self.shortcuts: dict[str, str] = {}
         self.resource_actions: list[dict] = []
         self.resource_settings: dict[str, str] = {}
+        self.plugins: list[dict] = []
         self.uses_charge = False
         self.uses_hunt = False
 
@@ -65,6 +66,12 @@ class ApplicationRequirements:
         if self.uses_charge:
             self._charge()
         for app_id in applications:
+            from .onedragon_plugins import plugin_application
+            plugin=plugin_application(self.ctx,app_id)
+            if plugin is not None:
+                self.plugins.append(dict(app_id=app_id,name=plugin.app_name,version=plugin.version,author=plugin.author))
+                self.resource_actions.append(dict(id='plugin:'+app_id,app_id=app_id,kind='plugin',requires_confirmation=True,
+                    text=f'插件：{plugin.app_name}。按插件配置执行，操作与消费由插件决定，不计入内置刷本预算。'))
             if app_id == "auto_battle":
                 self.policy(self.ctx.battle_assistant_config.auto_battle_config)
             elif app_id == "dodge_assistant":
@@ -233,4 +240,4 @@ class ApplicationRequirements:
         return dict(policies=[dict(directory=directory, name=name) for directory, name in sorted(self.policies)],
                     models=sorted(self.models | ({"flash_classifier"} if self.policies else set())),
                     challenges=dict(self.challenges), routes=list(self.routes),scripts=list(self.scripts),shortcuts=dict(self.shortcuts),
-                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings), uses_hunt=self.uses_hunt)
+                    resource_actions=list(self.resource_actions), resource_settings=dict(self.resource_settings), uses_hunt=self.uses_hunt,plugins=list(self.plugins))

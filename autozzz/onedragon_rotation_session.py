@@ -224,7 +224,7 @@ class RotationSession:
 
     @staticmethod
     def _actions(row):
-        return [{key:(item[key].split(':',1)[1] if key=='id' else item[key]) for key in ('id','app_id','text','requires_confirmation')} for item in row['resources']]
+        return [{key:(value.split(':',1)[1] if key=='id' else value) for key,value in item.items() if key not in ('instance_idx','instance_name')} for item in row['resources']]
 
     def _run(self,params):
         self._gate()

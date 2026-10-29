@@ -181,12 +181,14 @@ class ApplicationsPanel:
         self.run_button.configure(text="运行应用组…" if target=="one_dragon" else "运行应用…")
         # 草稿保存与已保存配置运行分别突出当前可执行的主要动作。
         self.save_button.configure(style="Accent.TButton" if self.dirty else "TButton")
-        self.run_button.configure(style="Accent.TButton" if not self.dirty and target in EXECUTABLE_APPLICATIONS else "TButton")
-        self.run_button.state(["!disabled"] if target in EXECUTABLE_APPLICATIONS and not self.busy and not self.dirty else ["disabled"])
+        self.run_button.configure(style="Accent.TButton" if not self.dirty and self.runnable(target) else "TButton")
+        self.run_button.state(["!disabled"] if self.runnable(target) and not self.busy and not self.dirty else ["disabled"])
+
+    def runnable(self,target):return target in EXECUTABLE_APPLICATIONS or self.apps.get(target,{}).get('executable')is True
 
     def run(self):
         target="one_dragon" if self.current_id=="_group" else self.current_id
-        if self.busy or self.dirty or target not in EXECUTABLE_APPLICATIONS:return
+        if self.busy or self.dirty or not self.runnable(target):return
         from .onedragon_run_ui import open_execution
         profile="global" if self.profile.get()=="国际服" else "cn"
         open_execution(self.ui,target,self.apps[target]["name"],profile)
@@ -362,7 +364,7 @@ class ApplicationsPanel:
         enable_scroll(self.canvas,self.content)
         self.canvas.yview_moveto(0)
         self.status.set(self.profile.get()+" · 已读取" if description is not None else
-                        "无需单独配置" if self.current_id in EXECUTABLE_APPLICATIONS else "配置暂未开放")
+                        "无需单独配置" if self.runnable(self.current_id) else "配置暂未开放")
         self._buttons()
 
     def changed(self):

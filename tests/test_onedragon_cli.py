@@ -65,6 +65,16 @@ class NativeCliTests(unittest.TestCase):
         self.created.close.assert_called_once()
         self.created.worker.join.assert_called_once()
 
+    def test_plugin_resource_actions_require_explicit_confirmation_of_fresh_preparation(self):
+        state=dict(state='prepared',uses_charge=False,resources=dict(confirmation_required=True,confirmation_id='fresh-plugin-confirmation'))
+        with self.assertRaises(ValueError):
+            run_application('fixture_plugin',server='global',game_path='game',region='asia',session_factory=self.session(state))
+        result=run_application('fixture_plugin',server='global',game_path='game',region='asia',confirm_resources=True,session_factory=self.session(state))
+        self.assertEqual(result['state']['state'],'success');self.assertEqual(self.commands[-1][1]['resource_confirmation'],'fresh-plugin-confirmation')
+        state['resources']['confirmation_id']=''
+        with self.assertRaises(ValueError):
+            run_application('fixture_plugin',server='global',game_path='game',region='asia',confirm_resources=True,session_factory=self.session(state))
+
     def test_interrupt_while_preparing_never_restarts_after_prepared_event(self):
         result = run_application('charge_plan', server='global', game_path='game', region='asia',
             allowance=20, battles=1, maximum=20,

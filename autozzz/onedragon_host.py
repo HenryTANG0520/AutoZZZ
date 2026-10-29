@@ -578,6 +578,9 @@ class ManagedZContext(ZContext):
         self.run_context.clear_applications()
         self.app_group_manager.clear_config_cache()
         super().register_application_factory()
+        from .onedragon_plugins import digest_tree
+        from one_dragon.utils import os_utils
+        self.plugin_code_signature=digest_tree(Path(os_utils.get_work_dir())/'plugins',code_only=True)
         factory = self.run_context._application_factory_map.get("commission_assistant")
         if factory is not None:
             # 上游构造函数误用了截图助手的 APP_ID；仅覆盖工厂创建，避免两个应用共用文件。
