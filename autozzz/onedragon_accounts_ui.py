@@ -19,6 +19,7 @@ class AccountsWindow:
         self.snapshot,self.description,self.form={},None,None
         self.events=queue.Queue()
         self.callback=None
+        self.preview_dialog=None
         self.poll_token=None
         self.window=tk.Toplevel(ui.root)
         self.window.title("AutoZZZ · 账号配置")
@@ -34,7 +35,9 @@ class AccountsWindow:
         header.grid(row=0,column=0,sticky="ew")
         header.columnconfigure(0,weight=1)
         ttk.Label(header,text="账号配置",style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
-        ttk.Label(header,text="国服 / B服" if profile=="cn" else "国际服",style="Hint.TLabel").grid(row=0,column=1)
+        ttk.Label(header,text="国服 / B服" if profile=="cn" else "国际服",style="Hint.TLabel").grid(row=0,column=1,padx=d(16))
+        self.preview_button=ttk.Button(header,text="轮换预检…",command=self.preview_rotation)
+        self.preview_button.grid(row=0,column=2)
         table_area=ttk.Frame(self.window,padding=(d(18),0))
         table_area.grid(row=1,column=0,sticky="ew")
         table_area.columnconfigure(0,weight=1)
@@ -105,6 +108,21 @@ class AccountsWindow:
 
     def reload(self):
         if self.allow_leave():self.request("account_list",self.loaded)
+
+    def preview_rotation(self):
+        if self.busy or self.closing:return
+        if self.dirty:
+            self.status.set("请先保存登录设置，再进行轮换预检。")
+            return
+        def show(result):
+            from .onedragon_rotation_ui import RotationPreviewDialog
+            if self.preview_dialog is not None and self.preview_dialog.window.winfo_exists():self.preview_dialog.window.destroy()
+            self.preview_dialog=RotationPreviewDialog(self.window,result,self.ui.ui_scale,self.edit_preview_account)
+            self.status.set("轮换配置预检通过" if result['configuration_valid'] else "请修复轮换预检中的问题。")
+        self.request("rotation_preview",show,server=self.profile)
+
+    def edit_preview_account(self,idx):
+        self.table.selection_set(str(idx));self.select()
 
     def loaded(self,result,select=None):
         self.snapshot=result
@@ -212,6 +230,7 @@ class AccountsWindow:
             self.actions[4].configure(text="保持登录状态" if row["force_login"] else "切换前重新登录")
         for widget in self.actions+[self.reload_button,self.table]:widget.state(["disabled"] if locked else ["!disabled"])
         self.save_button.state(["!disabled"] if not locked and self.dirty else ["disabled"])
+        self.preview_button.state(["!disabled"] if not locked and not self.dirty else ["disabled"])
         if self.form is not None:
             for control in self.form.controls.values():
                 widget=getattr(control,"widget",control)
@@ -255,6 +274,7 @@ class AccountsWindow:
         if self.closing:return True
         if not self.allow_leave():return False
         self.closing=True
+        if self.preview_dialog is not None and self.preview_dialog.window.winfo_exists():self.preview_dialog.window.destroy()
         self.status.set("正在关闭…")
         self.session.close()
         self.update_buttons()

@@ -183,8 +183,16 @@ class ApplicationRequirements:
                 coordinate(operation.data[0], width); coordinate(operation.data[1], height)
         self.routes = [route.full_id for route in routes]
 
-    def load(self, cancelled: Callable[[], bool], progress: Callable[[str], None]) -> None:
+    def validate_policy_files(self) -> None:
         from one_dragon.base.conditional_operation.loader import ConditionalOperatorLoader
+        for directory, name in sorted(self.policies):
+            selected = ConditionalOperatorLoader.get_yaml_file_path([directory], name, self.ctx.battle_assistant_config.use_merged_file)
+            if not selected:raise ValueError("战斗策略不存在：" + name)
+            path = Path(selected).resolve()
+            if path.parent != (self.data / "config" / directory).resolve() or not path.is_file():
+                raise ValueError("战斗策略不存在：" + name)
+
+    def load(self, cancelled: Callable[[], bool], progress: Callable[[str], None]) -> None:
         if cancelled():raise PreparationCancelled("应用准备已取消。")
         def step(label: str, action: Callable[[], None]) -> None:
             if cancelled():raise PreparationCancelled("应用准备已取消。")
@@ -193,12 +201,7 @@ class ApplicationRequirements:
             if cancelled():raise PreparationCancelled("应用准备已取消。")
 
         # 先核实所有策略文件，避免下载完模型才发现队伍指向无效策略。
-        for directory, name in sorted(self.policies):
-            selected = ConditionalOperatorLoader.get_yaml_file_path([directory], name, self.ctx.battle_assistant_config.use_merged_file)
-            if not selected:raise ValueError("战斗策略不存在：" + name)
-            path = Path(selected).resolve()
-            if path.parent != (self.data / "config" / directory).resolve() or not path.is_file():
-                raise ValueError("战斗策略不存在：" + name)
+        self.validate_policy_files()
         from .onedragon_scripts import compile_key_sim,compile_operation_template
         for script in self.scripts:
             def compile(script=script):

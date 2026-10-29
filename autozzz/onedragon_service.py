@@ -39,6 +39,7 @@ class OneDragonService:
         self._maps = None
         self._map_capture = None
         self._downloads = None
+        self._rotation = None
 
     @property
     def ctx(self) -> Any:
@@ -131,6 +132,15 @@ class OneDragonService:
             from .onedragon_downloads import ModelDownloads
             self._downloads = ModelDownloads(self)
         return self._downloads
+
+    def _rotation_plans(self):
+        if self._rotation is None:
+            from .onedragon_rotation import RotationPlans
+            self._rotation=RotationPlans(self)
+        return self._rotation
+
+    def rotation_preview(self,server:str):return self._rotation_plans().preview(server)
+    def rotation_validate(self,plan_id:str):return self._rotation_plans().validate(plan_id)
 
     def model_catalog(self): return self._download_service().catalog()
     def model_download_start(self, resource_id: str, revision: str): return self._download_service().start(resource_id,revision)
@@ -551,6 +561,7 @@ METHODS.update({"notification_channels", "notification_channel", "notification_c
 METHODS.update({"qq_bind_start", "qq_bind_status", "qq_bind_cancel"})
 METHODS.update({"library_catalog", "library_read", "library_draft", "library_save", "library_remove", "library_rename", "library_map", "library_export", "library_archive_read"})
 METHODS.update({"model_catalog", "model_download_start", "model_download_status", "model_download_cancel", "model_install_recover"})
+METHODS.update({"rotation_preview", "rotation_validate"})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
