@@ -65,7 +65,7 @@ def build(output: Path):
     shutil.copytree(filesystem_path(packages),filesystem_path(output/'python/Lib/site-packages'),ignore=ignored)
     print('复制桥接代码与许可证；不复制用户配置、模型或报告。',flush=True)
     bridge_files=tracked(root,'assets','LICENSE','LICENSE_NOTICE.md','launcher.py','requirements.txt','requirements-dev.txt','setup.ps1')
-    bridge_files += ['tools/build.ps1','tools/package_onedragon_runtime.py','tools/setup_onedragon.ps1']
+    bridge_files += ['tools/build.ps1','tools/package_onedragon_runtime.py','tools/setup_onedragon.ps1','tools/package_release.py']
     bridge_files += sorted(path.relative_to(root).as_posix() for path in (root/'autozzz').rglob('*.py') if '__pycache__' not in path.parts)
     copy_files(root,output/'bridge',bridge_files)
     files={name:digest(path) for name,path in sorted(tree_files(output))}

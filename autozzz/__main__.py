@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--battle-prepare", action="store_true", help="核实副本与预编队伍；不出战")
     mode.add_argument("--onedragon-run", metavar="APP_ID", help="运行已保存的一条龙应用配置")
     mode.add_argument("--runtime-check", type=Path, metavar="REPORT", help="检查一条龙分发环境并保存离线报告，不操作游戏")
+    mode.add_argument('--program-update',type=Path,metavar='ZIP',help='验证完整更新包，关闭当前进程后安装')
+    parser.add_argument('--update-report',type=Path,help='保存程序更新交接报告；报告已存在时不会重复更新')
+    parser.add_argument('--no-restart',action='store_true',help='程序更新完成后不重新打开界面')
     parser.add_argument("--energy-limit", type=int, help="一条龙本轮总电量上限，正整数")
     parser.add_argument("--battle-limit", type=int, help="一条龙本轮执行次数上限，正整数")
     parser.add_argument("--battle-cost-limit", type=int, help="一条龙单次电量上限，20—100")
@@ -50,6 +53,15 @@ def main(argv: list[str] | None = None) -> int:
     native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
     if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.confirm_resource_actions or args.run_timeout != 600):
         parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
+    if args.program_update:
+        if args.update_report is None:parser.error('--program-update 需要指定 --update-report。')
+        try:
+            from .program_update_cli import run_update
+            print(_json(run_update(args.program_update,args.update_report,server=args.server or 'cn',restart=not args.no_restart)))
+            return 0
+        except Exception as exc:
+            print(_json(dict(error=str(exc))),file=sys.stderr);return 2
+    if args.update_report is not None or args.no_restart:parser.error('程序更新选项只能与 --program-update 一起使用。')
 
     if args.runtime_check:
         try:

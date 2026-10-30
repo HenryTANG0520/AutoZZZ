@@ -42,6 +42,7 @@ class OneDragonService:
         self._rotation = None
         self._pip = None
         self._plugins = None
+        self._program_updates=None
         self._run_lease=run_lease
         self._rotation_guard=None
         self._rotation_sealed=False
@@ -80,6 +81,21 @@ class OneDragonService:
     def plugin_archives(self):return self.plugins.archive_list()
     def plugin_directory(self):return self.plugins.directory()
     def plugin_restore(self,identifier,names,revision,overwrites):self._assert_idle();return self.plugins.restore(identifier,names,revision,overwrites)
+
+    @property
+    def program_updates(self):
+        if self._program_updates is None:
+            from .program_updates import ProgramUpdates
+            self._program_updates=ProgramUpdates(self)
+        return self._program_updates
+
+    def program_catalog(self):return self.program_updates.catalog()
+    def program_check(self,channel=None,page=1):return self.program_updates.check(channel,page)
+    def program_download(self,release_id,revision):return self.program_updates.download(release_id,revision)
+    def program_import(self,path):return self.program_updates.import_package(path)
+    def program_restore(self,path):return self.program_updates.restore(path)
+    def program_status(self,job_id):return self.program_updates.status(job_id)
+    def program_cancel(self,job_id):return self.program_updates.cancel(job_id)
 
     @property
     def pip_service(self):
@@ -548,6 +564,7 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if getattr(self,'_program_updates',None) is not None and self._program_updates.busy:raise RuntimeError('程序版本操作仍在进行，请查询或取消原任务。')
         if self._plugins is not None and self._plugins.busy:raise RuntimeError('插件操作仍在处理，请等待原任务结束。')
         if self._downloads is not None and self._downloads.busy:
             raise RuntimeError("模型下载仍在处理，请等待或取消原任务。")
@@ -683,6 +700,7 @@ class OneDragonService:
             if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
 
     def _close_resources(self) -> None:
+        if getattr(self,'_program_updates',None) is not None:self._program_updates.close()
         if self._plugins is not None:self._plugins.close()
         if self._pip is not None:self._pip.close()
         if self._downloads is not None:self._downloads.close()
@@ -737,3 +755,4 @@ METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", 
 METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})
 METHODS.update({'trace_configure','trace_snapshot'})
 METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})
+METHODS.update({'program_catalog','program_check','program_download','program_import','program_restore','program_status','program_cancel'})

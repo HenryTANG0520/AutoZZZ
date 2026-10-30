@@ -668,7 +668,9 @@ class AutoZZZWindow:
         pip_alive=self.pip_controller is not None and self.pip_controller.worker_alive
         plugins=getattr(self,'plugin_window',None)
         plugin_alive=plugins is not None and plugins.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive:
+        program_updates=getattr(self,'program_updates_window',None)
+        updates_alive=program_updates is not None and program_updates.worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
@@ -696,6 +698,8 @@ class AutoZZZWindow:
         if downloads is not None and not downloads.closed:downloads.close()
         plugins=getattr(self,'plugin_window',None)
         if plugins is not None and not plugins.closed:plugins.close()
+        program_updates=getattr(self,'program_updates_window',None)
+        if program_updates is not None and not program_updates.closed:program_updates.close()
         if applications is not None:
             applications.close(discard=True)
         execution=getattr(self,"execution_window",None)
@@ -708,10 +712,32 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()):
             self._destroy_root()
 
     def _destroy_root(self):
+        plan=getattr(self,'pending_program_update',None)
+        if plan is not None:
+            error=getattr(self,'program_update_error',None)
+            if error is not None:
+                handoff=getattr(self,'program_handoff',None)
+                if handoff is not None and not handoff.cancel():self.root.after(100,self._destroy_root);return
+                self.pending_program_update=None
+                messagebox.showerror('更新未开始',error+'\n当前程序保留，可重新启动后查看日志。',parent=self.root)
+                plan=None
+        if plan is not None:
+            try:
+                if not hasattr(self,'program_handoff'):
+                    from .program_update import ProgramUpdate
+                    from .program_update_handoff import UpdateHandoff
+                    from .onedragon_bundle import digest
+                    transaction=ProgramUpdate(Path(plan['transaction']))
+                    if transaction.target!=ROOT or digest(transaction.journal)!=plan['journal_hash']:raise ValueError('安装事务已变化，未替换当前程序。')
+                    self.program_handoff=UpdateHandoff(transaction)
+                    self.program_handoff.start()
+                if not self.program_handoff.poll():self.root.after(100,self._destroy_root);return
+            except Exception as exc:
+                self.program_update_error=str(exc);self.root.after(100,self._destroy_root);return
         # 所有工作线程结束后，先取消各窗口定时器，再由所属控件释放 Tcl 命令。
         # root.after_cancel 会用 root 释放其他窗口拥有的命令，导致销毁时重复删除。
         for token in self.root.tk.splitlist(self.root.tk.call("after","info")):

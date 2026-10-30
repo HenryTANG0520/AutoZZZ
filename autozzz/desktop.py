@@ -119,7 +119,7 @@ def _settings(ui, server_names):
     sections, buttons = {}, {}
     right.content.columnconfigure(0, weight=1)
     right.content.rowconfigure(0, weight=1)
-    for index, (key, label) in enumerate((("game", "游戏"), ("run", "运行"), ("recognition", "识别")), 1):
+    for index, (key, label) in enumerate((("game", "游戏"), ("run", "运行"), ("recognition", "识别"),("updates","版本")), 1):
         section = ttk.Frame(right.content, style="Card.TFrame")
         section.grid(row=0, column=0, sticky="nsew")
         section.columnconfigure(0, weight=1)
@@ -183,6 +183,9 @@ def _settings(ui, server_names):
         line = row(recognition, index, label)
         control = line.mount(ttk.Entry(line, textvariable=variable, width=10))
         ui.setting_controls.append(control)
+    updates=sections['updates'];title(updates,'程序版本')
+    from .program_updates_ui import open_program_updates
+    ttk.Button(updates,text='版本与归档…',command=lambda:open_program_updates(ui),style='Accent.TButton').grid(row=1,column=0,sticky='w',pady=d(10))
     show("game")
 
 

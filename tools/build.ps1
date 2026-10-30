@@ -24,7 +24,7 @@ foreach ($taskCheckedPath in @($taskStagingRoot, $taskStagingOutput, $taskArchiv
         throw 'The resolved staging or archive directory is outside this project build directory.'
     }
 }
-foreach ($taskRequiredName in @('.venv\Scripts\python.exe', 'launcher.py', 'LICENSE', 'requirements.txt', 'tools\package_onedragon_runtime.py')) {
+foreach ($taskRequiredName in @('.venv\Scripts\python.exe', 'launcher.py', 'LICENSE', 'requirements.txt', 'tools\package_onedragon_runtime.py', 'tools\package_release.py')) {
     if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $taskRequiredName) -PathType Leaf)) {
         throw "Required file was not found: $taskRequiredName. Run setup.ps1 first."
     }
@@ -37,7 +37,7 @@ Push-Location -LiteralPath $projectRoot
 try {
     if ($PublishStagedPackage) {
         if (-not (Test-Path -LiteralPath (Join-Path $taskStagingOutput 'AutoZZZ.exe') -PathType Leaf)) { throw 'The completed staged executable is missing.' }
-        & $taskVenvPython -X utf8 -c 'from pathlib import Path; import sys; from autozzz.onedragon_bundle import verify_bundle; from autozzz.onedragon_runtime import UPSTREAM_REVISION, PROTOCOL_VERSION; verify_bundle(Path(sys.argv[1]), UPSTREAM_REVISION, PROTOCOL_VERSION)' (Join-Path $taskStagingOutput 'onedragon')
+        & $taskVenvPython -X utf8 -c 'from pathlib import Path; import sys; from autozzz.program_package import verify_package; from autozzz.onedragon_runtime import UPSTREAM_REVISION, PROTOCOL_VERSION; result = verify_package(Path(sys.argv[1])); assert result[''runtime_revision''] == UPSTREAM_REVISION and result[''protocol''] == PROTOCOL_VERSION' $taskStagingOutput
         if ($LASTEXITCODE -ne 0) { throw 'The completed staged runtime did not pass verification.' }
     } else {
         & $taskVenvPython -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(''PyInstaller'') else 1)'
@@ -64,6 +64,10 @@ try {
             New-Item -ItemType Directory -Path (Join-Path $taskStagingOutput 'docs') | Out-Null
             Copy-Item -LiteralPath $taskPreviewSource -Destination (Join-Path $taskStagingOutput 'docs') -Recurse
         }
+        $taskBuildRevision = (& git rev-parse --short HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot read the AutoZZZ build revision.' }
+        & $taskVenvPython -X utf8 (Join-Path $projectRoot 'tools\package_release.py') --package $taskStagingOutput --version ('dev-' + $taskBuildRevision)
+        if ($LASTEXITCODE -ne 0) { throw 'The complete package manifest could not be written.' }
         Write-Host "Staged package: $taskStagingOutput"
         if ($StageOnly) { return }
     }
@@ -82,9 +86,9 @@ try {
             # the parent directory until this file handle has been released.
             $taskExecutableLock = [IO.File]::Open($taskOldExecutable, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Delete)
         }
-        foreach ($taskSavedName in @('config.json', 'battle.json', 'training_catalog.json', 'runs')) {
-            $taskSavedPath = Join-Path $taskOutputDirectory $taskSavedName
-            if (Test-Path -LiteralPath $taskSavedPath) { Copy-Item -LiteralPath $taskSavedPath -Destination $taskStagingOutput -Recurse -Force }
+        if (Test-Path -LiteralPath $taskOutputDirectory -PathType Container) {
+            & $taskVenvPython -X utf8 (Join-Path $projectRoot 'tools\package_release.py') --package $taskStagingOutput --preserve-from $taskOutputDirectory
+            if ($LASTEXITCODE -ne 0) { throw 'User data could not be preserved. Existing installation is unchanged.' }
         }
         New-Item -ItemType Directory -Path (Split-Path -Parent $taskOutputDirectory) -Force | Out-Null
         if ($taskExecutableLock) { $taskExecutableLock.Dispose(); $taskExecutableLock = $null }
