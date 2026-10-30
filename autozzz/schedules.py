@@ -75,6 +75,8 @@ class Schedule:
         if self.server not in ('cn','global'):raise ValueError('区服无效。')
         if self.mode=='native' and (type(self.instance)is not int or self.instance<=0):raise ValueError('请选择固定的账号配置。')
         if self.instance is not None and (type(self.instance)is not int or self.instance<=0):raise ValueError('账号配置编号无效。')
+        if self.mode!='native' and (self.instance is not None or self.app_id!='one_dragon'):
+            raise ValueError('指定账号与独立应用只能用于原生应用计划。')
         text(self.app_id,'应用编号',512);validate_runtime_timeout(self.timeout)
         values=(self.allowance,self.battles,self.maximum)
         if any(value is not None for value in values):
@@ -97,7 +99,7 @@ class Schedule:
 
     @property
     def fingerprint(self) -> str:
-        value=self.dump();value.pop('binding_error');return revision(value)
+        value=self.dump();value.pop('binding_error');value.pop('enabled');return revision(value)
 
 
 class ScheduleStore:

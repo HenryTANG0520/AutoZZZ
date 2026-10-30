@@ -197,10 +197,12 @@ class RotationSession:
         self.state='preparing';self.error='';self.prepared=False;self.plan=None;self.manifest=None;self.accepted=False;self.budget_state={};self.phase='读取逐账号配置';self._state()
         self._connect(False)
         try:
-            self.plan=self._rpc('rotation_preview',server=params['server'])
+            selection={key:params[key] for key in ('instance_idx','app_id') if key in params}
+            self.plan=self._rpc('rotation_preview',server=params['server'],**selection)
             self.accounts=[dict(idx=row['idx'],name=row['name'],state='pending') for row in self.plan['instances']]
             if not self.plan['configuration_valid']:raise ValueError('；'.join(item['message'] for item in self.plan['issues']))
-            self.manifest=self._rpc('rotation_snapshot',plan_id=self.plan['plan_id'])
+            binding={'expected_intent':params['expected_intent']} if 'expected_intent'in params else {}
+            self.manifest=self._rpc('rotation_snapshot',plan_id=self.plan['plan_id'],**binding)
         finally:self._disconnect()
         if self.stop_requested.is_set() or self.closing.is_set():raise RotationStopped('轮换预检已停止。')
         self.confirmation=uuid.uuid4().hex;self.state='prepared';self.prepared=True;self.phase=''
@@ -271,12 +273,13 @@ class RotationSession:
                     if self.returning:
                         self.report['returned_to_start']=True;break
                     record['state']='running';self.phase=row['name']+' · 准备应用组';self._state()
-                    prepared=self._job('prepare_application',{'prepared'},app_id='one_dragon')
+                    execution_app=row.get('execution_app','one_dragon')
+                    prepared=self._job('prepare_application',{'prepared'},app_id=execution_app)
                     if [item['id'] for item in prepared.get('prepared_applications',[])]!=[item['id'] for item in row['applications']]:raise ValueError('应用顺序已变化，请重新预检。')
                     resources=prepared.get('resources',{})
                     if resources.get('actions',[])!=self._actions(row):raise ValueError('资源操作清单已变化，请重新预检。')
                     self.phase=row['name']+' · 运行应用组'
-                    result=self._job('start_application',{'success','failed'},game=True,app_id='one_dragon',
+                    result=self._job('start_application',{'success','failed'},game=True,app_id=execution_app,
                                      budget=budget if prepared['uses_charge'] else None,timeout_seconds=timeout,
                                      resource_confirmation=resources.get('confirmation_id') if resources.get('confirmation_required') else None)
                     record['state']=result['state'];record['applications']=result.get('applications',[])

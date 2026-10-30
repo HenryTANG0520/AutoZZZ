@@ -209,14 +209,26 @@ class OneDragonService:
             self._rotation=RotationPlans(self)
         return self._rotation
 
-    def rotation_preview(self,server:str):return self._rotation_plans().preview(server)
+    def rotation_preview(self,server:str,instance_idx:int|None=None,app_id:str='one_dragon'):return self._rotation_plans().preview(server,instance_idx,app_id)
+
+    def schedule_review(self,server:str,instance_idx:int|None=None,app_id:str='one_dragon'):
+        from .onedragon_schedule import review
+        return review(self,server,instance_idx,app_id)
     def rotation_validate(self,plan_id:str):return self._rotation_plans().validate(plan_id)
 
-    def rotation_snapshot(self,plan_id:str):
-        self.rotation_validate(plan_id)
+    def rotation_snapshot(self,plan_id:str,expected_intent:str|None=None):
+        plan=self.rotation_validate(plan_id)
+        if expected_intent is not None:
+            import re
+            if type(expected_intent)is not str or re.fullmatch('[0-9a-f]{64}',expected_intent)is None:raise ValueError('定时计划配置版本无效。')
         from .rotation_snapshot import snapshot
         result=snapshot(self.data)
+        if expected_intent is not None:
+            from .onedragon_schedule import intent_revision
+            if intent_revision(self.data,[row['idx'] for row in plan['instances']])!=expected_intent:
+                raise ValueError('定时计划的配置、策略或资源方式已变化，请重新核对。')
         self.rotation_validate(plan_id)
+        if snapshot(self.data)!=result:raise ValueError('资料交接期间配置发生变化，请重新预检。')
         return result
 
     def rotation_bind(self,manifest:dict):
@@ -756,3 +768,4 @@ METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss'
 METHODS.update({'trace_configure','trace_snapshot'})
 METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})
 METHODS.update({'program_catalog','program_check','program_download','program_import','program_restore','program_status','program_cancel'})
+METHODS.add('schedule_review')

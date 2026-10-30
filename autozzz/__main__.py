@@ -33,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--onedragon-run", metavar="APP_ID", help="运行已保存的一条龙应用配置")
     mode.add_argument("--runtime-check", type=Path, metavar="REPORT", help="检查一条龙分发环境并保存离线报告，不操作游戏")
     mode.add_argument('--program-update',type=Path,metavar='ZIP',help='验证完整更新包，关闭当前进程后安装')
+    mode.add_argument('--scheduled-run',metavar='ID',help='运行已启用且由 Windows 启动的固定计划')
+    parser.add_argument('--schedule-store',type=Path,help='当前安装目录的计划资料清单')
+    parser.add_argument('--schedule-revision',help='已注册系统计划的配置版本')
     parser.add_argument('--update-report',type=Path,help='保存程序更新交接报告；报告已存在时不会重复更新')
     parser.add_argument('--no-restart',action='store_true',help='程序更新完成后不重新打开界面')
     parser.add_argument("--energy-limit", type=int, help="一条龙本轮总电量上限，正整数")
@@ -53,6 +56,17 @@ def main(argv: list[str] | None = None) -> int:
     native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
     if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.confirm_resource_actions or args.run_timeout != 600):
         parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
+    if args.scheduled_run:
+        if args.schedule_store is None or args.schedule_revision is None:parser.error('--scheduled-run 需要计划资料和配置版本。')
+        if args.update_report is not None or args.no_restart:parser.error('程序更新选项不能与定时运行混用。')
+        if args.server is not None or args.game_path is not None or args.config!=CONFIG_PATH or args.battle_strategy is not None or args.battle_plan!=ROOT/'battle.json':
+            parser.error('定时运行的区服、配置与执行内容请在计划中修改。')
+        try:
+            from .schedule_runtime import run_scheduled
+            result=run_scheduled(args.scheduled_run,args.schedule_store,args.schedule_revision)
+            print(_json(result));return 0 if result['state']in ('success','duplicate','skipped') else 1
+        except Exception as exc:print(_json(dict(error=str(exc))),file=sys.stderr);return 2
+    if args.schedule_store is not None or args.schedule_revision is not None:parser.error('计划资料选项只能与 --scheduled-run 一起使用。')
     if args.program_update:
         if args.update_report is None:parser.error('--program-update 需要指定 --update-report。')
         try:

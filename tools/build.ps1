@@ -52,7 +52,7 @@ try {
         & $taskVenvPython -X utf8 -u tools/package_onedragon_runtime.py --output (Join-Path $taskStagingOutput 'onedragon')
         if ($LASTEXITCODE -ne 0) { throw 'The fixed OneDragon runtime could not be packaged. Existing installation is unchanged.' }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination (Join-Path $taskStagingOutput 'LICENSE')
-        foreach ($taskDocument in @('README.md', 'DAILY_FLOW.md', 'BATTLE.md', 'VALIDATION.md', 'LICENSE_NOTICE.md', 'ONEDRAGON_INTEGRATION.md')) {
+        foreach ($taskDocument in @('README.md', 'DAILY_FLOW.md', 'BATTLE.md', 'VALIDATION.md', 'LICENSE_NOTICE.md', 'ONEDRAGON_INTEGRATION.md', 'SCHEDULING.md')) {
             $taskDocumentPath = Join-Path $projectRoot $taskDocument
             if (Test-Path -LiteralPath $taskDocumentPath -PathType Leaf) {
                 $taskDocumentText = (Get-Content -LiteralPath $taskDocumentPath -Raw -Encoding UTF8).Replace('](assets/', '](_internal/assets/').Replace('](runs/', '](../../runs/').Replace('](dist/AutoZZZ/runs/', '](runs/')

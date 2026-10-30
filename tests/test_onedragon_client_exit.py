@@ -1,4 +1,5 @@
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 
@@ -78,3 +79,16 @@ class ClientExitTests(unittest.TestCase):
     def test_invalid_original_window_never_receives_request(self):
         self.valid=False
         self.assertFalse(self.run_exit());self.assertFalse(self.posts);self.assertFalse(self.attempts)
+
+    def test_window_closing_before_post_returns_does_not_race_the_control_watcher(self):
+        closed=threading.Event();watching=threading.Event()
+        def observe():
+            self.assertTrue(closed.wait(2));watching.set();self.control.poll()
+        observer=threading.Thread(target=observe)
+        def post():
+            self.posts+=1;self.valid=False;closed.set();self.assertTrue(watching.wait(2));time.sleep(.05);return True
+        self.post=post;observer.start()
+        try:self.assertTrue(self.run_exit())
+        finally:observer.join(2)
+        self.assertFalse(observer.is_alive());self.assertFalse(self.control.error)
+        self.assertEqual(self.posts,1);self.assertTrue(self.exit.status()['process_exited'])

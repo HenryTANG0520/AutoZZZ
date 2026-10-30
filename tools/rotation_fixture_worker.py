@@ -89,6 +89,14 @@ def main():
         def sync_game_config(self,*_):pass
         def dodge(self,*_,**__):pass
     original_register=ManagedZContext.register_application_factory
+    from autozzz.onedragon_service import OneDragonService
+    original_review=OneDragonService.schedule_review
+    def review(service,*args,**kwargs):
+        result=original_review(service,*args,**kwargs)
+        from autozzz.onedragon_schedule import intent_entries
+        number=len(list((data/'autozzz').glob('fixture-intent-*.json')))
+        (data/'autozzz'/f'fixture-intent-{number}.json').write_text(json.dumps(intent_entries(data,[row['idx'] for row in result['instances']]),sort_keys=True),encoding='utf-8')
+        return result
     class FixtureApp(Application):
         def __init__(self,ctx):super().__init__(ctx,'email',op_name='离线邮件回放')
         @operation_node(name='记录本账号进度',is_start_node=True,screenshot_before_round=False)
@@ -134,7 +142,7 @@ def main():
         for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','pynput.keyboard.Controller.press','pynput.mouse.Controller.press','win32clipboard.OpenClipboard','autozzz.windows.user32.PostMessageW','autozzz.windows.user32.SendInput'):
             scope.enter_context(patch(name,side_effect=forbidden))
         for cls,name,replacement in ((ManagedZContext,'register_application_factory',register),(ManagedZContext,'init',initialize),(ManagedZContext,'after_app_shutdown',shutdown),
-                                     (EnterGame,'__init__',enter),(SwitchAccount,'__init__',switch),(GotoMenu,'execute',lambda *_:OperationResult(True))):
+                                     (EnterGame,'__init__',enter),(SwitchAccount,'__init__',switch),(GotoMenu,'execute',lambda *_:OperationResult(True)),(OneDragonService,'schedule_review',review)):
             scope.enter_context(patch.object(cls,name,replacement))
         scope.enter_context(patch('autozzz.onedragon_startup.game_processes',side_effect=inventory))
         scope.enter_context(patch('autozzz.onedragon_startup.launch_client',side_effect=launch))

@@ -71,8 +71,11 @@ class RotationPlans:
     def _clear_transactions(self):
         MapTransaction(self.root).assert_clear();ModelInstall(self.root).assert_clear()
 
-    def preview(self,server):
+    def preview(self,server,instance_idx=None,app_id='one_dragon'):
         if server not in ('cn','global'):raise ValueError('区服无效。')
+        if instance_idx is not None and (type(instance_idx)is not int or instance_idx<=0):raise ValueError('账号配置编号无效。')
+        if not isinstance(app_id,str) or not app_id or len(app_id)>512:raise ValueError('应用编号无效。')
+        if instance_idx is None and app_id!='one_dragon':raise ValueError('独立应用需要指定固定账号。')
         self.service._assert_idle();self._clear_transactions()
         ctx=self.service.ctx
         with profile_lock(self.root):
@@ -82,6 +85,7 @@ class RotationPlans:
             from .onedragon_plugins import executable_application
             from one_dragon.base.config.game_account_config import GameAccountConfig
             registry=AccountStore(self.service)._registry();order,original=instance_order(registry)
+            if instance_idx is not None:order=[AccountStore._instance(registry,instance_idx)]
             old_index=ctx.current_instance_idx
             for item in registry.instance_list:
                 folder=self.root/'config'/f'{item.idx:02d}'
@@ -110,10 +114,11 @@ class RotationPlans:
                              login_configured=bool(account.has_login_info),game_path=str(path.resolve()) if valid_path else account.game_path,
                              region=region,language=account.game_language,applications=[],uses_charge=False,resources=[],requirements={})
                     instances.append(row)
+                    if instance_idx is not None:row['execution_app']=app_id
                     ctx.current_instance_idx=idx;ctx.reload_instance_config()
                     try:
                         store=ConfigurationStore(self.service)
-                        applications=[app.app_id for app in store.get('_group').app_list if app.enabled]
+                        applications=([app.app_id for app in store.get('_group').app_list if app.enabled] if app_id=='one_dragon' else [app_id])
                         row['applications']=[dict(id=key,name=ctx.run_context.get_application_name(key)) for key in applications]
                         if not applications:issue(idx,'该账号没有启用一条龙应用。');continue
                         unsupported=[key for key in applications if not executable_application(ctx,key)]
@@ -144,6 +149,7 @@ class RotationPlans:
                            origin=dict(idx=original,game_path=configs[original].game_path,region=configs[original].game_region,language=configs[original].game_language),
                            revision=rotation_revision(self.root),instances=instances,transitions=transitions,issues=issues,
                            configuration_valid=not issues,uses_charge=any(row['uses_charge'] for row in instances))
+            if instance_idx is not None:self.plan['selection']=dict(instance_idx=instance_idx,app_id=app_id)
             return copy.deepcopy(self.plan)
 
     def validate(self,plan_id):

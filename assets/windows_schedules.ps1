@@ -68,7 +68,7 @@ try {
     if ($taskEntry) { Assert-TaskOwner $taskEntry }
 
     if ($taskRequest.operation -eq 'register') {
-        if ($taskEntry -and $taskEntry.GetInstances(0).Count) { throw '原计划仍在运行，请正常停止并等待退出后再修改。' }
+        if ($taskEntry -and ($taskEntry.State -in @(2,4) -or $taskEntry.GetInstances(0).Count)) { throw '原计划仍在运行，请正常停止并等待退出后再修改。' }
         [xml]$taskXml = $taskRequest.xml
         $taskNs = New-Object System.Xml.XmlNamespaceManager($taskXml.NameTable)
         $taskNs.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
@@ -89,11 +89,19 @@ try {
             'enable' { $taskEntry.Enabled = $true }
             'disable' { $taskEntry.Enabled = $false }
             'remove' {
-                if ($taskEntry.GetInstances(0).Count) { throw '原计划仍在运行，请正常停止并等待退出后再移除。' }
+                if ($taskEntry.State -in @(2,4) -or $taskEntry.GetInstances(0).Count) { throw '原计划仍在运行，请正常停止并等待退出后再移除。' }
                 $taskFolder.DeleteTask($taskRequest.key,0)
             }
             'run' {
                 if (-not $taskEntry.Enabled) { throw '请先启用计划。' }
+                $taskExisting = $taskEntry.GetInstances(0)
+                if ($taskExisting.Count -gt 1) { throw '当前计划实例不唯一，未再次启动。' }
+                if ($taskExisting.Count -eq 1) {
+                    $taskRunning = $taskExisting.Item(1)
+                    @{ ok=$true; instance=$taskRunning.InstanceGuid; state=[int]$taskRunning.State; reused=$true } | ConvertTo-Json -Compress
+                    exit 0
+                }
+                if ($taskEntry.State -in @(2,4)) { throw '原计划仍在运行但无法读取实例，请查询原任务或检查权限。' }
                 $taskRunning = $taskEntry.Run($null)
                 @{ ok=$true; instance=$taskRunning.InstanceGuid; state=[int]$taskRunning.State } | ConvertTo-Json -Compress
                 exit 0
