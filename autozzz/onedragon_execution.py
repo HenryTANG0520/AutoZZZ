@@ -9,7 +9,7 @@ import time
 from typing import Any
 import uuid
 
-from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState
+from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState,validate_runtime_timeout
 from .run_lock import RunLock, profile_lock
 
 
@@ -326,7 +326,7 @@ class OneDragonExecution:
     def start_login(self,mode:str,timeout_seconds:int=600,auto_launch:bool=False) -> dict:
         if not self.ctx.ready_for_application or self.prepared_app!="_login" or mode!=self.login_mode:
             raise ValueError("请先准备所选登录方式。")
-        if type(timeout_seconds)is not int or not 30<=timeout_seconds<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+        validate_runtime_timeout(timeout_seconds)
         if type(auto_launch)is not bool:raise ValueError("启动游戏选项必须为布尔值。")
         def run():
             try:
@@ -435,7 +435,7 @@ class OneDragonExecution:
         if self.ctx.run_context.is_app_internal(app_id) and not fixed_entry:
             raise ValueError("该应用必须通过其固定入口启动。")
         if app_id!=self.prepared_app:raise ValueError("请先准备所选应用。")
-        if type(timeout_seconds)is not int or not 30<=timeout_seconds<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+        validate_runtime_timeout(timeout_seconds)
         if self.uses_charge:
             from .battle_budget import validate_runtime_budget
             validate_runtime_budget(budget)

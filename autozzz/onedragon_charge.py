@@ -53,7 +53,7 @@ class ChargeBudgetControl:
         part=cv2_utils.crop_image_only(operation.last_screenshot,Rect(max(0,button.x1-210),button.y1,button.x1,button.y2))
         results=[]
         for text,matches in self.ctx.ocr.run_ocr(part).items():
-            parsed=re.fullmatch(r"\s*(\d{1,3})\s*/\s*(\d{1,3})\s*",text)
+            parsed=re.fullmatch(r"\s*(\d+)\s*/\s*(\d{1,3})\s*",text)
             if parsed and matches.max is not None and matches.max.confidence>=.7:
                 results.append(tuple(map(int,parsed.groups())))
         if len(results)!=1:raise ValueError("未能唯一核实画面中的“剩余电量 / 需要电量”。")

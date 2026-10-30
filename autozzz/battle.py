@@ -84,10 +84,10 @@ class BattlePlan:
             raise ValueError("脚本轮数必须是1至12；每次仅挑战一次副本。")
         if type(self.max_energy) is not int or not 20 <= self.max_energy <= 100:
             raise ValueError("单次电量上限需为20至100。")
-        if type(self.battles) is not int or not 1<=self.battles<=15:
-            raise ValueError("单次批次最多15场。")
-        if type(self.energy_budget) is not int or not 20<=self.energy_budget<=300:
-            raise ValueError("单次批次最多使用300现有电量。")
+        if type(self.battles) is not int or self.battles<1:
+            raise ValueError("批次场次须为正整数。")
+        if type(self.energy_budget) is not int or self.energy_budget<20:
+            raise ValueError("批次总电量须为不小于20的整数。")
         if self.budget_id and not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",self.budget_id):
             raise ValueError("预算编号格式不正确。")
         if not isinstance(self.expected_roster,str):

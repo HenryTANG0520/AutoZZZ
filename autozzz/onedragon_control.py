@@ -11,6 +11,10 @@ from typing import Any, Callable, Iterator
 _observation_epoch: ContextVar[int | None] = ContextVar("autozzz_observation_epoch", default=None)
 
 
+def validate_runtime_timeout(seconds):
+    if type(seconds)is not int or seconds<30:raise ValueError('运行时限须为不小于 30 的整数秒。')
+
+
 class ObservationExpired(RuntimeError):
     pass
 

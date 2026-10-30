@@ -15,8 +15,8 @@ class BudgetRecords:
     def __init__(self,directory:Path):self.directory=Path(directory)
 
     def _read(self,path:Path):
-        if path.resolve().parent!=self.directory.resolve() or path.stat().st_size>2*1024*1024:
-            raise ValueError("预算文件路径或大小无效。")
+        if path.resolve().parent!=self.directory.resolve():
+            raise ValueError("预算文件路径无效。")
         content=path.read_bytes()
         data=json.loads(content)
         if (not isinstance(data,dict) or data.get("version")!=1 or data.get("id")!=path.stem

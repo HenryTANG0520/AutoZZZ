@@ -12,6 +12,7 @@ import uuid
 from .onedragon_runtime import OneDragonClient,RequestPending,RemoteError
 from .rotation_snapshot import snapshot
 from .task_lease import RunLeaseOwner
+from .onedragon_control import validate_runtime_timeout
 
 
 class RotationStopped(RuntimeError):pass
@@ -233,7 +234,7 @@ class RotationSession:
         required=any(item['requires_confirmation'] for row in self.plan['instances'] for item in row['resources'])
         if required and params.get('resource_confirmation')!=self.confirmation:raise ValueError('请确认本轮逐账号消费或拆解清单。')
         timeout=params.get('timeout_seconds',600)
-        if type(timeout)is not int or not 30<=timeout<=7200:raise ValueError('阶段时限须为 30—7200 秒。')
+        validate_runtime_timeout(timeout)
         budget=params.get('budget')
         if self.plan['uses_charge']:
             from .battle_budget import BattleBudget,budget_directory,validate_runtime_budget

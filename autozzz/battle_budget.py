@@ -6,14 +6,19 @@ from pathlib import Path
 from .models import AutomationError
 
 
+def _validate_totals(allowance,battle_limit):
+    if type(allowance)is not int or allowance<1 or type(battle_limit)is not int or battle_limit<1:
+        raise ValueError('总电量和次数须为正整数。')
+
+
 def validate_runtime_budget(budget):
     if not isinstance(budget,dict) or set(budget)!={'id','allowance','battle_limit','max_per_battle'}:
-        raise ValueError('刷本须指定预算编号、电量上限、场次和每场上限。')
+        raise ValueError('电量计划须指定预算编号、总电量、次数和单次上限。')
     if not isinstance(budget['id'],str) or re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',budget['id']) is None:
         raise ValueError('战斗预算编号仅允许字母、数字、横线和下划线。')
-    for name,maximum in (('allowance',300),('battle_limit',15),('max_per_battle',100)):
-        if type(budget[name])is not int or not (20 if name=='max_per_battle' else 1)<=budget[name]<=maximum:
-            raise ValueError('战斗预算超出允许范围。')
+    _validate_totals(budget['allowance'],budget['battle_limit'])
+    if type(budget['max_per_battle'])is not int or not 20<=budget['max_per_battle']<=100:
+        raise ValueError('单次电量上限须为 20—100。')
 
 def budget_directory():
     import os
@@ -22,8 +27,10 @@ def budget_directory():
 
 class BattleBudget:
     def __init__(self, directory, identifier, server, allowance, battle_limit):
-        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",identifier):
+        if not isinstance(identifier,str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",identifier):
             raise ValueError("战斗预算编号仅允许字母、数字、横线和下划线。")
+        if server not in ('cn','global'):raise ValueError('预算区服须为国服或国际服。')
+        _validate_totals(allowance,battle_limit)
         self.path=Path(directory)/(identifier+".json")
         expected=dict(version=1,id=identifier,server=server,allowance=allowance,battle_limit=battle_limit)
         if self.path.exists():

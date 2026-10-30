@@ -93,13 +93,16 @@ def main():
                     pump(root,lambda:window.prepared)
                     assert window.start_button.cget('style')=='Accent.TButton'
                     assert window.prepare_button.cget('style')=='TButton'
-                    window.allowance.set('40')
-                    window.rounds.set('2')
+                    window.allowance.set('2400')
+                    window.rounds.set('120')
+                    window.per_battle.set('100')
+                    window.timeout.set('86400')
                     window.auto_launch.set(False)
                     window.start_button.invoke()
                     pump(root,lambda:window.last_state.get('state')=='running')
                     command,params=window.session.commands[-1]
-                    assert command=='start' and params['budget']['allowance']==40 and params['budget']['battle_limit']==2
+                    assert command=='start' and params['budget']['allowance']==2400 and params['budget']['battle_limit']==120
+                    assert params['budget']['max_per_battle']==100 and params['timeout_seconds']==86400
                     window.session.state['input']=dict(background=True,requires_foreground=False)
                     window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
                     pump(root,lambda:'后台' in window.status.get())

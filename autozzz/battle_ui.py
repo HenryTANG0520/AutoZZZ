@@ -70,7 +70,7 @@ class BattlePanel:
         groups = (
             ("副本与队伍", (("category", "训练模式"), ("subcategory", "训练项目"),
                 ("stage", "目标副本"), ("team", "游戏内预编队名"), ("expected_roster", "角色顺序（逗号，选填）"),
-                ("battles", "场次 · 1—15"), ("energy_budget", "总电量上限 · 20—300"), ("max_energy", "每场电量上限"))),
+                ("battles", "场次 · 正整数"), ("energy_budget", "总电量上限 · ≥20"), ("max_energy", "每场电量上限"))),
             ("JSON 预输入策略", (("strategy_file", "JSON 文件（选填）"), ("script", "动作序列"),
                 ("hold_unit", "长按单位（秒）"), ("intro_wait", "转场等待（秒）"),
                 ("cycles", "每场脚本轮数"), ("timeout", "结算超时（秒）"))))

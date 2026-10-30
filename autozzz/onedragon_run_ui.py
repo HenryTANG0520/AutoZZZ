@@ -136,7 +136,7 @@ class ExecutionWindow:
         self.budget_frame.grid(row=0,column=0,sticky="ew",padx=d(18),pady=(0,d(12)))
         for col,(name,var) in enumerate((("总电量上限",self.allowance),("最多次数",self.rounds),("单次电量上限",self.per_battle))):
             ttk.Label(self.budget_frame,text=name).grid(row=0,column=col*2,sticky="w",padx=(0,d(8)))
-            entry=ttk.Entry(self.budget_frame,textvariable=var,width=6)
+            entry=ttk.Entry(self.budget_frame,textvariable=var,width=9)
             entry.grid(row=0,column=col*2+1,sticky="w",padx=(0,d(18)))
             self.settings_controls.append(entry)
         self.budget_note=theme.wrapped_label(self.budget_frame,text="仅使用现有电量",style="Hint.TLabel")
@@ -319,12 +319,14 @@ class ExecutionWindow:
             return
         try:
             timeout=int(self.timeout.get())
-            if not 30<=timeout<=7200:raise ValueError("运行时限须为 30—7200 秒。")
+            from .onedragon_control import validate_runtime_timeout
+            validate_runtime_timeout(timeout)
             budget=None
             if self.uses_charge:
                 allowance,rounds,maximum=int(self.allowance.get()),int(self.rounds.get()),int(self.per_battle.get())
-                if not 1<=allowance<=300 or not 1<=rounds<=15 or not 20<=maximum<=100:raise ValueError("电量上限 1—300，次数 1—15，单次上限 20—100。")
                 budget=dict(id="onedragon-"+uuid.uuid4().hex,allowance=allowance,battle_limit=rounds,max_per_battle=maximum)
+                from .battle_budget import validate_runtime_budget
+                validate_runtime_budget(budget)
         except ValueError as exc:
             self.status.set(str(exc))
             return

@@ -49,6 +49,7 @@ def main():
         try:
             ui.overlay.set_enabled(False)
             ui.combat_panel.vars['strategy_file'].set('builtin:cn-team1')
+            ui.combat_panel.vars['battles'].set('120');ui.combat_panel.vars['energy_budget'].set('2400')
             ui._show_page('combat');root.update()
             assert ui.combat_panel.tabs.index(ui.combat_panel.tabs.select())==0
             if args.screenshots:
@@ -71,6 +72,7 @@ def main():
                 assert FakeRunner.calls[-1]['catalog_only']==(operation=='battle_catalog')
                 if operation!='battle_catalog':
                     assert FakeRunner.calls[-1]['battle_plan'].strategy_file=='builtin:cn-team1'
+                    assert FakeRunner.calls[-1]['battle_plan'].battles==120 and FakeRunner.calls[-1]['battle_plan'].energy_budget==2400
                 assert not ui.running
                 root.deiconify();root.update()
             assert hashlib.sha256(config.read_bytes()).hexdigest()==before,'Starting combat must not save daily settings'

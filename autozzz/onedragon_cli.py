@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import queue
-import re
 import signal
 import uuid
 
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
+from .battle_budget import validate_runtime_budget
+from .onedragon_control import validate_runtime_timeout
 
 
 def combat_budget(allowance, battles, maximum, identifier=None):
@@ -18,16 +19,11 @@ def combat_budget(allowance, battles, maximum, identifier=None):
             raise ValueError("预算编号须同时指定三项预算。")
         return None
     if any(value is None for value in values):
-        raise ValueError("请同时指定总电量、场次与每场电量上限。")
-    for value, low, high in ((allowance, 1, 300), (battles, 1, 15), (maximum, 20, 100)):
-        if type(value) is not int or not low <= value <= high:
-            raise ValueError("战斗预算范围：总电量 1—300、场次 1—15、每场电量 20—100。")
-    if maximum > allowance:
-        raise ValueError("每场电量上限不能超过本轮总电量。")
-    if identifier is not None and (not isinstance(identifier, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier)):
-        raise ValueError("预算编号仅允许 1—80 位字母、数字、横线和下划线。")
-    return dict(id=identifier or "onedragon-" + uuid.uuid4().hex, allowance=allowance,
-                battle_limit=battles, max_per_battle=maximum)
+        raise ValueError("请同时指定总电量、次数与单次电量上限。")
+    budget=dict(id="onedragon-"+uuid.uuid4().hex if identifier is None else identifier,allowance=allowance,
+                battle_limit=battles,max_per_battle=maximum)
+    validate_runtime_budget(budget)
+    return budget
 
 
 def run_application(app_id, *, server, game_path, region, timeout=600,
@@ -37,8 +33,7 @@ def run_application(app_id, *, server, game_path, region, timeout=600,
     if type(confirm_resources)is not bool:raise ValueError('资源确认开关须为布尔值。')
     if server not in ("cn", "global"):
         raise ValueError("请选择国服或国际服。")
-    if type(timeout) is not int or not 30 <= timeout <= 7200:
-        raise ValueError("运行时限须为 30—7200 秒。")
+    validate_runtime_timeout(timeout)
     budget = combat_budget(allowance, battles, maximum, budget_id)
     events = queue.Queue()
     session = session_factory(RuntimePaths.discover(ROOT, server), events.put)

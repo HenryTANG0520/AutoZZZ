@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import PropertyMock,patch
 
 
@@ -40,9 +41,12 @@ def main():
     from autozzz.onedragon_control import WindowState
     from autozzz.battle_budget import BattleBudget
     from one_dragon.base.operation.application_base import Application
+    from one_dragon.base.operation.operation import Operation
+    from one_dragon.base.operation.operation_base import OperationResult
     from one_dragon.base.operation.operation_node import operation_node
     from zzz_od.operation.zzz_operation import ZOperation
     from zzz_od.operation.exchange_ether_battery import ExchangeEtherBattery
+    from zzz_od.operation.back_to_normal_world import BackToNormalWorld
     from zzz_od.application.charge_plan.charge_plan_config import ChargePlanItem
     scenario={};checks=[];events=[];service=None;ready=threading.Event();window=[WindowState(True,True,(0,0,1920,1080))]
     def forbidden(*_,**__):raise AssertionError('合成回放不能访问游戏、网络或物理输入。')
@@ -98,6 +102,18 @@ def main():
             scope.enter_context(patch.object(ZOperation,'round_by_find_area',find));scope.enter_context(patch.object(ZOperation,'round_by_find_and_click_area',click))
             scope.enter_context(patch.object(ZOperation,'round_by_ocr_and_click',ocr_click));scope.enter_context(patch.object(ZOperation,'round_by_ocr',ocr))
             scope.enter_context(patch.object(ZOperation,'check_and_update_current_screen',lambda *_:'道具处理' if scenario['phase']=='material' else None))
+            from PIL import Image,ImageDraw,ImageFont
+            from autozzz.onedragon_charge import ChargeBudgetControl
+            from zzz_od.operation.compendium.combat_simulation import CombatSimulation
+            button=ctx.screen_loader.get_area('实战模拟室','下一步').rect
+            synthetic=Image.new('RGB',(1920,1080),(0,0,0))
+            ImageDraw.Draw(synthetic).text((button.x1-200,button.y1+6),'2400/20',font=ImageFont.truetype('C:/Windows/Fonts/arialbd.ttf',30),fill=(255,255,255))
+            synthetic.save(base/'large-energy-ocr.png')
+            selection=CombatSimulation(ctx,ChargePlanItem(card_num='1'));selection.last_screenshot=np.array(synthetic)
+            ocr_budget=BattleBudget(base/'ocr-budget','read-only','cn',20,1)
+            assert ChargeBudgetControl(ctx,control,ocr_budget,100)._read_cost(selection)==(2400,20)
+            assert not ocr_budget.data['entries']
+            checks.append('actual_ocr_reads_four_digit_available_energy_without_reserving_input')
             scope.enter_context(patch.object(ctx.ocr,'run_ocr_single_line',side_effect=header))
             class Root(Application):
                 def __init__(self,ctx):super().__init__(ctx,'charge_plan',op_name='原生合成回放')
@@ -110,12 +126,23 @@ def main():
                         path=Path(config.file_path);value=safe_load(path.read_bytes());value['plan_list'][0]['plan_times']=100
                         path.write_text(yaml.safe_dump(value,allow_unicode=True),encoding='utf-8')
                     return self.round_by_op_result(ExchangeEtherBattery(ctx,config.plan_list[0]).execute())
-            ctx.run_context._application_factory_map['charge_plan'].create_application=lambda instance_idx,group_id:Root(ctx)
+            factory=ctx.run_context._application_factory_map['charge_plan']
+            native_create=factory.create_application
+            factory.create_application=lambda instance_idx,group_id:native_create(instance_idx,group_id) if scenario.get('full_plan') else Root(ctx)
+            def goto(op,*_,**__):
+                scenario['phase']='entry'
+                return op.round_success()
+            def charge_pipeline(*_,**__):
+                remaining=scenario['supply']-sum(scenario['consume'])
+                return SimpleNamespace(ocr_result={f'{remaining}/240':[SimpleNamespace(x=160,w=26)]})
+            scope.enter_context(patch.object(BackToNormalWorld,'execute',lambda _:OperationResult(True,'fixture world')))
+            scope.enter_context(patch.object(Operation,'round_by_goto_screen',goto))
+            scope.enter_context(patch.object(ctx.cv_service,'run_pipeline',side_effect=charge_pipeline))
 
-            def run(times=1,allowance=60,limit=1,**changes):
-                scenario.update(case=len(checks),phase='entry',item=True,insufficient=False,obtained=True,quantity=1,change=False,paused=False,reads=0,consume=[]);scenario.update(changes);ready.clear()
+            def run(times=1,allowance=60,limit=1,timeout=30,loop=False,**changes):
+                scenario.update(case=len(checks),phase='entry',item=True,insufficient=False,obtained=True,quantity=1,change=False,paused=False,reads=0,consume=[],full_plan=False,supply=allowance);scenario.update(changes);ready.clear()
                 description=service.describe_configuration('charge_plan');plan=ChargePlanItem(category_name='合成电池',mission_type_name='',mission_name=None,auto_battle_config='不存在的无关策略',plan_times=times).to_dict();plan.pop('plan_id')
-                service.save_configuration('charge_plan',dict(restore_charge='不使用',double_reward=False,loop=False,plan_list=[plan]),description['revision'])
+                service.save_configuration('charge_plan',dict(restore_charge='不使用',double_reward=False,loop=loop,plan_list=[plan]),description['revision'])
                 manager.prepare_application('charge_plan');wait(lambda:not manager.busy);assert manager.state=='prepared',manager.status()
                 state=manager.status();assert state['resources']['confirmation_required'] and not manager.prepared_requirements['policies']
                 try:manager.start_application('charge_plan',fixed_entry=True,budget=dict(id='no-token',allowance=60,battle_limit=1,max_per_battle=60));raise AssertionError('unconfirmed synthesis started')
@@ -130,8 +157,9 @@ def main():
                             window[0]=WindowState(True,True,window[0].geometry);control.poll()
                         except Exception as exc:errors.append(str(exc))
                     pauser=threading.Thread(target=pause);pauser.start()
-                manager.start_application('charge_plan',fixed_entry=True,budget=dict(id='run',allowance=allowance,battle_limit=limit,max_per_battle=60),timeout_seconds=30,resource_confirmation=state['resources']['confirmation_id'])
+                manager.start_application('charge_plan',fixed_entry=True,budget=dict(id='run',allowance=allowance,battle_limit=limit,max_per_battle=60),timeout_seconds=timeout,resource_confirmation=state['resources']['confirmation_id'])
                 wait(lambda:not manager.busy)
+                assert manager.time_limit==timeout
                 if pauser is not None:pauser.join(2);assert not pauser.is_alive() and not errors,errors
                 return manager.status(),service.describe_configuration('charge_plan')['fields']
 
@@ -139,6 +167,16 @@ def main():
             assert state['budget']['reserved']==120 and state['budget']['pending']==0 and all(r['flow_completed'] for r in state['resource_results'])
             config=ctx.run_context.get_config('charge_plan',ctx.current_instance_idx,'one_dragon');assert config.plan_list[0].run_times==2
             checks.append('actual_source_synthesis_graph_loops_and_saves_plan_progress')
+            state,_=run(times=16,allowance=960,limit=16,timeout=86400)
+            assert state['state']=='success' and scenario['consume']==[60]*16 and state['budget']['reserved']==960 and not state['budget']['pending'],state
+            assert ctx.run_context.get_config('charge_plan',ctx.current_instance_idx,'one_dragon').plan_list[0].run_times==16
+            checks.append('explicit_960_energy_16_actions_and_86400_second_limit_pass_native_run_slot_without_clamping')
+            state,_=run(times=1,allowance=960,limit=16,timeout=86400,loop=True,full_plan=True)
+            assert state['state']=='success' and scenario['consume']==[60]*16 and state['budget']['limited'],state
+            assert state['budget']['reserved']==960 and not state['budget']['pending'] and all(r['flow_completed'] for r in state['resource_results']),state
+            config=ctx.run_context.get_config('charge_plan',ctx.current_instance_idx,'one_dragon')
+            assert config.loop and config.plan_list[0].run_times==1
+            checks.append('actual_charge_plan_graph_resets_progress_for_16_rounds_without_resetting_shared_budget')
             state,_=run(times=2);assert state['budget']['limited'] and scenario['consume']==[60] and state['budget']['pending']==0,state
             checks.append('shared_energy_and_action_budget_stops_second_synthesis')
             state,_=run(quantity=2);assert state['state']=='failed' and not scenario['consume'] and state['budget']['reserved']==0,state

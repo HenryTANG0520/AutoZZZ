@@ -32,7 +32,7 @@ def close(client):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);parser.add_argument('--restart-client',action='store_true');parser.add_argument('--trace',action='store_true');parser.add_argument('--plugin',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);parser.add_argument('--restart-client',action='store_true');parser.add_argument('--trace',action='store_true');parser.add_argument('--plugin',action='store_true');parser.add_argument('--timeout-seconds',type=int,default=30);args=parser.parse_args()
     data=args.data.resolve()
     if data.exists():raise SystemExit('请使用新的隔离验证目录。')
     defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);paths=RuntimePaths(defaults.source,defaults.python,data);paths.prepare()
@@ -107,7 +107,7 @@ class DemoFactory(ApplicationFactory):
         prepared=wait(lambda e:e['type']=='state' and not e['state']['busy'])['state']
         assert prepared['state']=='prepared',prepared
         if args.plugin:assert prepared['resources']['confirmation_required'] and all(row['requirements']['plugins'] for row in session.plan['instances'])
-        session.send('start',budget=None,timeout_seconds=30,resource_confirmation=prepared['resources']['confirmation_id'] if args.plugin else None)
+        session.send('start',budget=None,timeout_seconds=args.timeout_seconds,resource_confirmation=prepared['resources']['confirmation_id'] if args.plugin else None)
         last=wait(lambda e:e['type']=='state' and not e['state']['busy'] and e['state']['state']!='prepared')['state']
         assert last['state']=='success',last
         report=session.report;assert report['returned_to_start'] and [row['state'] for row in report['accounts']]==['success','success']
@@ -124,7 +124,7 @@ class DemoFactory(ApplicationFactory):
         (data/'parent.log').write_text('\n'.join(logs),encoding='utf-8')
         assert not session.worker.is_alive()
     result=dict(actual_sdk_operation_graphs=True,actual_pipe_and_worker_handoffs=True,accounts=2,returned_to_start=True,
-                restart_client=args.restart_client,plugin_application=args.plugin,trace_subscribed=args.trace,trace_snapshots=sum(event.get('snapshot')is not None for event in trace_events),fixture_models_and_devices=True,game_accessed=False,game_input_sent=False)
+                restart_client=args.restart_client,plugin_application=args.plugin,timeout_seconds=args.timeout_seconds,trace_subscribed=args.trace,trace_snapshots=sum(event.get('snapshot')is not None for event in trace_events),fixture_models_and_devices=True,game_accessed=False,game_input_sent=False)
     (data/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(result,ensure_ascii=False))
 
 

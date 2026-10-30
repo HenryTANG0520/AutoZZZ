@@ -18,13 +18,26 @@ class NativeCliTests(unittest.TestCase):
     def test_budget_requires_all_three_explicit_limits(self):
         self.assertIsNone(combat_budget(None, None, None))
         for values in ((20, None, 20), (20, 1, None), (None, 1, 20),
-                       (20, True, 20), (10, 1, 20), (301, 1, 20)):
+                       (20, True, 20), (0, 1, 20), (20, 0, 20), (20, 1, 101)):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 combat_budget(*values)
         self.assertEqual(combat_budget(20, 1, 20)['allowance'], 20)
         self.assertEqual(combat_budget(20, 1, 20, 'existing')['id'], 'existing')
         for args in ((None, None, None, 'existing'), (20, 1, 20, '../other')):
             with self.assertRaises(ValueError): combat_budget(*args)
+
+    def test_explicit_long_batch_and_smaller_total_than_single_ceiling_are_preserved(self):
+        budget=combat_budget(2400,120,100,'long-explicit')
+        self.assertEqual(budget,dict(id='long-explicit',allowance=2400,battle_limit=120,max_per_battle=100))
+        self.assertEqual(combat_budget(10,1,20)['allowance'],10)
+
+    def test_long_explicit_timeout_and_budget_reach_same_session_without_clamping(self):
+        run_application('charge_plan',server='global',game_path='game',region='asia',
+                        allowance=2400,battles=120,maximum=100,timeout=86400,
+                        session_factory=self.session(dict(state='prepared',uses_charge=True)))
+        request=self.commands[-1][1]
+        self.assertEqual(request['timeout_seconds'],86400)
+        self.assertEqual((request['budget']['allowance'],request['budget']['battle_limit']),(2400,120))
 
     def session(self, state, stop_during_prepare=False):
         session = SimpleNamespace(worker=SimpleNamespace(join=Mock()), report_dir=None,
