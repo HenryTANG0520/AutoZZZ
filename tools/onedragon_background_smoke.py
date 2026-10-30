@@ -12,6 +12,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 from onedragon_gamepad_smoke import Constants,Pad
 
 
@@ -45,11 +46,17 @@ def wait(manager,job):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True);parser.add_argument('--package',type=Path);args=parser.parse_args()
+    project=Path(__file__).resolve().parents[1];bridge=args.package.resolve()/'onedragon/bridge' if args.package else project;sys.path.insert(0,str(bridge))
+    import autozzz
+    assert Path(autozzz.__file__).resolve().is_relative_to(bridge)
+    if args.package:assert Path(sys.executable).resolve()==args.package.resolve()/'onedragon/python/python.exe'
     from autozzz.onedragon_runtime import RuntimePaths
-    defaults=RuntimePaths.discover(Path(__file__).resolve().parents[1]);data=args.data.resolve()
+    defaults=RuntimePaths.discover(args.package or project);data=args.data.resolve()
     if data.exists():raise ValueError('请使用新的隔离验证目录。')
-    RuntimePaths(defaults.source,defaults.python,data).prepare();sys.path.insert(0,str(defaults.source/'src'));platform.uname()
+    RuntimePaths(defaults.source,defaults.python,data,defaults.bundle).prepare();sys.path.insert(0,str(defaults.source/'src'));platform.uname()
+    from one_dragon.utils import os_utils
+    os_utils.set_work_dir(data)
     import numpy as np
     from autozzz.onedragon_service import OneDragonService
     from autozzz.onedragon_execution import OneDragonExecution
@@ -98,6 +105,7 @@ def main():
                     return image
                 strategy.capture=capture
             ctx.game_config.background_mode=True;ctx.game_config.background_gamepad_type='xbox'
+            ctx.game_config.update('autozzz_background_mouse','wait')
             controller.game_config=ctx.game_config;controller.begin_input_policy('email');control.reset()
             assert controller.probe().focused and desktop.current()==10
             assert controller.init_before_context_run();controller.screenshot()
@@ -135,7 +143,7 @@ def main():
             assert [entry[2] for entry in messages if entry[0]=='post'][-2:]==[0x201,0x202]
             assert not controller._foreground_required and len(witness)==1
             desktop.foreground=10;control.poll();controller.screenshot()
-            checks.append('default_mouse_waits_then_resumes_background')
+            checks.append('explicit_wait_mouse_resumes_background_when_user_focuses_game')
             ctx.game_config.update('autozzz_background_mouse','flash');controller._game_input_mode='gamepad';before=len(witness)
             controller.click(Point(30,30));assert desktop.current()==10 and desktop.calls==[20,10] and len(witness)==before+1
             checks.append('explicit_mouse_flash_restores_original_foreground')
@@ -157,6 +165,7 @@ def main():
             checks.append('standalone_background_override_and_ds4_selection')
             iconic[0]=True;control.poll();assert control.focus_waiting
             iconic[0]=False;control.poll();controller.screenshot();checks.append('minimized_window_waits_for_restore')
+            ctx.game_config.update('autozzz_background_mouse','wait')
             try:controller.keyboard_controller.keyboard.type('fixture')
             except ObservationExpired:pass
             else:raise AssertionError('physical typing sent to unrelated foreground')
@@ -164,6 +173,66 @@ def main():
             desktop.foreground=20;control.poll();controller.screenshot();controller.keyboard_controller.keyboard.type('fixture')
             assert controller.keyboard_controller.keyboard.raw.events
             checks.append('physical_keyboard_still_requires_actual_foreground')
+            controller._foreground_required=False;desktop.foreground=10;control.poll();controller.screenshot()
+            ctx.game_config.update('autozzz_background_mouse','flash');before=len(desktop.calls)
+            previous=raw.scroll
+            def scrolling(x,y):
+                assert desktop.current()==20 and controller._foreground_borrowing
+                previous(x,y)
+            raw.scroll=scrolling
+            controller.scroll(2,Point(40,40));raw.scroll=previous
+            assert desktop.calls[before:]==[20,10] and not controller._foreground_borrowing
+            checks.append('physical_scroll_borrows_for_entire_operation_and_restores')
+            typing=controller.keyboard_controller.keyboard.raw;previous=typing.type;typed=[]
+            def text(value):
+                assert desktop.current()==20 and controller._foreground_borrowing
+                typed.append(value);previous(value)
+            typing.type=text;before=len(desktop.calls)
+            controller.input_str('fixture',interval=0)
+            assert ''.join(typed)=='fixture' and desktop.calls[before:]==[20,10]
+            typed.clear();before=len(desktop.calls)
+            manager.login_control._replace(NS(use_clipboard=False),'fixture')
+            assert ''.join(typed)=='fixture' and desktop.calls[before:]==[20,10]
+            assert not controller.keyboard_controller.keyboard.pressed
+            typing.type=previous
+            checks.append('nested_login_modifiers_and_text_share_one_foreground_scope')
+            with controller.physical_input_scope():
+                before=len(controller.xbox_controller.raw.pad.events)
+                try:controller.normal_attack();raise AssertionError('gamepad raced with physical input')
+                except ObservationExpired:pass
+                assert len(controller.xbox_controller.raw.pad.events)==before
+            checks.append('concurrent_gamepad_input_cannot_override_physical_scope')
+            original_tap=controller.btn_controller.tap
+            def interleave(*_):
+                with controller.physical_input_scope():pass
+            controller.btn_controller.tap=interleave;controller._game_input_mode='keyboard_mouse'
+            try:controller._ensure_gamepad_mode();raise AssertionError('stale mode switch overwrote physical scope')
+            except ObservationExpired:pass
+            finally:controller.btn_controller.tap=original_tap
+            assert controller._game_input_mode=='keyboard_mouse'
+            checks.append('inflight_gamepad_mode_switch_cannot_overwrite_new_physical_mode')
+            previous=typing.type;typed=[]
+            def user_switch(value):typed.append(value);desktop.foreground=30
+            typing.type=user_switch
+            try:controller.keyboard_controller.keyboard.type('fixture');raise AssertionError('typing escaped changed foreground')
+            except ObservationExpired:pass
+            assert typed==['f'] and desktop.current()==30
+            typing.type=previous;desktop.foreground=10;controller._foreground_required=False;control.poll();controller.screenshot()
+            checks.append('user_foreground_change_interrupts_remaining_text_without_stealing_back')
+            def paused_type(value):typed.append(value);control.set_manual_pause(True)
+            typed.clear();typing.type=paused_type
+            try:controller.keyboard_controller.keyboard.type('fixture');raise AssertionError('typing continued after manual pause')
+            except ObservationExpired:pass
+            assert typed==['f'] and desktop.current()==10 and control.manual_paused
+            typing.type=previous;control.set_manual_pause(False);controller.screenshot()
+            checks.append('manual_pause_during_text_restores_window_without_resuming_task')
+            def stopped_type(value):typed.append(value);control.stop()
+            typed.clear();typing.type=stopped_type
+            try:controller.keyboard_controller.keyboard.type('fixture');raise AssertionError('typing continued after stop')
+            except RuntimeError:pass
+            assert typed==['f'] and desktop.current()==10 and not controller._foreground_borrowing
+            typing.type=previous;control.reset();controller.screenshot()
+            checks.append('stop_during_text_restores_foreground_and_prevents_remaining_input')
             # 真正的条件执行器与源原子动作；仅 HUD 判定和设备替换。
             controller._foreground_required=False;desktop.foreground=10;controller.screenshot()
             from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
@@ -213,7 +282,7 @@ scenes:
             assert desktop.current()==10 and not controller.background_mode and not controller._task_policy_active
             checks.append('actual_run_slot_hands_off_and_releases_background_policy')
         finally:service.close()
-    result=dict(checks=checks,actual_source_controller_and_run_slot=True,fixture_models_screens_and_devices=True,game_accessed=False,real_virtual_device_created=False,game_input_sent=False)
+    result=dict(checks=checks,actual_source_controller_and_run_slot=True,fixture_models_screens_and_devices=True,package=str(args.package.resolve()) if args.package else None,bridge=str(bridge),python=sys.executable,game_accessed=False,real_virtual_device_created=False,game_input_sent=False)
     (data/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(result,ensure_ascii=False))
 
 

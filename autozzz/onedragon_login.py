@@ -9,6 +9,7 @@ import json
 
 from .clipboard_input import ClipboardPaste,ClipboardFailure
 from .onedragon_control import ObservationExpired,ExecutionStopped
+from .onedragon_background import physical_input_scope
 
 _submission = ContextVar('autozzz_login_submission',default=None)
 
@@ -67,17 +68,18 @@ class LoginControl:
         finally:device.before_press=previous;_submission.reset(token)
 
     def _replace(self,operation,text):
-        keyboard=self.ctx.controller.keyboard_controller
-        try:
-            keyboard.press('ctrl')
-            keyboard.tap('a')
-        finally:keyboard.release('ctrl')
-        self.control.checkpoint(require_frame=True)
-        if operation.use_clipboard:
-            if self.clipboard is None:self.clipboard=ClipboardPaste()
-            self.clipboard.paste(self.control,keyboard,text)
-        else:keyboard.keyboard.type(text)
-        self.control.checkpoint(require_frame=True)
+        with physical_input_scope(self.ctx.controller):
+            keyboard=self.ctx.controller.keyboard_controller
+            try:
+                keyboard.press('ctrl')
+                keyboard.tap('a')
+            finally:keyboard.release('ctrl')
+            self.control.checkpoint(require_frame=True)
+            if operation.use_clipboard:
+                if self.clipboard is None:self.clipboard=ClipboardPaste()
+                self.clipboard.paste(self.control,keyboard,text)
+            else:keyboard.keyboard.type(text)
+            self.control.checkpoint(require_frame=True)
 
     def _password(self,operation,variant):
         self.control.checkpoint(require_frame=True)

@@ -7,6 +7,7 @@ from functools import cached_property
 from pathlib import Path
 import threading
 from contextvars import ContextVar
+from contextlib import contextmanager,nullcontext
 from typing import Any
 
 from . import windows as win32_io  # 在上游导入 pyautogui 前设置与 AutoZZZ 一致的 DPI。
@@ -21,6 +22,7 @@ from zzz_od.controller.zzz_pc_controller import ZPcController
 from zzz_od.context.zzz_context import ZContext
 
 from .onedragon_control import ExecutionControl, WindowState,ObservationExpired,ExecutionStopped
+from .onedragon_background import background_mouse_policy,physical_input,PhysicalForeground
 
 _menu_click_target=ContextVar('autozzz_menu_click_target',default=None)
 
@@ -47,12 +49,13 @@ class RelativeMouse:
 
 class ControlledDevice:
     """记录本进程按下的键；不允许恢复旧任务的设备调用。"""
-    def __init__(self, raw: Any, control: ExecutionControl,foreground_guard=None):
+    def __init__(self, raw: Any, control: ExecutionControl,foreground_guard=None,input_scope=None):
         self.raw, self.control = raw, control
         self.pressed: set[Any] = set()
         self.lock = threading.RLock()
         self.before_press = None
         self.foreground_guard=foreground_guard
+        self.input_scope=input_scope
 
     def _input(self,action):
         if self.foreground_guard is not None:self.foreground_guard()
@@ -80,8 +83,9 @@ class ControlledDevice:
             self.release(key)
 
     def type(self, text: str) -> None:
-        for char in text:
-            self._input(lambda char=char: self.raw.type(char))
+        with self.input_scope() if self.input_scope is not None else nullcontext():
+            for char in text:
+                self._input(lambda char=char: self.raw.type(char))
 
     @property
     def position(self):
@@ -103,11 +107,11 @@ class ControlledDevice:
 
 
 class ControlledKeyboard(KeyboardMouseController):
-    def __init__(self, control: ExecutionControl,foreground_guard=None):
+    def __init__(self, control: ExecutionControl,foreground_guard=None,input_scope=None):
         super().__init__()
         self.control = control
-        self.keyboard = ControlledDevice(self.keyboard, control,foreground_guard)
-        self.mouse = ControlledDevice(RelativeMouse(self.mouse), control,foreground_guard)
+        self.keyboard = ControlledDevice(self.keyboard, control,foreground_guard,input_scope)
+        self.mouse = ControlledDevice(RelativeMouse(self.mouse), control,foreground_guard,input_scope)
 
     def tap(self, key: str) -> None:
         self.press(key, .03)
@@ -196,9 +200,10 @@ class ManagedController(ZPcController):
                          ctx.project_config.screen_standard_width, ctx.project_config.screen_standard_height)
         self.ctx, self.control = ctx, control
         self._background_requested=self._foreground_required=self._task_policy_active=False
+        self._physical_input_lock=threading.RLock();self._physical_input_owner=None;self._physical_input_generation=0;self._foreground_borrowing=False
         from .onedragon_background import BackgroundMouse,WindowsDesktop
         self.background_mouse=BackgroundMouse(self);self.desktop=WindowsDesktop()
-        self.keyboard_controller = ControlledKeyboard(control,self._physical_checkpoint)
+        self.keyboard_controller = ControlledKeyboard(control,self._physical_checkpoint,self.physical_input_scope)
         self.btn_controller = self.keyboard_controller
         self.game_win = BoundGameWindow(self.standard_width, self.standard_height)
         # 上游构造器已把原 game_win 传入截图器及其每个策略；换窗口须同步重建。
@@ -280,7 +285,7 @@ class ManagedController(ZPcController):
     def begin_input_policy(self,app_id):
         requested=self.ctx.battle_assistant_config.background_mode if app_id in ('auto_battle','dodge_assistant') else self.game_config.background_mode
         if type(requested)is not bool:raise ValueError('后台开关须为布尔值。')
-        if self.game_config.get('autozzz_background_mouse','wait') not in ('wait','flash'):raise ValueError('后台鼠标方式无效。')
+        background_mouse_policy(self.game_config)
         self._task_policy_active=True;self._foreground_required=False;self._background_requested=requested
 
     def end_input_policy(self):
@@ -297,7 +302,26 @@ class ManagedController(ZPcController):
             self.control.checkpoint(require_frame=True)
             self._game_input_mode='keyboard_mouse'
 
+    @contextmanager
+    def physical_input_scope(self):
+        if self.using_background and background_mouse_policy(self.game_config)=='flash':
+            with PhysicalForeground(self):yield
+        else:
+            if self.using_background:self._physical_checkpoint()
+            yield
+
+    def _prepare_physical_mode(self):
+        delay=self.game_config.mouse_flash_duration
+        if type(delay)not in (int,float) or not math.isfinite(delay) or not .01<=delay<=1:
+            raise ValueError('临时切换等待须为 0.01—1 秒。')
+        if not self.control.hold(delay):self.control.checkpoint(require_frame=True)
+        if self._game_input_mode!='keyboard_mouse':
+            self.control.input(lambda:self.keyboard_controller.mouse.raw.move(1,0))
+            if not self.control.hold(delay):self.control.checkpoint(require_frame=True)
+            self._game_input_mode='keyboard_mouse'
+
     def _gamepad_checkpoint(self,key=None):
+        if self._physical_input_owner is not None:raise ObservationExpired('临时前台输入期间等待手柄操作。')
         self._foreground_required=False
         if key is not None and key==_menu_click_target.get():self._witness_mouse()
 
@@ -308,8 +332,11 @@ class ManagedController(ZPcController):
 
     def _ensure_gamepad_mode(self):
         if self._game_input_mode=='gamepad':return
+        generation=self._physical_input_generation
         self.btn_controller.tap(self._get_switch_gamepad_key())
         if not self.control.hold(.1):self.control.checkpoint(require_frame=True)
+        if self._physical_input_owner is not None or generation!=self._physical_input_generation:
+            raise ObservationExpired('物理输入期间设备模式已变化，等待重新判断。')
         self._game_input_mode='gamepad'
 
     def _send_activate(self):
@@ -335,27 +362,15 @@ class ManagedController(ZPcController):
 
     def _ensure_mouse_mode(self):
         if not self.using_background:return True
-        if self.game_config.get('autozzz_background_mouse','wait')=='wait':
+        if background_mouse_policy(self.game_config)=='wait':
             previous=self._game_input_mode;self._physical_checkpoint()
             if previous!='keyboard_mouse':
                 self.keyboard_controller.mouse.move(1,0)
                 if not self.control.hold(self.game_config.mouse_flash_duration):self.control.checkpoint(require_frame=True)
             return True
         if self._game_input_mode=='keyboard_mouse':return True
-        from .onedragon_background import ForegroundBorrow
-        try:
-            with ForegroundBorrow(self.control,self.game_win.bound.hwnd,self.desktop):
-                if not self.control.hold(self.game_config.mouse_flash_duration):self.control.checkpoint(require_frame=True)
-                def move():
-                    if self.desktop.current()!=self.game_win.bound.hwnd:raise ObservationExpired('临时前台已变化，未发送鼠标输入。')
-                    self.keyboard_controller.mouse.raw.move(1,0)
-                self.control.input(move)
-                if not self.control.hold(self.game_config.mouse_flash_duration):self.control.checkpoint(require_frame=True)
-        except Exception:
-            self._foreground_required=True
-            self.control.checkpoint(require_frame=True)
-            raise
-        self._game_input_mode='keyboard_mouse';return True
+        with self.physical_input_scope():pass
+        return True
 
     def _background_cursor(self,point):
         position=self.game_win.game2win_pos(point)
@@ -447,6 +462,7 @@ class ManagedController(ZPcController):
                 raise ValueError("目标坐标超出游戏客户区。")
             self.keyboard_controller.mouse.position = (position.x, position.y)
 
+    @physical_input
     def _foreground_click(self, pos: Any, press_time: float = .1, pc_alt: bool = False) -> bool:
         if self.using_background:self._physical_checkpoint()
         self.control.checkpoint(require_frame=True)
@@ -462,6 +478,7 @@ class ManagedController(ZPcController):
             if pc_alt:
                 self.keyboard_controller.keyboard.release(keyboard.Key.alt)
 
+    @physical_input
     def _foreground_drag(self, start: Any, end: Any, duration: float = .5, *, timing: Any = None) -> None:
         if self.using_background:self._physical_checkpoint()
         self._position(start)
@@ -483,11 +500,13 @@ class ManagedController(ZPcController):
         finally:
             self.keyboard_controller.release("mouse_left")
 
+    @physical_input
     def scroll(self, down: int, pos: Any = None) -> None:
         if self.using_background:self._physical_checkpoint()
         self._position(pos)
         self.keyboard_controller.mouse.scroll(0, -down)
 
+    @physical_input
     def mouse_move(self, game_pos: Any) -> None:
         self._position(game_pos)
 
@@ -495,6 +514,7 @@ class ManagedController(ZPcController):
         if self.background_mode:self._gamepad_turn(dx,dy)
         else:self.keyboard_controller.mouse.move(dx, dy)
 
+    @physical_input
     def input_str(self, to_input: str, interval: float = .1) -> None:
         for char in to_input:
             self.keyboard_controller.keyboard.type(char)

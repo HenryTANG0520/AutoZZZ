@@ -23,7 +23,7 @@ def main():
     try:
         client.start();initial=describe();f=fields(initial)
         assert len(f)==67 and f['key_normal_attack']['value']=='mouse_left'
-        assert f['background_mode']['value'] is False and f['autozzz_background_mouse']['value']=='wait'
+        assert f['background_mode']['value'] is False and f['autozzz_background_mouse']['value']=='flash'
         assert f['xbox_key_normal_attack']['value']=='xbox_x' and f['ds4_key_normal_attack']['value']=='ds4_square'
         assert f['xbox_action_compendium']['value']==['xbox_lt','xbox_a']
         assert not rpc('execution_status')['ready'];checks.append('actual_defaults_and_sixty_seven_fields')
@@ -49,6 +49,7 @@ def main():
         assert fields(describe())['key_normal_attack']['value']=='mouse_left';save(dict(key_normal_attack='l'))
         accounts=rpc('account_list');rpc('account_action',action='activate',idx=1,revision=accounts['revision'])
         assert fields(describe())['key_normal_attack']['value']=='j';checks.append('per_account_isolation')
+        save(dict(autozzz_background_mouse='wait'))
     finally:
         while True:
             try:client.close(timeout=1);break
@@ -56,6 +57,7 @@ def main():
     client=OneDragonClient(paths)
     try:
         client.start();assert fields(describe())['xbox_key_normal_attack']['value']=='xbox_b';checks.append('fresh_worker_reads_saved_mappings')
+        assert fields(describe())['autozzz_background_mouse']['value']=='wait';checks.append('explicit_wait_choice_survives_new_default_and_process_restart')
     finally:
         while True:
             try:client.close(timeout=1);break

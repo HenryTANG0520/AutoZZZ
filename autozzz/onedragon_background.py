@@ -1,7 +1,28 @@
-"""后台输入的前台借用控制；默认等待，不擅自切换用户窗口。"""
+"""后台输入的前台借用控制；保留显式等待选项与用户新的窗口选择。"""
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager,nullcontext
+from functools import wraps
+
+
+def background_mouse_policy(config):
+    value=config.get('autozzz_background_mouse','flash')
+    if value not in ('wait','flash'):raise ValueError('后台鼠标方式无效。')
+    return value
+
+
+@contextmanager
+def physical_input_scope(controller):
+    factory=getattr(controller,'physical_input_scope',None)
+    with factory() if factory is not None else nullcontext():yield
+
+
+def physical_input(method):
+    @wraps(method)
+    def wrapped(controller,*args,**kwargs):
+        with physical_input_scope(controller):return method(controller,*args,**kwargs)
+    return wrapped
 
 
 class ForegroundBorrow:
@@ -69,6 +90,69 @@ class WindowsDesktop:
             if again.value!=pid.value or kernel32.WaitForSingleObject(handle,0)!=258:return None
             return pid.value,born
         finally:kernel32.CloseHandle(handle)
+
+
+class PhysicalForeground:
+    """一次完整物理输入期间保持前台，释放本次按键后才恢复窗口。"""
+    def __init__(self,controller):
+        self.controller=controller;self.control=controller.control
+        self.acquired=False;self.nested=False;self.borrow=None;self.before=[]
+
+    def __enter__(self):
+        controller=self.controller;lock=controller._physical_input_lock
+        while not lock.acquire(blocking=False):
+            self.control.checkpoint(require_frame=True)
+            self.control.changed.wait(.01)
+        self.acquired=True
+        if controller._physical_input_owner==threading.get_ident():
+            self.nested=True
+            try:self.control.checkpoint(require_frame=True)
+            except BaseException:self._leave();raise
+            return self
+        self.previous_required=controller._foreground_required
+        try:
+            self.control.checkpoint(require_frame=True)
+            self.before=[(device,set(device.pressed)) for device in
+                         (controller.keyboard_controller.keyboard,controller.keyboard_controller.mouse)]
+            def claim():
+                controller._physical_input_owner=threading.get_ident()
+                controller._physical_input_generation=getattr(controller,'_physical_input_generation',0)+1
+            self.control.input(claim)
+            for name in ('xbox_controller','ds4_controller'):
+                device=getattr(controller,name,None)
+                if device is not None:device.reset()
+            self.borrow=ForegroundBorrow(self.control,controller.game_win.bound.hwnd,controller.desktop)
+            self.borrow.__enter__()
+            controller._foreground_borrowing=self.borrow.borrowed
+            controller._foreground_required=True
+            self.control.checkpoint(require_frame=True)
+            controller._prepare_physical_mode()
+            return self
+        except BaseException:
+            self._leave();raise
+
+    def _leave(self):
+        if not self.acquired:return
+        controller=self.controller
+        try:
+            if not self.nested:
+                try:
+                    for device,previous in self.before:
+                        for key in list(device.pressed-previous):device.release(key)
+                except Exception:
+                    self.control.stop('临时前台操作的按键未能释放。');raise
+                finally:
+                    controller._foreground_required=self.previous_required
+                    try:
+                        if self.borrow is not None:self.borrow.__exit__(None,None,None)
+                    finally:
+                        controller._foreground_borrowing=False
+                        controller._physical_input_owner=None
+        finally:
+            self.acquired=False;controller._physical_input_lock.release()
+
+    def __exit__(self,kind,value,traceback):
+        self._leave();return False
 
 
 class BackgroundMouse:

@@ -103,6 +103,10 @@ def main():
                     window.session.state['input']=dict(background=True,requires_foreground=False)
                     window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
                     pump(root,lambda:'后台' in window.status.get())
+                    window.session.state['input']['foreground_borrowing']=True
+                    window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
+                    pump(root,lambda:'临时前台操作' in window.status.get())
+                    window.session.state['input']['foreground_borrowing']=False
                     window.session.state['control']['focus_waiting']=True
                     window.events.put(dict(type='state',state=copy.deepcopy(window.session.state)))
                     pump(root,lambda:window.status.get()=='等待游戏恢复焦点')

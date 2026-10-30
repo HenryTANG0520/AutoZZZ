@@ -609,6 +609,7 @@ class OneDragonExecution:
             controller=self.ctx.controller
             if controller is not None and hasattr(controller,'using_background'):
                 result['input']=dict(background=controller.background_mode,requested=controller.using_background,
+                                     foreground_borrowing=getattr(controller,'_foreground_borrowing',False),
                                      gamepad=getattr(controller,'_gamepad_type',None),requires_foreground=getattr(controller,'_foreground_required',False))
             if self.charge_control is not None:result["budget"]=self.charge_control.status()
             if self.state in ("running", "stopping"):

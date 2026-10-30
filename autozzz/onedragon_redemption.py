@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from functools import wraps,update_wrapper
 from typing import Any
+from .onedragon_background import physical_input_scope
 
 
 class RedemptionControl:
@@ -50,12 +51,13 @@ class RedemptionControl:
                 if result.is_success:state["phase"]="type"
                 return operation.round_wait("等待输入框",wait=1)
             if state["phase"]=="type":
-                keyboard=operation.ctx.controller.keyboard_controller
-                keyboard.press("ctrl")
-                try:keyboard.tap("a")
-                finally:keyboard.release("ctrl")
-                keyboard.keyboard.type(operation.unused_code_list[operation.code_idx])
-                owner.control.checkpoint(require_frame=True)
+                with physical_input_scope(operation.ctx.controller):
+                    keyboard=operation.ctx.controller.keyboard_controller
+                    keyboard.press("ctrl")
+                    try:keyboard.tap("a")
+                    finally:keyboard.release("ctrl")
+                    keyboard.keyboard.type(operation.unused_code_list[operation.code_idx])
+                    owner.control.checkpoint(require_frame=True)
                 state["phase"]="submit"
                 return operation.round_wait("等待兑换间隔",wait=6 if operation.code_idx else 1)
             result=operation.round_by_find_and_click_area(operation.last_screenshot,"菜单","兑换码兑换",success_wait=1,retry_wait=1)

@@ -1,8 +1,9 @@
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
+import threading
 
-from autozzz.onedragon_background import ForegroundBorrow,BackgroundMouse
+from autozzz.onedragon_background import ForegroundBorrow,BackgroundMouse,PhysicalForeground,background_mouse_policy
 from autozzz.onedragon_control import ExecutionControl,WindowState,ObservationExpired
 
 
@@ -115,6 +116,88 @@ class BackgroundMouseTests(unittest.TestCase):
         self.assertIsNotNone(self.mouse.down)
         with self.assertRaises(RuntimeError):self.mouse.press()
         self.mouse.reset();self.assertIsNone(self.mouse.down)
+
+
+class PhysicalForegroundTests(unittest.TestCase):
+    def setUp(self):
+        self.desktop=Desktop();self.events=[]
+        class Device:
+            def __init__(device):device.pressed=set()
+            def release(device,key):self.events.append(('release',key,self.desktop.current()));device.pressed.remove(key)
+        self.keyboard,self.mouse=Device(),Device()
+        self.controller=NS(_physical_input_lock=threading.RLock(),_physical_input_owner=None,_foreground_required=False,_foreground_borrowing=False,
+                           keyboard_controller=NS(keyboard=self.keyboard,mouse=self.mouse),game_win=NS(bound=NS(hwnd=2)),desktop=self.desktop,
+                           xbox_controller=NS(reset=lambda:self.events.append(('neutral',))),ds4_controller=None,
+                           _prepare_physical_mode=lambda:self.events.append(('prepare',self.desktop.current())))
+        def probe():return WindowState(self.desktop.identity(2)==(20,22),not self.controller._foreground_required or self.desktop.current()==2,(0,0,1920,1080))
+        self.control=ExecutionControl(probe,lambda:None,lambda:True,lambda:None,lambda:None)
+        self.controller.control=self.control;self.control.observe(lambda:None)
+
+    def test_releases_scope_keys_before_restoring_window(self):
+        with PhysicalForeground(self.controller):
+            self.keyboard.pressed.add('ctrl')
+            self.assertTrue(self.controller._foreground_borrowing)
+        self.assertIn(('release','ctrl',2),self.events)
+        self.assertEqual(self.desktop.calls,[2,1]);self.assertFalse(self.controller._foreground_borrowing)
+        self.assertIsNone(self.controller._physical_input_owner)
+
+    def test_nested_text_scope_keeps_modifier_and_foreground_until_outer_exit(self):
+        with PhysicalForeground(self.controller):
+            self.keyboard.pressed.add('ctrl')
+            with PhysicalForeground(self.controller):self.assertEqual(self.desktop.current(),2)
+            self.assertIn('ctrl',self.keyboard.pressed)
+            self.assertTrue(self.controller._foreground_borrowing)
+        self.assertEqual(self.desktop.calls,[2,1]);self.assertFalse(self.keyboard.pressed)
+
+    def test_pause_before_scope_does_not_activate_or_reset_devices(self):
+        self.control.set_manual_pause(True)
+        with self.assertRaises(ObservationExpired),PhysicalForeground(self.controller):pass
+        self.assertFalse(self.desktop.calls);self.assertFalse(self.events)
+
+    def test_stop_inside_scope_still_releases_and_restores(self):
+        with PhysicalForeground(self.controller):
+            self.mouse.pressed.add('left');self.control.stop()
+        self.assertEqual(self.desktop.current(),1);self.assertFalse(self.mouse.pressed)
+        self.assertTrue(self.control.stopped)
+
+    def test_user_foreground_change_blocks_remaining_input_without_overriding_choice(self):
+        with self.assertRaises(ObservationExpired),PhysicalForeground(self.controller):
+            self.desktop.foreground=3
+            self.control.input(lambda:self.fail('input escaped foreground scope'))
+        self.assertEqual(self.desktop.current(),3);self.assertEqual(self.desktop.calls,[2])
+
+    def test_reused_target_cannot_receive_more_input_or_restore_old_owner(self):
+        with PhysicalForeground(self.controller):self.desktop.ids[2]=(999,888)
+        self.assertEqual(self.desktop.calls,[2]);self.control.poll();self.assertTrue(self.control.stopped)
+
+    def test_prepare_failure_cleans_scope_and_restores_window(self):
+        def fail():raise ValueError('fixture prepare rejected')
+        self.controller._prepare_physical_mode=fail
+        with self.assertRaises(ValueError),PhysicalForeground(self.controller):pass
+        self.assertEqual(self.desktop.calls,[2,1]);self.assertIsNone(self.controller._physical_input_owner)
+
+    def test_release_failure_stops_input_but_still_restores_window(self):
+        def fail(_):raise OSError('fixture release failure')
+        self.keyboard.release=fail
+        with self.assertRaises(OSError),PhysicalForeground(self.controller):self.keyboard.pressed.add('ctrl')
+        self.assertTrue(self.control.stopped);self.assertEqual(self.desktop.current(),1)
+
+    def test_explicit_wait_setting_is_preserved_and_unconfigured_background_defaults_to_flash(self):
+        self.assertEqual(background_mouse_policy({}),'flash')
+        self.assertEqual(background_mouse_policy({'autozzz_background_mouse':'wait'}),'wait')
+        with self.assertRaises(ValueError):background_mouse_policy({'autozzz_background_mouse':'unknown'})
+
+    def test_stopped_waiting_thread_cannot_borrow_after_owner_exits(self):
+        started=threading.Event();finished=[];errors=[]
+        def waiter():
+            started.set()
+            try:
+                with PhysicalForeground(self.controller):finished.append('unexpected input')
+            except Exception as exc:errors.append(exc)
+        with PhysicalForeground(self.controller):
+            thread=threading.Thread(target=waiter);thread.start();self.assertTrue(started.wait(1));self.control.stop()
+            thread.join(1);self.assertFalse(thread.is_alive())
+        self.assertFalse(finished);self.assertEqual(len(errors),1);self.assertEqual(self.desktop.calls,[2,1])
 
 
 if __name__=='__main__':unittest.main()

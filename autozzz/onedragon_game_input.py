@@ -27,10 +27,11 @@ class GameInputStore:
         from pynput.mouse import Button
         fields=[]
         def add(name,label,group,kind='str',options=None,**metadata):
-            value=config.get(name,'wait') if name=='autozzz_background_mouse' else getattr(config,name)
+            from .onedragon_background import background_mouse_policy
+            value=background_mouse_policy(config) if name=='autozzz_background_mouse' else getattr(config,name)
             fields.append(field_value(name,label,value,kind,options,group=group,**metadata))
         add('background_mode','应用流程使用后台','输入',kind='bool',hint='独立战斗、闪避助手使用“战斗设置”的后台开关。')
-        add('autozzz_background_mouse','后台鼠标','输入',kind='enum',options=[dict(label='等待游戏回到前台',value='wait'),dict(label='短暂切回游戏后恢复',value='flash')],hint='短暂切回会改变前台窗口和鼠标位置。')
+        add('autozzz_background_mouse','后台鼠标与文本','输入',kind='enum',options=[dict(label='等待游戏回到前台',value='wait'),dict(label='短暂切到游戏后恢复',value='flash')],hint='短暂切换会改变前台窗口和鼠标位置。')
         add('type_input_way','文本输入方式','输入',kind='enum',options=_options(TypeInputWay))
         add('background_gamepad_type','后台手柄类型','输入',kind='enum',options=_options(GamepadTypeEnum))
         for name,label,lo,hi in (('xbox_key_press_time','Xbox 点按时长（秒）',.001,1),('ds4_key_press_time','DS4 点按时长（秒）',.001,1),
