@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -44,6 +45,16 @@ def layout(widget):
         layout(child)
 
 
+class SettingsSessionFixture:
+    def __init__(self,paths,target,emit):
+        self.paths,self.target,self.emit=paths,target,emit
+        self.closing=threading.Event();self.allowed=threading.Event()
+        def work():
+            emit(dict(type='ready'));self.closing.wait();self.allowed.wait();emit(dict(type='closed'))
+        self.worker=threading.Thread(target=work,daemon=False);self.worker.start()
+    def close(self):self.closing.set()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--preview",type=Path)
@@ -72,7 +83,7 @@ def main():
                     if snapshot is None:
                         panel.load_button.invoke()
                         pump(root,lambda:not panel.busy and bool(panel.cache))
-                        snapshot = dict(apps=list(panel.apps.values()),options=copy.deepcopy(panel.options),descriptions=copy.deepcopy(panel.cache))
+                        snapshot = dict(apps=list(panel.apps.values()),options=copy.deepcopy(panel.options),descriptions=copy.deepcopy(panel.cache),settings_target=copy.deepcopy(panel.settings_target))
                     else:
                         panel._loaded(copy.deepcopy(snapshot))
                         root.update()
@@ -83,6 +94,8 @@ def main():
                             panel.tree.selection_set(key)
                             panel.select()
                             root.update()
+                            assert bool(panel.native_button.winfo_ismapped())==bool(panel.apps[key].get('native_settings'))
+                            if panel.apps[key].get('native_settings'):assert panel.native_button.instate(['!disabled'])
                             assert panel.current_id==key
                             if panel.form is not None:
                                 try: panel.form.values()
@@ -208,6 +221,16 @@ def main():
                             assert "请输入" in str(exc)
                         else:raise AssertionError("无效数字必须给出字段错误")
                         panel.dirty=False
+                        # 原生专用窗口关闭尚未结束时不能重读、保存或启动另一个任务。
+                        panel.tree.selection_set('charge_plan');panel.select();root.update()
+                        assert panel.native_button.instate(['!disabled'])
+                        with patch('autozzz.onedragon_settings.NativeSettingsSession',SettingsSessionFixture):
+                            panel.native_button.invoke();session=panel.native_session
+                            assert panel.busy and session.target['instance_idx']==panel.settings_target['instance_idx']
+                            assert panel.run_button.instate(['disabled']) and panel.save_button.instate(['disabled'])
+                            session.close();root.update();assert panel.busy and session.worker.is_alive()
+                            session.allowed.set();pump(root,lambda:not panel.busy and panel.native_session is None)
+                        assert panel.current_id=='charge_plan' and panel.settings_target and not panel.dirty
                     assert not errors,errors
                     assert config.read_bytes()==original,"legacy daily settings changed"
                     if scale==2.:
@@ -225,7 +248,7 @@ def main():
                 ui = panel = editor = dialog = form = control = None
                 gc.collect()  # The test creates several independent Tcl interpreters in one process.
     print(json.dumps(dict(layout_cases=cases,dialogs=dialogs,dpi=[100,150,200],real_save_reload=True,
-                          close_waits_original_worker=True,legacy_config_unchanged=True,game_started=False),ensure_ascii=False))
+                          close_waits_original_worker=True,native_settings_close_wait_and_fresh_reload=True,legacy_config_unchanged=True,game_started=False),ensure_ascii=False))
 
 
 if __name__ == "__main__":main()

@@ -51,15 +51,18 @@ class OneDragonService:
         if self._ctx is None:
             from .run_lock import profile_lock
             with profile_lock(self.data):
-                from .onedragon_host import ManagedZContext
-                ctx = ManagedZContext()
-                ctx.plugin_run_lease=self._run_lease
-                ctx.register_application_factory()
-                self._ctx = ctx
+                self._create_context()
         else:
             from .onedragon_plugins import verify_context_plugins
             verify_context_plugins(self._ctx)
         return self._ctx
+
+    def _create_context(self):
+        """调用方持有 profile_lock；专用设置在整个界面生命周期保留它。"""
+        from .onedragon_host import ManagedZContext
+        ctx=ManagedZContext();ctx.plugin_run_lease=self._run_lease
+        ctx.register_application_factory();self._ctx=ctx
+        return ctx
 
     @property
     def plugins(self):
@@ -101,12 +104,15 @@ class OneDragonService:
         ctx = self.ctx
         factories = ctx.run_context._application_factory_map
         from .onedragon_plugins import executable_application
+        from .onedragon_settings import has_settings,settings_revision
         return {
             "instance": ctx.current_instance_idx,
+            "settings_revision":settings_revision(ctx),
             "applications": [dict(id=key, name=factory.app_name,
                                   default_group=factory.default_group, internal=factory.internal_app,
                                   third_party=bool(ctx.factory_manager.get_plugin_info(key).is_third_party),
                                   executable=executable_application(ctx,key),
+                                  native_settings=has_settings(ctx.factory_manager.get_plugin_info(key)),
                                   configurable=key == "notify" or type(factory).create_config is not ApplicationFactory.create_config)
                              for key, factory in factories.items()],
             "failures": [dict(path=str(path), error=error) for path, error in ctx.factory_manager.scan_failures if not Path(path).resolve().is_relative_to(self.data/'plugins')],

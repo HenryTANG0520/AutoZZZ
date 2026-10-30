@@ -48,6 +48,7 @@ class ApplicationsPanel:
         self.events:queue.Queue = queue.Queue()
         self.apps,self.cache,self.options = {},{},{}
         self.current_id = ""
+        self.settings_target=None;self.native_session=None;self.native_error=''
         self.description = None
         self.form = None
         self.collections = {}
@@ -93,7 +94,11 @@ class ApplicationsPanel:
         right.grid(row=0,column=1,sticky="nsew")
         right.columnconfigure(0,weight=1)
         right.rowconfigure(2,weight=1)
-        theme.wrapped_label(right,textvariable=self.title,style="ConfigTitle.TLabel").grid(row=0,column=0,sticky="ew",pady=(d(8),d(12)))
+        title_bar=ttk.Frame(right);title_bar.grid(row=0,column=0,sticky='ew',pady=(d(8),d(12)));title_bar.columnconfigure(0,weight=1)
+        theme.wrapped_label(title_bar,textvariable=self.title,style="ConfigTitle.TLabel").grid(row=0,column=0,sticky="ew")
+        self.native_button=ttk.Button(title_bar,text='专用设置…',command=self.native_settings)
+        self.native_button.grid(row=0,column=1,padx=(d(12),0));self.native_button.grid_remove()
+        self.controls.append(self.native_button)
         self.note_label=theme.wrapped_label(right,textvariable=self.note,style="Hint.TLabel")
         self.note_label.grid(row=1,column=0,sticky="ew",pady=(0,d(14)))
         self.note_label.grid_remove()
@@ -183,6 +188,10 @@ class ApplicationsPanel:
         self.save_button.configure(style="Accent.TButton" if self.dirty else "TButton")
         self.run_button.configure(style="Accent.TButton" if not self.dirty and self.runnable(target) else "TButton")
         self.run_button.state(["!disabled"] if self.runnable(target) and not self.busy and not self.dirty else ["disabled"])
+        if self.apps.get(self.current_id,{}).get('native_settings'):
+            self.native_button.grid()
+            self.native_button.state(['!disabled'] if self.settings_target and not self.busy and not self.dirty and not self.closing else ['disabled'])
+        else:self.native_button.grid_remove()
 
     def runnable(self,target):return target in EXECUTABLE_APPLICATIONS or self.apps.get(target,{}).get('executable')is True
 
@@ -204,6 +213,36 @@ class ApplicationsPanel:
         if self.busy or not self.allow_leave():return
         from .onedragon_plugins_ui import open_plugins
         open_plugins(self.ui,'global' if self.profile.get()=='国际服' else 'cn')
+
+    def native_settings(self):
+        if self.busy or self.dirty or self.closing or not self.settings_target or not self.apps.get(self.current_id,{}).get('native_settings'):return
+        from .onedragon_settings import NativeSettingsSession
+        paths=RuntimePaths.discover(ROOT,'global' if self.profile.get()=='国际服' else 'cn')
+        self.native_key=self.current_id;self.native_error=''
+        self.busy=True;self._freeze();self._buttons();self.status.set('正在打开专用设置…')
+        target=dict(self.settings_target,app_id=self.native_key,group_id='one_dragon')
+        self.native_session=NativeSettingsSession(paths,target,lambda event:self.events.put((self._native_event,event,None)))
+        self.worker=self.native_session.worker
+
+    def _native_event(self,event):
+        kind=event['type']
+        if kind=='log':
+            if event['message']:self.ui._log(event['message'])
+        elif kind=='error':self.native_error=event['message'];self.status.set(self.native_error)
+        elif kind=='ready':self.status.set('专用设置已打开；关闭后重新读取配置。')
+        elif kind=='closed':self.root.after(30,self._native_closed)
+
+    def _native_closed(self):
+        if self.worker is not None and self.worker.is_alive():self.root.after(50,self._native_closed);return
+        self.native_session=None;self.busy=False;self._thaw();self._buttons()
+        if self.closing:return
+        key=self.native_key;error=self.native_error
+        self.cache={};self.settings_target=None;self._clear()
+        def loaded(result):
+            self._loaded(result)
+            if key in self.apps:self.tree.selection_set(key);self.select()
+            self.status.set(error or self.profile.get()+' · 已重新读取')
+        self._run(self._initial,loaded)
 
     def library(self):
         if self.busy:return
@@ -265,13 +304,15 @@ class ApplicationsPanel:
             except Exception as exc:
                 if not app.get('third_party'):raise
                 app['configuration_error']=str(exc);failures.append(dict(path=app['name'],error=str(exc)))
-        return dict(apps=apps,options=options,descriptions=descriptions,plugin_failures=failures)
+        return dict(apps=apps,options=options,descriptions=descriptions,plugin_failures=failures,
+                    settings_target=dict(instance_idx=catalog['instance'],revision=catalog['settings_revision']) if 'settings_revision'in catalog else None)
 
     def load(self):
         if self.allow_leave(): self._run(self._initial,self._loaded)
 
     def _loaded(self,result):
         self.apps = {a["id"]:a for a in result["apps"]}
+        self.settings_target=result.get('settings_target')
         self.cache,self.options = result["descriptions"],result["options"]
         self.tree.delete(*self.tree.get_children())
         added = set()
@@ -416,5 +457,6 @@ class ApplicationsPanel:
         if self.closing:return True
         if not discard and not self.allow_leave():return False
         self.closing = True
+        if self.native_session is not None:self.native_session.close();self.status.set('正在关闭专用设置，等待原进程退出…')
         self._buttons()
         return True
