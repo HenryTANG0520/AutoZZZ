@@ -119,6 +119,32 @@ class OneDragonService:
         if type(epoch)is not int or type(generation)is not int:raise ValueError('截图观察编号无效。')
         return capture_source(self.ctx.debug_trace_runtime,self.data,epoch,generation)
 
+    def _agent_templates(self):
+        if getattr(self,'_agent_template_store',None) is None:
+            from .agent_templates import AgentTemplates
+            self._agent_template_store=AgentTemplates(self)
+        return self._agent_template_store
+
+    def agent_template_catalog(self):return self._agent_templates().catalog()
+    def agent_template_open(self,agent=None):return self._agent_templates().open(agent)
+    def agent_template_import(self,token,index,path,side='left'):return self._agent_templates().import_image(token,index,path,side)
+    def agent_template_side(self,token,side):return self._agent_templates().change_side(token,side)
+    def agent_template_view(self,token,index):
+        self._agent_templates().current(token)
+        if type(index)is not int or not 0<=index<6:raise ValueError('模板步骤无效。')
+        return self._agent_templates().view(index)
+    def agent_template_save(self,token,agent):return self._agent_templates().save(token,agent)
+    def agent_template_remove(self,agent,signature):return self._agent_templates().remove(agent,signature)
+    def agent_template_restore(self,identifier):return self._agent_templates().restore(identifier)
+    def agent_template_recover(self):return self._agent_templates().recover()
+    def agent_template_preferences(self):return self._agent_templates().preferences()
+    def agent_template_preferences_save(self,values,revision):return self._agent_templates().preferences_save(values,revision)
+    def agent_template_capture(self,token,index,game_path,side='left'):
+        from .agent_template_capture import capture
+        self._assert_idle();self._agent_templates().current(token)
+        value=capture(self.data,game_path)
+        return dict(capture=value,draft=self._agent_templates().import_image(token,index,value['path'],side))
+
     def catalog(self) -> dict:
         from one_dragon.base.operation.application.application_factory import ApplicationFactory
         ctx = self.ctx
@@ -595,6 +621,8 @@ class OneDragonService:
 
     def initialize_execution(self, server: str, game_path: str, region: str | None = None,instance_idx:int|None=None) -> dict:
         self._assert_idle()
+        from .agent_templates import TemplateTransaction
+        TemplateTransaction(self.data).assert_clear()
         from .map_transaction import MapTransaction
         MapTransaction(self.data).assert_clear()
         from .model_install import ModelInstall
@@ -773,3 +801,5 @@ METHODS.update({'trace_configure','trace_snapshot','trace_capture'})
 METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})
 METHODS.update({'program_catalog','program_check','program_download','program_import','program_restore','program_status','program_cancel'})
 METHODS.add('schedule_review')
+METHODS.update({'agent_template_catalog','agent_template_open','agent_template_import','agent_template_side','agent_template_save','agent_template_remove',
+                'agent_template_restore','agent_template_recover','agent_template_preferences','agent_template_preferences_save','agent_template_capture','agent_template_view'})

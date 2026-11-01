@@ -74,9 +74,9 @@ class TraceOverlay:
         self.window.update_idletasks();self.handle=self.presentation.prepare(self.window)
         self.enabled=self.visible=self.closed=False;self.snapshot=None;self.state={};self.sources={key:True for key in COLORS}
         self.layers={key:True for key in ('vision','decision','timeline','perf','state')};self.font_size=11;self.opacity=85
-        self.panel_widgets={};self.preferences=deepcopy(DEFAULTS)
+        self.panels={};self.save_panel=lambda *_:None;self.panel_widgets={};self.preferences=deepcopy(DEFAULTS)
         self.warning=lambda message:None;self.last_error=''
-        self.token=self.root.after(80,self.tick)
+        self.token=self.root.after(self.preferences['follow_interval_ms'],self.tick)
 
     def update(self,snapshot):self.snapshot=snapshot
 
@@ -89,6 +89,7 @@ class TraceOverlay:
     def hide(self):
         if self.visible:self.window.withdraw();self.visible=False
         self.canvas.delete('all')
+        for panel in self.panels.values():panel.hide()
 
     def tick(self):
         if self.closed:return
@@ -97,21 +98,24 @@ class TraceOverlay:
             self.hide()
             if str(exc)!=self.last_error:self.warning('覆盖显示失败：'+str(exc))
             self.last_error=str(exc)
-        if not self.closed:self.token=self.root.after(80,self.tick)
+        if not self.closed:self.token=self.root.after(self.preferences['follow_interval_ms'],self.tick)
 
     def draw(self):
         data=self.snapshot or {};identity=data.get('window_identity') or {};control=data.get('control',{})
-        bounds=None
-        if (self.enabled and data.get('enabled') and -1<=time.time()-data.get('created',0)<.8 and identity
-                and control.get('fresh_frame')is not False and not control.get('manual_paused') and not control.get('focus_waiting') and control.get('state')!='stopped'):
+        valid=(self.enabled and data.get('enabled') and -1<=time.time()-data.get('created',0)<.8 and identity
+               and control.get('fresh_frame')is not False and not control.get('manual_paused') and not control.get('focus_waiting') and control.get('state')!='stopped')
+        if valid:
             pid=W.DWORD();user32.GetWindowThreadProcessId(identity['hwnd'],C.byref(pid))
-            if pid.value==identity['pid']:bounds=self.presentation.game_bounds(identity['hwnd'])
-        if bounds is None:self.hide()
-        else:
-            self.presentation.show(self.handle,bounds);self.visible=True;self.window.attributes('-alpha',self.opacity/100)
-            self.paint(bounds[2],bounds[3]);self.last_error=''
+            valid=pid.value==identity['pid'] and user32.IsWindow(identity['hwnd']) and not user32.IsIconic(identity['hwnd'])
+        if not valid:self.hide();return
+        from .windows import geometry
+        front=self.presentation.game_bounds(identity['hwnd']);g=geometry(identity['hwnd']);bounds=(g.left,g.top,g.width,g.height)
+        if front is not None:
+            self.presentation.show(self.handle,front);self.visible=True;self.window.attributes('-alpha',self.opacity/100)
+        elif self.visible:self.window.withdraw();self.visible=False
+        self.paint(bounds[2],bounds[3],bounds,foreground=front is not None);self.last_error=''
 
-    def paint(self,width,height):
+    def paint(self,width,height,bounds=None,foreground=True):
         self.canvas.delete('all');data=self.snapshot or {};standard=data.get('standard_size',[1920,1080]);sx,sy=width/standard[0],height/standard[1]
         font=(theme.FONT,self.font_size)
         if self.layers['vision']:
@@ -122,27 +126,35 @@ class TraceOverlay:
                 self.canvas.create_text(box[0]+3,max(8,box[1]-3),text=row['label'][:60],fill=color,font=font,anchor='sw')
         groups=overlay_groups(data,self.state,self.layers,self.preferences);lines=[]
         if self.preferences['separate_panels']:
+            from .trace_panels_ui import TracePanel
             for key,lines in groups.items():
-                if not lines:continue
-                panel=self.preferences['panels'][key];x,y,w,h=panel_bounds(panel,(width,height))
-                # Clip in an independent canvas: a long condition cannot obscure other panels.
-                frame=self.panel_widgets.get(key)
-                if frame is None:
-                    frame=tk.Canvas(self.canvas,background='#101820',highlightthickness=1,highlightbackground='#555');self.panel_widgets[key]=frame
-                frame.delete('all')
-                frame.create_text(8,6,text='\n'.join(lines),anchor='nw',width=max(1,w-16),font=(theme.FONT,panel['font_size']),fill=theme.TEXT)
-                self.canvas.create_window(x,y,window=frame,anchor='nw',width=w,height=h)
+                config=self.preferences['panels'][key]
+                if key not in self.panels and not lines:continue
+                if key not in self.panels:
+                    self.panels[key]=TracePanel(self.root,key,self.scale,self.save_panel,presentation=self.presentation)
+                    self.panel_widgets[key]=self.panels[key].canvas
+                panel=self.panels[key]
+                if not lines or not config['visible'] or bounds is not None and config['mode']=='game' and not foreground:
+                    panel.hide();continue
+                if config['mode']=='desktop':pb=(config['desktop_x'],config['desktop_y'],round(config['w']*self.scale),round(config['h']*self.scale))
+                else:
+                    x,y,w,h=panel_bounds(config,(width,height));pb=((bounds[0] if bounds else 0)+x,(bounds[1] if bounds else 0)+y,w,h)
+                if bounds is not None:panel.show(lines,config,pb,self.preferences['text_color'])
+                else:
+                    panel.canvas.delete('all');panel.canvas.create_text(8,6,text='\n'.join(lines),anchor='nw',width=max(1,pb[2]-16),font=(theme.FONT,config['font_size']),fill=self.preferences['text_color'])
         else:
+            for panel in self.panels.values():panel.hide()
             lines=[line for group in groups.values() for line in group]
         if lines and not self.preferences['separate_panels']:
             x=max(12,width-min(round(400*self.scale),round(width*.35)));y=round(40*self.scale)
-            text=self.canvas.create_text(x+12,y+8,text='\n'.join(lines),anchor='nw',width=max(100,width-x-28),font=font,fill=theme.TEXT)
+            text=self.canvas.create_text(x+12,y+8,text='\n'.join(lines),anchor='nw',width=max(100,width-x-28),font=font,fill=self.preferences['text_color'])
             box=self.canvas.bbox(text);background=self.canvas.create_rectangle(x,y,width-12,min(height-12,box[3]+10),fill='#101820',outline='#555')
             self.canvas.tag_lower(background,text)
 
     def close(self):
         if self.closed:return
         self.closed=True
+        for panel in self.panels.values():panel.close()
         try:
             if self.token is not None:self.root.after_cancel(self.token);self.token=None
             self.window.destroy()
@@ -152,7 +164,7 @@ class TraceOverlay:
 class TraceWindow:
     def __init__(self,parent,scale,subscribe,*,presentation=None,preferences_path=None):
         self.capture_root=getattr(getattr(getattr(subscribe,'__self__',None),'paths',None),'data',None)
-        self.capture_pending=False;self.capture_message='';self.capture_options=None;self.captured=set();self.hotkey_token=None
+        self.capture_pending=False;self.capture_message='';self.capture_options=None;self.captured=set();self.hotkey_token=None;self.capture_listeners=[]
         self.scale=scale;self.advanced=None;self.preference_store=TracePreferences(preferences_path)
         try:self.preferences=self.preference_store.load();self.preference_error=None
         except (OSError,ValueError) as exc:self.preferences=deepcopy(DEFAULTS);self.preference_error=str(exc)
@@ -162,11 +174,11 @@ class TraceWindow:
         self.window.geometry(f'{width}x{height}');self.window.minsize(min(d(740),width),min(d(560),height));self.window.configure(background=theme.PANEL)
         self.window.columnconfigure(0,weight=1);self.window.rowconfigure(2,weight=1)
         bar=ttk.Frame(self.window,padding=d(14));bar.grid(row=0,column=0,sticky='ew')
-        self.collect=tk.BooleanVar(self.window,True);self.frozen=tk.BooleanVar(self.window,False);self.cover=tk.BooleanVar(self.window,False)
+        self.collect=tk.BooleanVar(self.window,True);self.frozen=tk.BooleanVar(self.window,False);self.cover=tk.BooleanVar(self.window,self.preferences['default_cover'])
         ttk.Checkbutton(bar,text='采集',variable=self.collect,command=self.configure).pack(side='left',padx=(0,d(14)))
         ttk.Checkbutton(bar,text='冻结列表',variable=self.frozen,command=self.refresh).pack(side='left',padx=(0,d(14)))
         self.overlay=TraceOverlay(self.window,scale,presentation=presentation)
-        ttk.Checkbutton(bar,text='游戏覆盖',variable=self.cover,command=self.overlay_options).pack(side='left',padx=(0,d(14)))
+        ttk.Checkbutton(bar,text='游戏覆盖',variable=self.cover,command=self.persist_overlay_options).pack(side='left',padx=(0,d(14)))
         ttk.Button(bar,text='覆盖设置…',command=self.open_advanced).pack(side='left',padx=(0,d(8)))
         ttk.Button(bar,text='清空',command=lambda:self.configure(clear=True)).pack(side='left')
         ttk.Button(bar,text='导出 JSON…',command=self.export).pack(side='right')
@@ -175,12 +187,12 @@ class TraceWindow:
         self.query=tk.StringVar(self.window);ttk.Entry(filters,textvariable=self.query).grid(row=0,column=1,sticky='ew')
         self.query.trace_add('write',lambda *_:self.refresh())
         source_row=ttk.Frame(filters);source_row.grid(row=1,column=0,columnspan=2,sticky='ew',pady=(d(10),0))
-        self.sources={key:tk.BooleanVar(self.window,True) for key in COLORS}
+        self.sources={key:tk.BooleanVar(self.window,self.preferences['sources'][key]) for key in COLORS}
         for key,label in (('ocr','OCR'),('template','模板'),('yolo','YOLO'),('cv','CV')):
-            ttk.Checkbutton(source_row,text=label,variable=self.sources[key],command=self.refresh).pack(side='left',padx=(0,d(14)))
-        self.layers={key:tk.BooleanVar(self.window,True) for key in ('vision','decision','timeline','perf','state')}
+            ttk.Checkbutton(source_row,text=label,variable=self.sources[key],command=self.persist_sources).pack(side='left',padx=(0,d(14)))
+        self.layers={key:tk.BooleanVar(self.window,self.preferences['layers'][key]) for key in ('vision','decision','timeline','perf','state')}
         ttk.Label(source_row,text='覆盖：').pack(side='left',padx=(d(14),d(6)))
-        for key in self.layers:ttk.Checkbutton(source_row,text=LABELS.get(key,'条件'),variable=self.layers[key],command=self.overlay_options).pack(side='left',padx=(0,d(8)))
+        for key in self.layers:ttk.Checkbutton(source_row,text=LABELS.get(key,'条件'),variable=self.layers[key],command=self.persist_overlay_options).pack(side='left',padx=(0,d(8)))
         self.book=ttk.Notebook(self.window);self.book.grid(row=2,column=0,sticky='nsew',padx=d(14));self.tables={};self.details={};self.records={}
         definitions={'vision':(('source','来源',80),('label','标签',300),('box','坐标',190),('score','置信度',85)),
                      'decision':(('time','时间',85),('source','来源',110),('trigger','触发器',190),('operation','操作',200),('status','状态',80)),
@@ -199,17 +211,17 @@ class TraceWindow:
         footer=ttk.Frame(self.window,padding=d(14));footer.grid(row=3,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
         self.status=tk.StringVar(self.window,'正在启用追踪…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew')
         appearance=ttk.Frame(footer);appearance.grid(row=1,column=0,sticky='w',pady=(d(10),0))
-        self.font_size=tk.StringVar(self.window,'11');self.opacity=tk.StringVar(self.window,'85')
-        for label,var,low,high in (('覆盖字号',self.font_size,8,24),('不透明度 %',self.opacity,20,100)):
+        self.font_size=tk.StringVar(self.window,str(self.preferences['base_font_size']));self.opacity=tk.StringVar(self.window,str(self.preferences['base_opacity']))
+        for label,var,low,high in (('覆盖字号',self.font_size,8,28),('不透明度 %',self.opacity,5,100)):
             ttk.Label(appearance,text=label).pack(side='left',padx=(0,d(8)))
-            entry=ttk.Spinbox(appearance,textvariable=var,from_=low,to=high,width=5,command=self.overlay_options);entry.pack(side='left',padx=(0,d(16)))
-            entry.bind('<FocusOut>',lambda _:self.overlay_options());entry.bind('<Return>',lambda _:self.overlay_options())
+            entry=ttk.Spinbox(appearance,textvariable=var,from_=low,to=high,width=5,command=self.persist_appearance);entry.pack(side='left',padx=(0,d(16)))
+            entry.bind('<FocusOut>',lambda _:self.persist_appearance());entry.bind('<Return>',lambda _:self.persist_appearance())
         ttk.Button(appearance,text='带覆盖截图',command=self.request_capture).pack(side='left')
         ttk.Button(footer,text='关闭',command=self.close).grid(row=1,column=1,sticky='e',pady=(d(10),0))
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.window.bind('<Escape>',lambda _:self.close())
         self.window.bind('<Destroy>',lambda event:self.close() if event.widget is self.window else None,add='+')
         self.overlay.warning=self.error
-        self.overlay.preferences=deepcopy(self.preferences)
+        self.overlay.preferences=deepcopy(self.preferences);self.overlay.save_panel=self.save_panel
         self.hotkeys=HotkeyPoller(user32.GetAsyncKeyState);self.hotkeys.configure(self.preferences['hotkeys'])
         self.poll_hotkeys()
         self.configure()
@@ -221,9 +233,18 @@ class TraceWindow:
             self.advanced.window.lift();return
         self.advanced=TraceSettingsWindow(self.window,self.scale,self.preferences,self.save_preferences,groups=overlay_groups(self.snapshot or {},self.state,self.overlay.layers,self.preferences))
 
+    def save_panel(self,key,changes):
+        value=deepcopy(self.preferences);value['panels'][key].update(changes)
+        try:self.save_preferences(value)
+        except (OSError,ValueError) as exc:self.error('覆盖布局保存失败：'+str(exc))
+
     def save_preferences(self,value):
         self.preference_store.save(value);self.preferences=deepcopy(value);self.overlay.preferences=deepcopy(value)
         self.hotkeys.configure(value['hotkeys'])
+        self.font_size.set(str(value['base_font_size']));self.opacity.set(str(value['base_opacity']));self.cover.set(value['default_cover'])
+        for key,var in self.layers.items():var.set(value['layers'][key])
+        for key,var in self.sources.items():var.set(value['sources'][key])
+        self.overlay_options()
         self.status.set('覆盖设置已保存。')
 
     def poll_hotkeys(self):
@@ -233,9 +254,9 @@ class TraceWindow:
             pid=W.DWORD();user32.GetWindowThreadProcessId(identity['hwnd'],C.byref(pid))
             active=pid.value==identity['pid'] and user32.GetForegroundWindow()==identity['hwnd']
         for action in self.hotkeys.poll(active):
-            if action=='toggle':self.cover.set(not self.cover.get());self.overlay_options()
+            if action=='toggle':self.cover.set(not self.cover.get());self.persist_overlay_options()
             elif action=='capture':self.request_capture()
-        self.hotkey_token=self.window.after(50,self.poll_hotkeys)
+        self.hotkey_token=self.window.after(self.preferences['input_poll_interval_ms'],self.poll_hotkeys)
 
     def request_capture(self):
         if self.closed or self.capture_pending:return
@@ -260,12 +281,21 @@ class TraceWindow:
             current_epoch=self.state.get('control',{}).get('observation_epoch')
             if current_epoch is not None and current_epoch!=value['epoch']:raise ValueError('截图观察已过期。')
             image,path=read_capture(self.capture_root,value)
+            listeners,self.capture_listeners=self.capture_listeners,[]
+            for callback in listeners:
+                try:callback(dict(value))
+                except Exception:pass  # A separate editor cannot interrupt the running application's trace.
             state={'battle':captured_snapshot.get('capture_battle',{})} if not value.get('paused') else {}
             result=compose_overlay(image,captured_snapshot,state,**self.capture_options)
-            stream=BytesIO();result.save(stream,format='PNG');target=path.with_name(path.stem+'_overlay.png')
+            stream=BytesIO();result.save(stream,format='PNG');target=path.with_name(path.stem+self.preferences['capture_suffix']+'.png')
             atomic_bytes(target,stream.getvalue());self.captured.add(key)
             self.capture_message='截图已保存：'+str(target);self.status.set(self.capture_message)
         except (OSError,ValueError,KeyError) as exc:self.capture_message='截图保存失败：'+str(exc);self.status.set(self.capture_message)
+
+    def capture_once(self,callback):
+        if self.closed:raise ValueError('原追踪窗口已关闭。')
+        self.capture_listeners.append(callback)
+        if not self.capture_pending:self.request_capture()
 
     def configure(self,clear=False):
         if self.closed:return
@@ -289,15 +319,30 @@ class TraceWindow:
         self.capture_pending=False
         self.overlay.update(None);self.overlay.hide();self.status.set('追踪读取失败：'+message[:180])
 
+    def persist_appearance(self):
+        if not self.overlay_options():return
+        value=deepcopy(self.preferences);value.update(base_font_size=self.overlay.font_size,base_opacity=self.overlay.opacity)
+        try:self.save_preferences(value)
+        except (OSError,ValueError) as exc:self.status.set('覆盖外观保存失败：'+str(exc))
+
+    def persist_sources(self):
+        self.persist_overlay_options();self.refresh()
+
+    def persist_overlay_options(self):
+        value=deepcopy(self.preferences);value.update(default_cover=bool(self.cover.get()),sources={key:var.get() for key,var in self.sources.items()},layers={key:var.get() for key,var in self.layers.items()})
+        try:self.save_preferences(value)
+        except (OSError,ValueError) as exc:self.status.set('覆盖设置保存失败：'+str(exc))
+        self.overlay_options()
+
     def overlay_options(self):
         self.overlay.enabled=bool(self.cover.get())
         self.overlay.layers={key:var.get() for key,var in self.layers.items()};self.overlay.sources={key:var.get() for key,var in self.sources.items()}
         if not self.overlay.enabled:self.overlay.hide()
         try:
             font=int(self.font_size.get());opacity=int(self.opacity.get())
-            if not 8<=font<=24 or not 20<=opacity<=100:raise ValueError()
+            if not 8<=font<=28 or not 5<=opacity<=100:raise ValueError()
         except ValueError:
-            self.status.set('覆盖字号须为 8—24，不透明度须为 20—100。');return False
+            self.status.set('覆盖字号须为 8—28，不透明度须为 5—100。');return False
         self.overlay.font_size=font;self.overlay.opacity=opacity
         return True
 
@@ -345,7 +390,7 @@ class TraceWindow:
 
     def close(self):
         if self.closed:return
-        self.closed=True;self.hotkeys.close()
+        self.closed=True;self.hotkeys.close();self.capture_listeners=[]
         if self.hotkey_token is not None:self.window.after_cancel(self.hotkey_token);self.hotkey_token=None
         self.capture_pending=False;self.subscribe(False,False);self.overlay.close()
         try:self.window.destroy()

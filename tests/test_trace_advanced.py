@@ -30,7 +30,10 @@ class TraceAdvancedTests(unittest.TestCase):
         with self.assertRaises(ValueError):poll.configure(dict(toggle='Ctrl+Shift+F7',capture='Shift+Ctrl+F7'))
 
     def test_old_preferences_get_safe_hotkey_defaults(self):
-        old=deepcopy(DEFAULTS);old.pop('hotkeys');self.assertEqual(validate(old),DEFAULTS)
+        old={key:deepcopy(DEFAULTS[key]) for key in ('version','offset_x','offset_y','scale_x','scale_y','separate_panels','metrics','panels')}
+        old['version']=1
+        old['panels']={key:{field:panel[field] for field in ('x','y','w','h','font_size')} for key,panel in old['panels'].items()}
+        self.assertEqual(validate(old),DEFAULTS)
 
     def test_drag_snap_and_resize(self):
         panel=deepcopy(DEFAULTS['panels']['state'])

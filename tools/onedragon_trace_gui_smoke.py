@@ -54,6 +54,7 @@ def main():
                 pump(root,lambda:run.connected and not run.loading_account)
                 with patch('autozzz.onedragon_trace_ui.NativePresentation',lambda:NativePresentation(protect_capture=False)):
                     run.trace_button.invoke();view=run.trace_window;view.window.withdraw();noactivate.prepare(view.window);view.window.deiconify()
+                root.update();foreground=user32.GetForegroundWindow() # Explicit tool-dialog mapping is allowed to focus; overlay interaction is not.
                 assert run.session.trace_calls==[(True,False)]
                 data=sample(root_handle);run.events.put(dict(type='trace',snapshot=data,version=view.version))
                 pump(root,lambda:len(view.tables['vision'].get_children())==2)
@@ -90,6 +91,7 @@ def main():
                 run.events.put(dict(type='trace_error',message='fixture query failed'));pump(root,lambda:'fixture query' in view.status.get())
                 assert not run.busy and not view.overlay.visible
                 view.frozen.set(True);view.update(None);assert not view.frozen.get() and not view.tables['decision'].get_children()
+                assert user32.GetForegroundWindow()==foreground,'覆盖、采样和追踪交互不能额外改变前台焦点'
                 run.trace_window.close();assert run.session.trace_calls[-1]==(False,False) and view.overlay.closed
                 with patch('autozzz.onedragon_trace_ui.NativePresentation',lambda:NativePresentation(protect_capture=False)):
                     run.show_trace();reopened=run.trace_window;reopened.window.withdraw();noactivate.prepare(reopened.window);reopened.window.deiconify()
@@ -99,7 +101,6 @@ def main():
                 run.close();pump(root,lambda:run.closed);run.worker.join(2)
                 assert reopened.closed and reopened.overlay.closed and run.session.trace_calls[-1]==(False,False)
                 assert config.read_bytes()==original and not errors,errors
-                assert user32.GetForegroundWindow()==foreground,'测试窗口不能改变前台焦点'
             finally:
                 if run.trace_window is not None:run.trace_window.close()
                 run.session.close();run.worker.join(2);ui.overlay.close()
@@ -107,8 +108,13 @@ def main():
                 root.destroy()
     result=dict(layout_cases=cases,actual_execution_entry=True,filter_and_sources=True,freeze_does_not_freeze_overlay=True,export_explicit=True,
                 old_version_rejected=True,disconnect_clears_frozen_history=True,overlay_follows_owned_window=True,pause_hides_overlay=True,
-                close_unsubscribes=True,game_accessed=False,game_input_sent=False)
+                close_unsubscribes=True,focus_scope='after_explicit_dialog_open_before_close',game_accessed=False,game_input_sent=False)
     (args.output/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(result,ensure_ascii=False))
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    original_toplevel=tk.Toplevel
+    def hidden_toplevel(*args,**kwargs):
+        window=original_toplevel(*args,**kwargs);window.withdraw();return window
+    # Test windows receive native no-activation styles before mapping, including update_idletasks.
+    with patch('tkinter.Toplevel',hidden_toplevel):main()

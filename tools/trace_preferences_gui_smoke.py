@@ -52,7 +52,7 @@ def main():
                 editor.variables[('panels','state','x')].set('40');assert editor.apply()
                 assert path.exists() and view.overlay.preferences['scale_x']==1.25
                 data=sample(1);view.update(data,view.version);view.cover.set(True);view.overlay_options()
-                view.overlay.paint(960,540);root.update()
+                view.overlay.paint(960,540) # Inspect synchronous paint before the invalid fixture HWND is hidden by the safety timer.
                 assert len(view.overlay.panel_widgets)==3 # No active condition; three trace panels.
                 performance=view.overlay.panel_widgets['perf']
                 text=' '.join(str(performance.itemcget(item,'text')) for item in performance.find_all())

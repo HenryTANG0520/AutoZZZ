@@ -11,11 +11,11 @@ from .trace_preferences import DEFAULTS, METRICS, PANELS, validate
 
 class TraceSettingsWindow:
     def __init__(self, parent, scale, value, save,groups=None):
-        self.closed = False; self.save = save;self.scale=scale;self.groups=groups;self.layout_window=None; self.variables = {}
+        self.closed = False; self.base_value=deepcopy(value);self.save = save;self.scale=scale;self.groups=groups;self.layout_window=None; self.variables = {}
         self.window = tk.Toplevel(parent); self.window.transient(parent)
         self.window.title('AutoZZZ · 覆盖设置')
         d = lambda n: round(n * scale)
-        self.window.geometry(f'{d(620)}x{d(490)}'); self.window.minsize(d(550), d(430))
+        self.window.geometry(f'{d(620)}x{d(560)}'); self.window.minsize(d(550), d(500))
         self.window.configure(background=theme.PANEL)
         self.window.columnconfigure(0, weight=1); self.window.rowconfigure(0, weight=1)
         book = ttk.Notebook(self.window); book.grid(row=0, column=0, sticky='nsew', padx=d(14), pady=d(14))
@@ -42,8 +42,29 @@ class TraceSettingsWindow:
         panel_book=ttk.Notebook(panels);panel_book.pack(fill='both',expand=True)
         for key,label in zip(PANELS,('条件','决策','时间线','性能')):
             page=ttk.Frame(panel_book,padding=d(10));panel_book.add(page,text=label)
-            for row,(field,title,low,high) in enumerate((('x','水平位置',0,1919),('y','垂直位置',0,1079),('w','宽度',120,1920),('h','高度',60,1080),('font_size','字号',8,24))):
+            for row,(field,title,low,high) in enumerate((('x','水平位置',0,1919),('y','垂直位置',0,1079),('w','宽度',120,1920),('h','高度',60,1080),('font_size','字号',8,28))):
                 self.field(page,('panels',key,field),title,value['panels'][key][field],row//2,low,high,1,d,column=(row%2)*2)
+        floating=ttk.Frame(book,padding=d(14));book.add(floating,text='浮窗')
+        ttk.Label(floating,text='桌面面板可拖动、缩放、收起；游戏面板保持穿透。',style='Hint.TLabel').grid(row=0,column=0,columnspan=5,sticky='w',pady=(0,d(12)))
+        for row,(key,label) in enumerate(zip(PANELS,('条件','决策','时间线','性能')),1):
+            ttk.Label(floating,text=label).grid(row=row,column=0,sticky='w',padx=(0,d(10)),pady=d(8))
+            for field,item in value['panels'][key].items():
+                if ('panels',key,field) not in self.variables:self.variables[('panels',key,field)]=tk.BooleanVar(self.window,item) if type(item)is bool else tk.StringVar(self.window,str(item))
+            mode_value=self.variables[('panels',key,'mode')];mode_label=tk.StringVar(self.window,{'game':'随游戏','desktop':'桌面'}[mode_value.get()])
+            modes=ttk.Combobox(floating,values=('随游戏','桌面'),textvariable=mode_label,state='readonly',width=9)
+            modes.bind('<<ComboboxSelected>>',lambda _,v=mode_value,label=mode_label:v.set({'随游戏':'game','桌面':'desktop'}[label.get()]))
+            mode_value.trace_add('write',lambda *_,v=mode_value,label=mode_label:label.set({'game':'随游戏','desktop':'桌面'}[v.get()]))
+            modes.grid(row=row,column=1,padx=d(6))
+            ttk.Spinbox(floating,textvariable=self.variables[('panels',key,'opacity')],from_=5,to=100,width=4).grid(row=row,column=2,padx=d(6))
+            ttk.Checkbutton(floating,text='显示',variable=self.variables[('panels',key,'visible')]).grid(row=row,column=3,padx=d(6))
+            ttk.Checkbutton(floating,text='收起',variable=self.variables[('panels',key,'collapsed')]).grid(row=row,column=4,padx=d(6))
+        ttk.Label(floating,text='数值为不透明度 %；“显示”可恢复已关闭的面板。',style='Hint.TLabel').grid(row=5,column=0,columnspan=5,sticky='w',pady=d(12))
+        appearance=ttk.Frame(book,padding=d(14));book.add(appearance,text='外观')
+        for row,(key,label) in enumerate((('text_color','文字颜色 #RRGGBB'),('capture_suffix','合成截图后缀'))):
+            var=tk.StringVar(self.window,value[key]);self.variables[key]=var
+            ttk.Label(appearance,text=label).grid(row=row,column=0,sticky='w',padx=(0,d(12)),pady=d(8))
+            ttk.Entry(appearance,textvariable=var,width=18).grid(row=row,column=1,sticky='w')
+        for row,(key,label,low,high) in enumerate((('follow_interval_ms','覆盖刷新（毫秒）',30,1000),('input_poll_interval_ms','快捷键轮询（毫秒）',20,200)),2):self.field(appearance,key,label,value[key],row,low,high,1,d)
         footer=ttk.Frame(self.window,padding=(d(14),0,d(14),d(14)));footer.grid(row=1,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
         self.status=tk.StringVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=3,sticky='ew',pady=(0,d(10)))
@@ -54,11 +75,11 @@ class TraceSettingsWindow:
         self.window.bind('<Destroy>',lambda event:self.close() if event.widget is self.window else None,add='+')
 
     def draft(self):
-        value=deepcopy(DEFAULTS)
+        value=deepcopy(self.base_value)
         for key,var in self.variables.items():
             parts=key if isinstance(key,tuple) else (key,);target=value
             for part in parts[:-1]:target=target[part]
-            raw=var.get();target[parts[-1]]=raw if type(raw)is bool or parts[0]=='hotkeys' else float(raw) if parts[-1] in ('scale_x','scale_y') else int(raw)
+            raw=var.get();target[parts[-1]]=raw if type(raw)is bool or parts[0] in ('hotkeys','text_color','capture_suffix') or parts[-1]=='mode' else float(raw) if parts[-1] in ('scale_x','scale_y') else int(raw)
         return validate(value)
 
     def open_layout(self):
@@ -78,6 +99,7 @@ class TraceSettingsWindow:
         ttk.Spinbox(parent,textvariable=var,from_=low,to=high,increment=increment,width=12).grid(row=row,column=column+1,sticky='w',padx=(0,d(12)),pady=d(5))
 
     def defaults(self):
+        self.base_value=deepcopy(DEFAULTS)
         for key,var in self.variables.items():
             value=DEFAULTS
             for part in key if isinstance(key,tuple) else (key,):value=value[part]

@@ -114,16 +114,18 @@ def compose_overlay(image,snapshot,state,layers,sources,preferences,font_size=11
                 current+=character
             result.append(current)
         return result
-    def panel(lines,bounds,point_size):
-        x,y,w,h=bounds;tile=Image.new('RGBA',(max(1,w),max(1,h)),(16,24,32,alpha));ink=ImageDraw.Draw(tile)
-        ink.rectangle((0,0,w-1,h-1),outline=(85,85,85,alpha));f=font(point_size);cursor=6
+    def panel(lines,bounds,point_size,panel_opacity=None):
+        panel_alpha=alpha if panel_opacity is None else round(panel_opacity*255/100)
+        x,y,w,h=bounds;tile=Image.new('RGBA',(max(1,w),max(1,h)),(16,24,32,panel_alpha));ink=ImageDraw.Draw(tile)
+        ink.rectangle((0,0,w-1,h-1),outline=(85,85,85,panel_alpha));f=font(point_size);cursor=6
         for line in wrap(lines,w,point_size):
-            ink.text((8,cursor),line,font=f,fill=(240,240,240,alpha));cursor+=round(point_size*tk_scaling+3)
+            ink.text((8,cursor),line,font=f,fill=tuple(int(preferences['text_color'][i:i+2],16) for i in (1,3,5))+(panel_alpha,));cursor+=round(point_size*tk_scaling+3)
             if cursor>=h:break
         layer.alpha_composite(tile,(x,y))
     if preferences['separate_panels']:
         for key,lines in groups.items():
-            if lines:panel(lines,panel_bounds(preferences['panels'][key],image.size),preferences['panels'][key]['font_size'])
+            config=preferences['panels'][key]
+            if lines and config['visible'] and config['mode']=='game':panel(lines,panel_bounds(config,image.size),config['font_size'],config['opacity'])
     else:
         lines=[line for group in groups.values() for line in group]
         if lines:
