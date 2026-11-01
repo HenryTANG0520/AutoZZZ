@@ -114,6 +114,10 @@ class OneDragonService:
 
     def trace_configure(self,enabled,clear=False):return self.ctx.debug_trace_runtime.configure(enabled,clear)
     def trace_snapshot(self):return self.ctx.debug_trace_runtime.snapshot()
+    def trace_capture(self,epoch,generation):
+        from .trace_capture import capture_source
+        if type(epoch)is not int or type(generation)is not int:raise ValueError('截图观察编号无效。')
+        return capture_source(self.ctx.debug_trace_runtime,self.data,epoch,generation)
 
     def catalog(self) -> dict:
         from one_dragon.base.operation.application.application_factory import ApplicationFactory
@@ -765,7 +769,7 @@ METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
 METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})
-METHODS.update({'trace_configure','trace_snapshot'})
+METHODS.update({'trace_configure','trace_snapshot','trace_capture'})
 METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})
 METHODS.update({'program_catalog','program_check','program_download','program_import','program_restore','program_status','program_cancel'})
 METHODS.add('schedule_review')

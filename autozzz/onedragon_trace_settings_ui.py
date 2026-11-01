@@ -10,8 +10,8 @@ from .trace_preferences import DEFAULTS, METRICS, PANELS, validate
 
 
 class TraceSettingsWindow:
-    def __init__(self, parent, scale, value, save):
-        self.closed = False; self.save = save; self.variables = {}
+    def __init__(self, parent, scale, value, save,groups=None):
+        self.closed = False; self.save = save;self.scale=scale;self.groups=groups;self.layout_window=None; self.variables = {}
         self.window = tk.Toplevel(parent); self.window.transient(parent)
         self.window.title('AutoZZZ · 覆盖设置')
         d = lambda n: round(n * scale)
@@ -23,6 +23,12 @@ class TraceSettingsWindow:
         ttk.Label(calibration, text='偏移以屏幕像素计；先缩放，再偏移。', style='Hint.TLabel').grid(row=0, column=0, columnspan=2, sticky='w', pady=(0,d(16)))
         for row, (key, label, low, high, increment) in enumerate((('offset_x','水平偏移',-1920,1920,1),('offset_y','垂直偏移',-1920,1920,1),('scale_x','水平缩放',.5,1.5,.01),('scale_y','垂直缩放',.5,1.5,.01)), 1):
             self.field(calibration, key, label, value[key], row, low, high, increment, d)
+        keys=ttk.Frame(book,padding=d(14));book.add(keys,text='快捷键')
+        ttk.Label(keys,text='仅在游戏前台生效；留空禁用。F9 / F10 保留。',style='Hint.TLabel').pack(anchor='w',pady=(0,d(12)))
+        for key,label in (('toggle','覆盖显隐'),('capture','带覆盖截图')):
+            ttk.Label(keys,text=label).pack(anchor='w')
+            var=tk.StringVar(self.window,value['hotkeys'][key]);self.variables[('hotkeys',key)]=var
+            ttk.Entry(keys,textvariable=var,width=28).pack(anchor='w',pady=(d(5),d(14)))
         metrics = ttk.Frame(book, padding=d(14)); book.add(metrics, text='性能指标')
         metric_labels=('OCR 识别耗时','目标识别耗时','图像处理耗时','节点执行耗时','覆盖刷新耗时')
         for row, (key,label) in enumerate(zip(METRICS,metric_labels)):
@@ -32,11 +38,12 @@ class TraceSettingsWindow:
         var=tk.BooleanVar(self.window,value['separate_panels']);self.variables['separate_panels']=var
         ttk.Checkbutton(panels,text='分别布局条件、决策、时间线和性能面板',variable=var).pack(anchor='w')
         ttk.Label(panels,text='位置和尺寸以 1920 × 1080 为基准，随游戏窗口缩放。',style='Hint.TLabel').pack(anchor='w',pady=d(10))
+        ttk.Button(panels,text='拖拽布局…',command=self.open_layout).pack(anchor='w',pady=(0,d(8)))
         panel_book=ttk.Notebook(panels);panel_book.pack(fill='both',expand=True)
         for key,label in zip(PANELS,('条件','决策','时间线','性能')):
             page=ttk.Frame(panel_book,padding=d(10));panel_book.add(page,text=label)
             for row,(field,title,low,high) in enumerate((('x','水平位置',0,1919),('y','垂直位置',0,1079),('w','宽度',120,1920),('h','高度',60,1080),('font_size','字号',8,24))):
-                self.field(page,('panels',key,field),title,value['panels'][key][field],row,low,high,1,d)
+                self.field(page,('panels',key,field),title,value['panels'][key][field],row//2,low,high,1,d,column=(row%2)*2)
         footer=ttk.Frame(self.window,padding=(d(14),0,d(14),d(14)));footer.grid(row=1,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
         self.status=tk.StringVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=3,sticky='ew',pady=(0,d(10)))
@@ -46,10 +53,29 @@ class TraceSettingsWindow:
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.window.bind('<Escape>',lambda _:self.close())
         self.window.bind('<Destroy>',lambda event:self.close() if event.widget is self.window else None,add='+')
 
-    def field(self,parent,key,label,value,row,low,high,increment,d):
+    def draft(self):
+        value=deepcopy(DEFAULTS)
+        for key,var in self.variables.items():
+            parts=key if isinstance(key,tuple) else (key,);target=value
+            for part in parts[:-1]:target=target[part]
+            raw=var.get();target[parts[-1]]=raw if type(raw)is bool or parts[0]=='hotkeys' else float(raw) if parts[-1] in ('scale_x','scale_y') else int(raw)
+        return validate(value)
+
+    def open_layout(self):
+        from .trace_layout_ui import TraceLayoutWindow
+        if self.layout_window is not None and not self.layout_window.closed:self.layout_window.window.lift();return
+        try:value=self.draft()
+        except (ValueError,tk.TclError) as exc:self.status.set('请先修正设置：'+str(exc));return
+        def apply(value):
+            self.variables['separate_panels'].set(True)
+            for key,panel in value['panels'].items():
+                for field,item in panel.items():self.variables[('panels',key,field)].set(item)
+        self.layout_window=TraceLayoutWindow(self.window,self.scale,value,apply,self.groups)
+
+    def field(self,parent,key,label,value,row,low,high,increment,d,column=0):
         var=tk.StringVar(self.window,str(value));self.variables[key]=var
-        ttk.Label(parent,text=label).grid(row=row,column=0,sticky='w',padx=(0,d(20)),pady=d(5))
-        ttk.Spinbox(parent,textvariable=var,from_=low,to=high,increment=increment,width=12).grid(row=row,column=1,sticky='w',pady=d(5))
+        ttk.Label(parent,text=label).grid(row=row,column=column,sticky='w',padx=(0,d(10)),pady=d(5))
+        ttk.Spinbox(parent,textvariable=var,from_=low,to=high,increment=increment,width=12).grid(row=row,column=column+1,sticky='w',padx=(0,d(12)),pady=d(5))
 
     def defaults(self):
         for key,var in self.variables.items():
@@ -60,12 +86,7 @@ class TraceSettingsWindow:
 
     def apply(self):
         try:
-            value=deepcopy(DEFAULTS)
-            for key,var in self.variables.items():
-                parts=key if isinstance(key,tuple) else (key,);target=value
-                for part in parts[:-1]:target=target[part]
-                raw=var.get()
-                target[parts[-1]]=raw if type(raw) is bool else float(raw) if parts[-1] in ('scale_x','scale_y') else int(raw)
+            value=self.draft()
             self.save(validate(value))
         except (ValueError,OSError,tk.TclError) as exc:self.status.set('保存失败：'+str(exc));return False
         self.close();return True

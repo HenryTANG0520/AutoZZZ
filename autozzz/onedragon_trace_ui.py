@@ -10,6 +10,7 @@ from tkinter import ttk,filedialog
 from . import theme
 from .overlay import NativePresentation
 from .windows import user32,W,C
+from .trace_hotkeys import HotkeyPoller
 from .trace_preferences import DEFAULTS, METRICS, TracePreferences, calibrated_box, panel_bounds
 from copy import deepcopy
 
@@ -40,6 +41,28 @@ def vision_rows(snapshot,sources):
             yolo.append(row)
         rows.append(row)
     return list(reversed(rows))
+
+
+def overlay_groups(data,state,layers,preferences):
+    groups={}
+    lines=[]
+    battle=state.get('battle') or {};task=battle.get('task') or {}
+    if layers['state'] and task:
+        lines+=['当前条件',task.get('trigger','')[:64],task.get('conditions','')[:180]]
+    groups['state']=lines;lines=[]
+    if layers['decision']:
+        rows=recent_rows(data,'decision')[-4:]
+        if rows:lines+=['决策']+[row['trigger'][:40]+' → '+row['operation'][:70]+' ['+row['status'][:20]+']' for row in rows]
+    groups['decision']=lines;lines=[]
+    if layers['timeline']:
+        rows=recent_rows(data,'timeline')[-4:]
+        if rows:lines+=['时间线']+[row['title'][:64]+(' · '+row['detail'][:60] if row['detail'] else '') for row in rows]
+    groups['timeline']=lines;lines=[]
+    if layers['perf']:
+        metrics={row['metric']:row for row in recent_rows(data,'perf') if preferences['metrics'].get(row['metric'],True)}
+        if metrics:lines+=['性能']+[key+f"  {metrics[key]['value']:.2f} {metrics[key]['unit']}" for key in sorted(metrics,key=lambda key:(key not in METRICS,METRICS.index(key) if key in METRICS else key))[:10]]
+    groups['perf']=lines
+    return groups
 
 
 class TraceOverlay:
@@ -97,24 +120,7 @@ class TraceOverlay:
                 color=COLORS.get(row['source'],'#eee')
                 self.canvas.create_rectangle(*box,outline=color,width=2)
                 self.canvas.create_text(box[0]+3,max(8,box[1]-3),text=row['label'][:60],fill=color,font=font,anchor='sw')
-        groups={}
-        lines=[]
-        battle=self.state.get('battle') or {};task=battle.get('task') or {}
-        if self.layers['state'] and task:
-            lines+=['当前条件',task.get('trigger','')[:64],task.get('conditions','')[:180]]
-        groups['state']=lines;lines=[]
-        if self.layers['decision']:
-            rows=recent_rows(data,'decision')[-4:]
-            if rows:lines+=['决策']+[row['trigger'][:40]+' → '+row['operation'][:70]+' ['+row['status'][:20]+']' for row in rows]
-        groups['decision']=lines;lines=[]
-        if self.layers['timeline']:
-            rows=recent_rows(data,'timeline')[-4:]
-            if rows:lines+=['时间线']+[row['title'][:64]+(' · '+row['detail'][:60] if row['detail'] else '') for row in rows]
-        groups['timeline']=lines;lines=[]
-        if self.layers['perf']:
-            metrics={row['metric']:row for row in recent_rows(data,'perf') if self.preferences['metrics'].get(row['metric'],True)}
-            if metrics:lines+=['性能']+[key+f"  {metrics[key]['value']:.2f} {metrics[key]['unit']}" for key in sorted(metrics,key=lambda key:(key not in METRICS,METRICS.index(key) if key in METRICS else key))[:10]]
-        groups['perf']=lines
+        groups=overlay_groups(data,self.state,self.layers,self.preferences);lines=[]
         if self.preferences['separate_panels']:
             for key,lines in groups.items():
                 if not lines:continue
@@ -145,6 +151,8 @@ class TraceOverlay:
 
 class TraceWindow:
     def __init__(self,parent,scale,subscribe,*,presentation=None,preferences_path=None):
+        self.capture_root=getattr(getattr(getattr(subscribe,'__self__',None),'paths',None),'data',None)
+        self.capture_pending=False;self.capture_message='';self.capture_options=None;self.captured=set();self.hotkey_token=None
         self.scale=scale;self.advanced=None;self.preference_store=TracePreferences(preferences_path)
         try:self.preferences=self.preference_store.load();self.preference_error=None
         except (OSError,ValueError) as exc:self.preferences=deepcopy(DEFAULTS);self.preference_error=str(exc)
@@ -196,11 +204,14 @@ class TraceWindow:
             ttk.Label(appearance,text=label).pack(side='left',padx=(0,d(8)))
             entry=ttk.Spinbox(appearance,textvariable=var,from_=low,to=high,width=5,command=self.overlay_options);entry.pack(side='left',padx=(0,d(16)))
             entry.bind('<FocusOut>',lambda _:self.overlay_options());entry.bind('<Return>',lambda _:self.overlay_options())
+        ttk.Button(appearance,text='带覆盖截图',command=self.request_capture).pack(side='left')
         ttk.Button(footer,text='关闭',command=self.close).grid(row=1,column=1,sticky='e',pady=(d(10),0))
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.window.bind('<Escape>',lambda _:self.close())
         self.window.bind('<Destroy>',lambda event:self.close() if event.widget is self.window else None,add='+')
         self.overlay.warning=self.error
         self.overlay.preferences=deepcopy(self.preferences)
+        self.hotkeys=HotkeyPoller(user32.GetAsyncKeyState);self.hotkeys.configure(self.preferences['hotkeys'])
+        self.poll_hotkeys()
         self.configure()
         if self.preference_error:self.status.set('覆盖设置读取失败：'+self.preference_error)
 
@@ -208,20 +219,66 @@ class TraceWindow:
         from .onedragon_trace_settings_ui import TraceSettingsWindow
         if self.advanced is not None and not self.advanced.closed:
             self.advanced.window.lift();return
-        self.advanced=TraceSettingsWindow(self.window,self.scale,self.preferences,self.save_preferences)
+        self.advanced=TraceSettingsWindow(self.window,self.scale,self.preferences,self.save_preferences,groups=overlay_groups(self.snapshot or {},self.state,self.overlay.layers,self.preferences))
 
     def save_preferences(self,value):
         self.preference_store.save(value);self.preferences=deepcopy(value);self.overlay.preferences=deepcopy(value)
+        self.hotkeys.configure(value['hotkeys'])
         self.status.set('覆盖设置已保存。')
+
+    def poll_hotkeys(self):
+        if self.closed:return
+        identity=(self.overlay.snapshot or {}).get('window_identity') or {};active=False
+        if identity and -1<=time.time()-(self.overlay.snapshot or {}).get('created',0)<.8:
+            pid=W.DWORD();user32.GetWindowThreadProcessId(identity['hwnd'],C.byref(pid))
+            active=pid.value==identity['pid'] and user32.GetForegroundWindow()==identity['hwnd']
+        for action in self.hotkeys.poll(active):
+            if action=='toggle':self.cover.set(not self.cover.get());self.overlay_options()
+            elif action=='capture':self.request_capture()
+        self.hotkey_token=self.window.after(50,self.poll_hotkeys)
+
+    def request_capture(self):
+        if self.closed or self.capture_pending:return
+        if self.capture_root is None:self.status.set('当前会话不提供截图目录。');return
+        self.capture_pending=True;self.collect.set(True)
+        self.capture_options=dict(layers={key:var.get() for key,var in self.layers.items()},sources={key:var.get() for key,var in self.sources.items()},
+                                  preferences=deepcopy(self.preferences),font_size=self.overlay.font_size,opacity=self.overlay.opacity,
+                                  scale=self.scale,tk_scaling=float(self.window.tk.call('tk','scaling')))
+        self.version=self.subscribe(True,False,capture=True)
+        self.capture_message='等待游戏前台的新画面，30 秒内截图。';self.status.set(self.capture_message)
+
+    def receive_capture(self,snapshot):
+        value=snapshot['capture'];key=(value.get('path'),value.get('sha256'))
+        if not self.capture_pending or key in self.captured:return
+        self.capture_pending=False
+        try:
+            from io import BytesIO
+            from .trace_capture import read_capture,compose_overlay,atomic_bytes
+            if value['epoch']!=snapshot['epoch'] or value['generation']!=snapshot['generation']:raise ValueError('截图观察已过期。')
+            captured_snapshot=snapshot.get('capture_snapshot') or snapshot
+            if captured_snapshot['epoch']!=value['epoch'] or captured_snapshot['generation']!=value['generation']:raise ValueError('截图追踪观察不匹配。')
+            current_epoch=self.state.get('control',{}).get('observation_epoch')
+            if current_epoch is not None and current_epoch!=value['epoch']:raise ValueError('截图观察已过期。')
+            image,path=read_capture(self.capture_root,value)
+            state={'battle':captured_snapshot.get('capture_battle',{})} if not value.get('paused') else {}
+            result=compose_overlay(image,captured_snapshot,state,**self.capture_options)
+            stream=BytesIO();result.save(stream,format='PNG');target=path.with_name(path.stem+'_overlay.png')
+            atomic_bytes(target,stream.getvalue());self.captured.add(key)
+            self.capture_message='截图已保存：'+str(target);self.status.set(self.capture_message)
+        except (OSError,ValueError,KeyError) as exc:self.capture_message='截图保存失败：'+str(exc);self.status.set(self.capture_message)
 
     def configure(self,clear=False):
         if self.closed:return
+        self.capture_pending=False;self.capture_message=''
         self.version=self.subscribe(bool(self.collect.get()),clear)
         self.snapshot=self.displayed=None;self.frozen.set(False);self.overlay.update(None);self.overlay.hide();self.refresh()
 
     def update(self,snapshot,version=None):
         if self.closed or version is not None and version!=self.version:return
-        if snapshot is None:self.displayed=None;self.frozen.set(False);self.overlay.hide()
+        if snapshot is None:
+            self.displayed=None;self.frozen.set(False);self.overlay.hide()
+            self.capture_pending=False;self.capture_message=''
+        if snapshot and 'capture' in snapshot:self.receive_capture(snapshot)
         self.snapshot=snapshot;self.overlay.update(snapshot)
         if not self.frozen.get():self.displayed=snapshot
         self.refresh()
@@ -229,6 +286,7 @@ class TraceWindow:
     def update_state(self,state):self.state=state or {};self.overlay.update_state(self.state)
 
     def error(self,message):
+        self.capture_pending=False
         self.overlay.update(None);self.overlay.hide();self.status.set('追踪读取失败：'+message[:180])
 
     def overlay_options(self):
@@ -271,6 +329,7 @@ class TraceWindow:
         if valid_appearance:
             message=('列表已冻结 · ' if self.frozen.get() else '采集中 · ' if data.get('enabled') else '采集已关闭 · ')+ ' / '.join(counts)
             if self.cover.get() and self.overlay.last_error:message+=' · 覆盖显示失败：'+self.overlay.last_error[:100]
+            if self.capture_message:message+=' · '+self.capture_message
             self.status.set(message)
 
     def detail(self,kind):
@@ -286,6 +345,8 @@ class TraceWindow:
 
     def close(self):
         if self.closed:return
-        self.closed=True;self.subscribe(False,False);self.overlay.close()
+        self.closed=True;self.hotkeys.close()
+        if self.hotkey_token is not None:self.window.after_cancel(self.hotkey_token);self.hotkey_token=None
+        self.capture_pending=False;self.subscribe(False,False);self.overlay.close()
         try:self.window.destroy()
         except tk.TclError:pass

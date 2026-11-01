@@ -36,7 +36,7 @@ class RuntimeSession:
             if command=="start" or command=="prepare" and not self.phase:self.stop_requested.clear()
             self.commands.put((command,params))
 
-    def trace(self,enabled,clear=False):return self.trace_subscription.configure(enabled,clear)
+    def trace(self,enabled,clear=False,*,capture=False):return self.trace_subscription.configure(enabled,clear,capture=capture)
     def take_trace(self):return self.trace_subscription.take()
 
     def stop(self):

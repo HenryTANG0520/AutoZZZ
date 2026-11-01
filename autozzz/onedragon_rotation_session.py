@@ -49,7 +49,7 @@ class RotationSession:
     def pause(self,paused):
         with self.lock:self.manual=bool(paused);self.version+=1
 
-    def trace(self,enabled,clear=False):return self.trace_subscription.configure(enabled,clear)
+    def trace(self,enabled,clear=False,*,capture=False):return self.trace_subscription.configure(enabled,clear,capture=capture)
     def take_trace(self):return self.trace_subscription.take()
 
     def stop(self):

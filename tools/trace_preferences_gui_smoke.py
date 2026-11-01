@@ -30,7 +30,7 @@ def main():
         for scale in (1.,1.5,2.):
             root=tk.Tk();root.withdraw();root.tk.call('tk','scaling',scale*96/72)
             errors=[];root.report_callback_exception=lambda *error:errors.append(str(error))
-            native=NativePresentation(protect_capture=False);native.prepare(root)
+            native=NativePresentation(protect_capture=False);native.prepare(root);root.deiconify()
             path=Path(folder)/str(scale)/'settings.json'
             try:
                 with patch('tkinter.Toplevel',hidden):view=TraceWindow(root,scale,lambda *_:1,presentation=native,preferences_path=path)

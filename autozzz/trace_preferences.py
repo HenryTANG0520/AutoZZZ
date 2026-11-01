@@ -14,6 +14,7 @@ METRICS = ('ocr_ms', 'yolo_ms', 'cv_pipeline_ms', 'operation_round_ms', 'overlay
 DEFAULTS = {
     'version': 1, 'offset_x': 0, 'offset_y': 0, 'scale_x': 1., 'scale_y': 1.,
     'separate_panels': False,
+    'hotkeys': {'toggle': 'Ctrl+Shift+F7', 'capture': 'Ctrl+Shift+F8'},
     'metrics': {key: True for key in METRICS},
     'panels': {key: {'x': 1500, 'y': 40 + index * 225, 'w': 400, 'h': 210,
                      'font_size': 11} for index, key in enumerate(PANELS)},
@@ -21,8 +22,12 @@ DEFAULTS = {
 
 
 def validate(value):
+    if isinstance(value,dict) and set(value)==set(DEFAULTS)-{'hotkeys'}:value=dict(value,hotkeys=deepcopy(DEFAULTS['hotkeys']))
     if not isinstance(value, dict) or set(value) != set(DEFAULTS) or type(value.get('version')) is not int or value.get('version') != 1:
         raise ValueError('覆盖设置格式或版本无效。')
+    from .trace_hotkeys import HotkeyPoller
+    if not isinstance(value['hotkeys'],dict) or set(value['hotkeys'])!={'toggle','capture'}:raise ValueError('快捷键字段无效。')
+    HotkeyPoller(lambda _:0).configure(value['hotkeys'])
     result = deepcopy(value)
     def number(item, low, high, integer=False):
         if type(item) not in ((int,) if integer else (int, float)) or not low <= item <= high or not math.isfinite(item):
