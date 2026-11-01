@@ -670,7 +670,9 @@ class AutoZZZWindow:
         plugin_alive=plugins is not None and plugins.worker.is_alive()
         program_updates=getattr(self,'program_updates_window',None)
         updates_alive=program_updates is not None and program_updates.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive:
+        schedules=getattr(self,'schedules_window',None)
+        schedules_alive=schedules is not None and schedules.worker is not None and schedules.worker.is_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive and not schedules_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
@@ -678,6 +680,8 @@ class AutoZZZWindow:
     def _close(self) -> None:
         if self.closing:
             return
+        schedules=getattr(self,'schedules_window',None)
+        if schedules is not None and not schedules.closed and not schedules.confirm_close():return
         if not self.busy and self.dirty:
             choice = messagebox.askyesnocancel("保存修改", "配置有未保存修改，关闭前保存吗？", parent=self.root)
             if choice is None or (choice and self._read_settings(save=True, operation="save") is None):
@@ -700,6 +704,8 @@ class AutoZZZWindow:
         if plugins is not None and not plugins.closed:plugins.close()
         program_updates=getattr(self,'program_updates_window',None)
         if program_updates is not None and not program_updates.closed:program_updates.close()
+        schedules=getattr(self,'schedules_window',None)
+        if schedules is not None and not schedules.closed:schedules.close(confirmed=True)
         if applications is not None:
             applications.close(discard=True)
         execution=getattr(self,"execution_window",None)
@@ -712,7 +718,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()) and (schedules is None or schedules.worker is None or not schedules.worker.is_alive()):
             self._destroy_root()
 
     def _destroy_root(self):

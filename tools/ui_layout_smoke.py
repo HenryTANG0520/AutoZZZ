@@ -80,7 +80,7 @@ def main():
                             ui.combat_panel.tabs.select(0)
                             root.update();check_layout(root)
                         if name == "settings":
-                            for section in ("run", "recognition",'updates'):
+                            for section in ("run", "recognition",'schedules','updates'):
                                 ui.show_settings_section(section)
                                 root.update()
                                 check_layout(root)
@@ -94,7 +94,7 @@ def main():
                     root.after_cancel(token)
                 root.destroy()
     print(json.dumps(dict(game_started=False, config_unchanged=True, layout_cases=len(cases),
-                          dpi=[100, 150, 200], pages=len(ui.pages), settings_sections=4), ensure_ascii=False))
+                          dpi=[100, 150, 200], pages=len(ui.pages), settings_sections=5), ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 from .run_lock import profile_lock
 from .schedules import Schedule,ScheduleStore,identifier,revision
-from .windows_schedules import WindowsSchedules,NAMESPACE
+from .windows_schedules import WindowsSchedules,NAMESPACE,definition_matches
 
 
 def launcher(root: Path) -> tuple[Path,list[str]]:
@@ -40,7 +40,8 @@ class ScheduleManager:
                 and value('Actions/Exec/Command').casefold()==str(self.command).casefold()
                 and value('Actions/Exec/WorkingDirectory').casefold()==str(self.store.root).casefold()
                 and value('RegistrationInfo/Source')=='AutoZZZ/'+self.store.owner
-                and type(system.get('enabled'))is bool and system['enabled']==plan.enabled)
+                and type(system.get('enabled'))is bool and system['enabled']==plan.enabled
+                and definition_matches(plan,tree))
         except (ValueError,AttributeError,ET.ParseError):return False
 
     def catalog(self) -> dict:

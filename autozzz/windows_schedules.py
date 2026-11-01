@@ -1,7 +1,7 @@
 """Windows 计划任务适配；JSON 数据与固定 PowerShell 脚本分开传递。"""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date,datetime
 import json
 import os
 from pathlib import Path
@@ -14,6 +14,74 @@ from .schedules import Schedule,identifier
 
 NAMESPACE='http://schemas.microsoft.com/windows/2004/02/mit/task'
 DAYS=('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday')
+
+
+def account_sid(account: str) -> str:
+    if account.startswith('S-1-'):return account
+    import ctypes as C
+    from ctypes import wintypes as W
+    api=C.WinDLL('advapi32',use_last_error=True);kernel=C.WinDLL('kernel32',use_last_error=True)
+    api.LookupAccountNameW.argtypes=[W.LPCWSTR,W.LPCWSTR,W.LPVOID,C.POINTER(W.DWORD),W.LPWSTR,C.POINTER(W.DWORD),C.POINTER(W.DWORD)]
+    api.ConvertSidToStringSidW.argtypes=[W.LPVOID,C.POINTER(W.LPWSTR)]
+    kernel.LocalFree.argtypes=[W.HLOCAL];kernel.LocalFree.restype=W.HLOCAL
+    size=W.DWORD();domain_size=W.DWORD();kind=W.DWORD()
+    api.LookupAccountNameW(None,account,None,C.byref(size),None,C.byref(domain_size),C.byref(kind))
+    if not size.value or size.value>65536 or domain_size.value>65536:raise ValueError('无法核实计划触发账号。')
+    sid=C.create_string_buffer(size.value);domain=C.create_unicode_buffer(domain_size.value)
+    if not api.LookupAccountNameW(None,account,sid,C.byref(size),domain,C.byref(domain_size),C.byref(kind)):raise ValueError('无法核实计划触发账号。')
+    result=W.LPWSTR()
+    if not api.ConvertSidToStringSidW(sid,C.byref(result)):raise ValueError('无法核实计划触发账号。')
+    try:return result.value
+    finally:kernel.LocalFree(C.cast(result,W.HLOCAL))
+
+
+def definition_matches(plan: Schedule,tree: ET.Element) -> bool:
+    """Compare execution semantics, allowing Windows to omit schema defaults."""
+    ns={'t':NAMESPACE}
+    def node(path):return tree.find('/'.join('t:'+part for part in path.split('/')),ns)
+    def value(path,default=''):
+        element=node(path)
+        return default if element is None else (element.text or '').strip()
+    def tags(element):return {child.tag.removeprefix('{'+NAMESPACE+'}') for child in element}
+    triggers=node('Triggers');actions=node('Actions');principals=node('Principals')
+    if triggers is None or len(triggers)!=1 or actions is None or len(actions)!=1 or principals is None or len(principals)!=1:return False
+    if value('Principals/Principal/LogonType')!='InteractiveToken':return False
+    if value('Principals/Principal/RunLevel','LeastPrivilege')!=('HighestAvailable' if plan.highest else 'LeastPrivilege'):return False
+    defaults=dict(MultipleInstancesPolicy='IgnoreNew',DisallowStartIfOnBatteries='true',StopIfGoingOnBatteries='true',
+        AllowHardTerminate='true',StartWhenAvailable='false',RunOnlyIfNetworkAvailable='false',AllowStartOnDemand='true',
+        Hidden='false',WakeToRun='false',ExecutionTimeLimit='PT72H',RunOnlyIfIdle='false')
+    expected=dict(defaults,DisallowStartIfOnBatteries='false',StopIfGoingOnBatteries='false',AllowHardTerminate='false',
+        StartWhenAvailable=str(plan.missed).lower(),WakeToRun=str(plan.wake).lower(),ExecutionTimeLimit='PT0S')
+    if any(value('Settings/'+key,defaults[key])!=wanted for key,wanted in expected.items()):return False
+    if node('Settings/RestartOnFailure') is not None:return False
+    if value('Settings/IdleSettings/StopOnIdleEnd','true')!='false' or value('Settings/IdleSettings/RestartOnIdle','false')!='false':return False
+    trigger=triggers[0];kind=trigger.tag.removeprefix('{'+NAMESPACE+'}')
+    wanted={'once':'TimeTrigger','daily':'CalendarTrigger','weekly':'CalendarTrigger','logon':'LogonTrigger'}[plan.trigger]
+    if kind!=wanted:return False
+    base='Triggers/'+kind
+    if value(base+'/Enabled','true')!='true':return False
+    allowed={'Enabled','UserId'} if plan.trigger=='logon' else {'Enabled','StartBoundary'}
+    if plan.trigger=='daily':allowed.add('ScheduleByDay')
+    elif plan.trigger=='weekly':allowed.add('ScheduleByWeek')
+    if tags(trigger)-allowed:return False
+    if plan.trigger=='logon':
+        user=value(base+'/UserId');principal=value('Principals/Principal/UserId')
+        if not user or not principal:return False
+        if user==principal:return True
+        try:return account_sid(user)==account_sid(principal)
+        except (OSError,ValueError,AttributeError):return False
+    try:boundary=datetime.fromisoformat(value(base+'/StartBoundary'))
+    except ValueError:return False
+    if boundary.tzinfo is not None or boundary.strftime('%H:%M:%S.%f')!=plan.time+':00.000000':return False
+    if plan.trigger=='once':return boundary.date().isoformat()==plan.date
+    # Recurring registrations retain the original start date across subsequent days.
+    if boundary.date()>date.today():return False
+    if plan.trigger=='daily':
+        day=node(base+'/ScheduleByDay')
+        return day is not None and tags(day)=={'DaysInterval'} and value(base+'/ScheduleByDay/DaysInterval')=='1'
+    week=node(base+'/ScheduleByWeek');days=node(base+'/ScheduleByWeek/DaysOfWeek')
+    return (week is not None and tags(week)=={'WeeksInterval','DaysOfWeek'} and value(base+'/ScheduleByWeek/WeeksInterval')=='1'
+        and days is not None and len(days)==len(plan.weekdays) and tags(days)=={DAYS[index] for index in plan.weekdays})
 
 
 def task_xml(plan: Schedule,owner: str,command: Path,arguments: list[str],working: Path) -> str:

@@ -10,11 +10,12 @@ from tkinter import ttk,filedialog
 from . import theme
 from .overlay import NativePresentation
 from .windows import user32,W,C
+from .trace_preferences import DEFAULTS, METRICS, TracePreferences, calibrated_box, panel_bounds
+from copy import deepcopy
 
 
 LABELS={'vision':'识别','decision':'决策','timeline':'时间线','perf':'性能'}
 COLORS={'ocr':'#8edc7d','template':'#72c6ff','yolo':'#ffbe66','cv':'#e7a5ef'}
-METRICS=('ocr_ms','yolo_ms','cv_pipeline_ms','operation_round_ms','overlay_refresh_ms')
 
 
 def recent_rows(snapshot,kind,now=None):
@@ -50,6 +51,7 @@ class TraceOverlay:
         self.window.update_idletasks();self.handle=self.presentation.prepare(self.window)
         self.enabled=self.visible=self.closed=False;self.snapshot=None;self.state={};self.sources={key:True for key in COLORS}
         self.layers={key:True for key in ('vision','decision','timeline','perf','state')};self.font_size=11;self.opacity=85
+        self.panel_widgets={};self.preferences=deepcopy(DEFAULTS)
         self.warning=lambda message:None;self.last_error=''
         self.token=self.root.after(80,self.tick)
 
@@ -91,24 +93,42 @@ class TraceOverlay:
         font=(theme.FONT,self.font_size)
         if self.layers['vision']:
             for row in vision_rows(data,self.sources):
-                box=(max(0,min(width,row['x1']*sx)),max(0,min(height,row['y1']*sy)),max(0,min(width,row['x2']*sx)),max(0,min(height,row['y2']*sy)))
+                box=calibrated_box(row,standard,(width,height),self.preferences)
                 color=COLORS.get(row['source'],'#eee')
                 self.canvas.create_rectangle(*box,outline=color,width=2)
                 self.canvas.create_text(box[0]+3,max(8,box[1]-3),text=row['label'][:60],fill=color,font=font,anchor='sw')
+        groups={}
         lines=[]
         battle=self.state.get('battle') or {};task=battle.get('task') or {}
         if self.layers['state'] and task:
             lines+=['当前条件',task.get('trigger','')[:64],task.get('conditions','')[:180]]
+        groups['state']=lines;lines=[]
         if self.layers['decision']:
             rows=recent_rows(data,'decision')[-4:]
             if rows:lines+=['决策']+[row['trigger'][:40]+' → '+row['operation'][:70]+' ['+row['status'][:20]+']' for row in rows]
+        groups['decision']=lines;lines=[]
         if self.layers['timeline']:
             rows=recent_rows(data,'timeline')[-4:]
             if rows:lines+=['时间线']+[row['title'][:64]+(' · '+row['detail'][:60] if row['detail'] else '') for row in rows]
+        groups['timeline']=lines;lines=[]
         if self.layers['perf']:
-            metrics={row['metric']:row for row in recent_rows(data,'perf')}
+            metrics={row['metric']:row for row in recent_rows(data,'perf') if self.preferences['metrics'].get(row['metric'],True)}
             if metrics:lines+=['性能']+[key+f"  {metrics[key]['value']:.2f} {metrics[key]['unit']}" for key in sorted(metrics,key=lambda key:(key not in METRICS,METRICS.index(key) if key in METRICS else key))[:10]]
-        if lines:
+        groups['perf']=lines
+        if self.preferences['separate_panels']:
+            for key,lines in groups.items():
+                if not lines:continue
+                panel=self.preferences['panels'][key];x,y,w,h=panel_bounds(panel,(width,height))
+                # Clip in an independent canvas: a long condition cannot obscure other panels.
+                frame=self.panel_widgets.get(key)
+                if frame is None:
+                    frame=tk.Canvas(self.canvas,background='#101820',highlightthickness=1,highlightbackground='#555');self.panel_widgets[key]=frame
+                frame.delete('all')
+                frame.create_text(8,6,text='\n'.join(lines),anchor='nw',width=max(1,w-16),font=(theme.FONT,panel['font_size']),fill=theme.TEXT)
+                self.canvas.create_window(x,y,window=frame,anchor='nw',width=w,height=h)
+        else:
+            lines=[line for group in groups.values() for line in group]
+        if lines and not self.preferences['separate_panels']:
             x=max(12,width-min(round(400*self.scale),round(width*.35)));y=round(40*self.scale)
             text=self.canvas.create_text(x+12,y+8,text='\n'.join(lines),anchor='nw',width=max(100,width-x-28),font=font,fill=theme.TEXT)
             box=self.canvas.bbox(text);background=self.canvas.create_rectangle(x,y,width-12,min(height-12,box[3]+10),fill='#101820',outline='#555')
@@ -124,7 +144,10 @@ class TraceOverlay:
 
 
 class TraceWindow:
-    def __init__(self,parent,scale,subscribe,*,presentation=None):
+    def __init__(self,parent,scale,subscribe,*,presentation=None,preferences_path=None):
+        self.scale=scale;self.advanced=None;self.preference_store=TracePreferences(preferences_path)
+        try:self.preferences=self.preference_store.load();self.preference_error=None
+        except (OSError,ValueError) as exc:self.preferences=deepcopy(DEFAULTS);self.preference_error=str(exc)
         self.subscribe=subscribe;self.closed=False;self.version=0;self.snapshot=None;self.state={};self.displayed=None
         self.window=tk.Toplevel(parent);self.window.title('AutoZZZ · 调试追踪');self.window.transient(parent)
         d=lambda n:round(n*scale);width,height=min(d(980),parent.winfo_screenwidth()-d(50)),min(d(740),parent.winfo_screenheight()-d(90))
@@ -136,6 +159,7 @@ class TraceWindow:
         ttk.Checkbutton(bar,text='冻结列表',variable=self.frozen,command=self.refresh).pack(side='left',padx=(0,d(14)))
         self.overlay=TraceOverlay(self.window,scale,presentation=presentation)
         ttk.Checkbutton(bar,text='游戏覆盖',variable=self.cover,command=self.overlay_options).pack(side='left',padx=(0,d(14)))
+        ttk.Button(bar,text='覆盖设置…',command=self.open_advanced).pack(side='left',padx=(0,d(8)))
         ttk.Button(bar,text='清空',command=lambda:self.configure(clear=True)).pack(side='left')
         ttk.Button(bar,text='导出 JSON…',command=self.export).pack(side='right')
         filters=ttk.Frame(self.window,padding=(d(14),0,d(14),d(12)));filters.grid(row=1,column=0,sticky='ew');filters.columnconfigure(1,weight=1)
@@ -176,7 +200,19 @@ class TraceWindow:
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.window.bind('<Escape>',lambda _:self.close())
         self.window.bind('<Destroy>',lambda event:self.close() if event.widget is self.window else None,add='+')
         self.overlay.warning=self.error
+        self.overlay.preferences=deepcopy(self.preferences)
         self.configure()
+        if self.preference_error:self.status.set('覆盖设置读取失败：'+self.preference_error)
+
+    def open_advanced(self):
+        from .onedragon_trace_settings_ui import TraceSettingsWindow
+        if self.advanced is not None and not self.advanced.closed:
+            self.advanced.window.lift();return
+        self.advanced=TraceSettingsWindow(self.window,self.scale,self.preferences,self.save_preferences)
+
+    def save_preferences(self,value):
+        self.preference_store.save(value);self.preferences=deepcopy(value);self.overlay.preferences=deepcopy(value)
+        self.status.set('覆盖设置已保存。')
 
     def configure(self,clear=False):
         if self.closed:return

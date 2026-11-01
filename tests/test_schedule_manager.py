@@ -91,5 +91,47 @@ class ScheduleManagerTests(unittest.TestCase):
         self.assertTrue(self.manager.matches(replace(self.plan,enabled=True),row))
         row['enabled']=False;self.assertFalse(self.manager.matches(replace(self.plan,enabled=True),row))
 
+    def test_external_trigger_or_execution_changes_are_conflicts_and_cannot_run(self):
+        plan=replace(self.plan,enabled=True);result=self.save(plan)
+        row=self.backend.rows[plan.id];original=row['xml']
+        mutations=(('Triggers/CalendarTrigger/StartBoundary','2099-01-01T09:00:00'),
+            ('Triggers/CalendarTrigger/StartBoundary','2020-01-01T10:00:00'),
+            ('Triggers/CalendarTrigger/StartBoundary','2020-01-01T09:00:00+08:00'),
+            ('Triggers/CalendarTrigger/ScheduleByDay/DaysInterval','2'),
+            ('Settings/WakeToRun','true'),('Settings/StartWhenAvailable','true'),
+            ('Settings/AllowHardTerminate','true'),('Settings/MultipleInstancesPolicy','Parallel'),
+            ('Settings/ExecutionTimeLimit','PT1H'),('Principals/Principal/RunLevel','LeastPrivilege'),
+            ('Principals/Principal/LogonType','Password'))
+        for path,value in mutations:
+            with self.subTest(path=path,value=value):
+                tree=ET.fromstring(original);element=tree.find('/'.join('{'+NAMESPACE+'}'+part for part in path.split('/')))
+                element.text=value;row['xml']=ET.tostring(tree,encoding='unicode')
+                self.assertFalse(self.manager.catalog()['plans'][0]['bound'])
+                with self.assertRaises(ValueError):self.manager.run(plan.id,result['revision'])
+        self.assertNotIn('run',[call[0] for call in self.backend.calls])
+
+    def test_weekday_change_extra_trigger_and_repeat_are_not_bound(self):
+        for kind in ('once','daily','weekly','logon'):
+            plan=replace(self.plan,trigger=kind,date='2099-01-02',weekdays=[0,2])
+            self.save(plan);row=self.backend.rows[plan.id];original=row['xml']
+            tree=ET.fromstring(original);triggers=tree.find('{'+NAMESPACE+'}Triggers')
+            triggers.append(ET.fromstring(ET.tostring(triggers[0])))
+            row['xml']=ET.tostring(tree,encoding='unicode');self.assertFalse(self.manager.matches(plan,row))
+            tree=ET.fromstring(original);trigger=tree.find('{'+NAMESPACE+'}Triggers')[0]
+            ET.SubElement(trigger,'{'+NAMESPACE+'}Repetition')
+            row['xml']=ET.tostring(tree,encoding='unicode');self.assertFalse(self.manager.matches(plan,row))
+            if kind=='weekly':
+                row['xml']=original.replace('Wednesday','Thursday');self.assertFalse(self.manager.matches(plan,row))
+
+    def test_past_registration_date_and_omitted_windows_defaults_still_match(self):
+        plan=replace(self.plan,enabled=True);self.save(plan);row=self.backend.rows[plan.id]
+        tree=ET.fromstring(row['xml']);base='{'+NAMESPACE+'}'
+        tree.find(base+'Triggers')[0].find(base+'StartBoundary').text='2020-01-01T09:00:00'
+        trigger=tree.find(base+'Triggers')[0];trigger.remove(trigger.find(base+'Enabled'))
+        settings=tree.find(base+'Settings')
+        for key in ('Enabled','StartWhenAvailable','WakeToRun','Hidden','AllowStartOnDemand','RunOnlyIfNetworkAvailable'):
+            settings.remove(settings.find(base+key))
+        row['xml']=ET.tostring(tree,encoding='unicode');self.assertTrue(self.manager.matches(plan,row))
+
 
 if __name__=='__main__':unittest.main()
