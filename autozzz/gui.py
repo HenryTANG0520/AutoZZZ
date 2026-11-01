@@ -76,6 +76,8 @@ class AutoZZZWindow:
         self.readiness = tk.StringVar(root, "游戏窗口与输入条件：尚未检测")
         self.history_context = tk.StringVar(root, "暂无历史运行记录")
         self.setting_controls: list[ttk.Widget] = []
+        from .program_update_check_ui import StartupUpdates
+        self.startup_updates=StartupUpdates(self,background_helpers)
         self._build()
         from .battle_ui import BattlePanel
         self.combat_panel = BattlePanel(self)
@@ -670,9 +672,11 @@ class AutoZZZWindow:
         plugin_alive=plugins is not None and plugins.worker.is_alive()
         program_updates=getattr(self,'program_updates_window',None)
         updates_alive=program_updates is not None and program_updates.worker.is_alive()
+        self.startup_updates.poll()
+        startup_update_alive=self.startup_updates.worker_alive
         schedules=getattr(self,'schedules_window',None)
         schedules_alive=schedules is not None and schedules.worker is not None and schedules.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive and not schedules_alive:
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive and not schedules_alive and not startup_update_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
@@ -711,6 +715,7 @@ class AutoZZZWindow:
         execution=getattr(self,"execution_window",None)
         if execution is not None and not execution.closed:execution.close()
         self.closing = True
+        self.startup_updates.close()
         if self.pip_controller is not None:self.pip_controller.close()
         if getattr(self, "overlay", None):
             self.overlay.close()
@@ -718,7 +723,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()) and (schedules is None or schedules.worker is None or not schedules.worker.is_alive()):
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()) and (schedules is None or schedules.worker is None or not schedules.worker.is_alive()) and not self.startup_updates.worker_alive:
             self._destroy_root()
 
     def _destroy_root(self):

@@ -101,6 +101,7 @@ class ProgramUpdates:
         if channel not in ('stable','beta') or type(page)is not int or page<1:raise ValueError('更新通道或页码无效。')
         def operation():
             import requests
+            if self.cancelled.is_set():raise InterruptedError('已取消版本检查。')
             env=self._network();proxy=env.personal_proxy if env.is_personal_proxy else None
             address=f'https://api.github.com/repos/{REPOSITORY}/releases'
             if env.is_gh_proxy:address=env.gh_proxy_url.rstrip('/')+'/'+address
@@ -112,6 +113,7 @@ class ProgramUpdates:
                     raw.extend(chunk)
                     if len(raw)>4*1024**2:raise ValueError('版本清单超过 4 MB。')
             items=json.loads(raw);rows=release_rows(items,channel)
+            if self.cancelled.is_set():raise InterruptedError('已取消版本检查。')
             revision=hashlib.sha256(json.dumps(dict(rows=rows,channel=channel,page=page),sort_keys=True).encode()).hexdigest()
             with self.lock:
                 self.releases=rows;self.revision=revision;self.channel=channel;self.page=page;self.has_more=len(items)==30

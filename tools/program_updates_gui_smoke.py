@@ -17,6 +17,7 @@ from autozzz import windows
 from autozzz.config import Settings
 from autozzz.gui import AutoZZZWindow
 from autozzz.program_updates_ui import open_program_updates
+from autozzz.program_update_preferences import UpdatePreferencesStore
 from onedragon_configuration_gui_smoke import pump,layout
 
 CATALOG=dict(installed=True,current='dev-fixture',revision='r1',channel='stable',page=1,has_more=True,releases=[dict(id='7',version='v1.2.3',published='2026-10-30T10:00:00Z',bytes=200000000)],history=[dict(version='v1.1.0',path='fixture/AutoZZZ.previous-archive')])
@@ -56,7 +57,8 @@ def main():
     cases=[]
     with tempfile.TemporaryDirectory(prefix='autozzz-program-gui-') as temporary:
         path=Path(temporary)/'config.json';Settings().save(path);original=path.read_bytes()
-        with patch('autozzz.program_updates_ui.RuntimeSession',Session),patch('autozzz.gui.AutoZZZWindow._discover_report'):
+        preferences=UpdatePreferencesStore(path.parent,path.parent/'update-preferences.json')
+        with patch('autozzz.program_update_check_ui.UpdatePreferencesStore',return_value=preferences),patch('autozzz.program_updates_ui.RuntimeSession',Session),patch('autozzz.gui.AutoZZZWindow._discover_report'):
             for scale in (1.,1.5,2.):
                 root=tk.Tk();root.tk.call('tk','scaling',scale*96/72);errors=[];root.report_callback_exception=lambda kind,value,tb:errors.append(value)
                 ui=AutoZZZWindow(root,path,background_helpers=False);ui.overlay.set_enabled(False);ui._show_page('settings');ui.show_settings_section('updates')

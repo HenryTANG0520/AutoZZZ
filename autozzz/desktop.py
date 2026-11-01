@@ -189,6 +189,14 @@ def _settings(ui, server_names):
     updates=sections['updates'];title(updates,'程序版本')
     from .program_updates_ui import open_program_updates
     ttk.Button(updates,text='版本与归档…',command=lambda:open_program_updates(ui),style='Accent.TButton').grid(row=1,column=0,sticky='w',pady=d(10))
+    ttk.Checkbutton(updates,text='启动时检查更新',variable=ui.startup_updates.enabled,command=ui.startup_updates.save).grid(row=2,column=0,sticky='w',pady=d(8))
+    channel=ttk.Combobox(updates,textvariable=ui.startup_updates.channel,values=('稳定版','测试版'),state='readonly',width=12)
+    channel.grid(row=3,column=0,sticky='w',pady=d(8));channel.bind('<<ComboboxSelected>>',lambda _:ui.startup_updates.save())
+    t.wrapped_label(updates,textvariable=ui.startup_updates.status).grid(row=4,column=0,sticky='ew',pady=d(12))
+    controls=ttk.Frame(updates,style='Card.TFrame');controls.grid(row=5,column=0,sticky='w')
+    ui.startup_update_check=ttk.Button(controls,text='检查版本信息',command=ui.startup_updates.check);ui.startup_update_check.grid(row=0,column=0,padx=(0,d(8)))
+    ui.startup_update_cancel=ttk.Button(controls,text='取消检查',command=ui.startup_updates.cancel);ui.startup_update_cancel.grid(row=0,column=1)
+    ui.startup_updates.buttons()
     show("game")
 
 

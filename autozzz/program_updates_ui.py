@@ -28,7 +28,7 @@ class ProgramUpdatesWindow:
         self.check_button=ttk.Button(header,text='检查更新',command=self.check);self.check_button.grid(row=0,column=1,padx=d(8))
         self.import_button=ttk.Button(header,text='导入完整包…',command=self.import_package);self.import_button.grid(row=0,column=2)
         paging=ttk.Frame(header);paging.grid(row=1,column=0,columnspan=3,sticky='ew',pady=(d(12),0));paging.columnconfigure(1,weight=1)
-        self.channel=tk.StringVar(self.window,'稳定版');self.channel_box=ttk.Combobox(paging,textvariable=self.channel,values=('稳定版','测试版'),state='readonly',width=9)
+        self.channel=tk.StringVar(self.window,ui.startup_updates.channel.get());self.channel_box=ttk.Combobox(paging,textvariable=self.channel,values=('稳定版','测试版'),state='readonly',width=9)
         self.channel_box.grid(row=0,column=0,sticky='w');self.channel_box.bind('<<ComboboxSelected>>',lambda _:self.check())
         self.page_label=tk.StringVar(self.window,'第 1 页');ttk.Label(paging,textvariable=self.page_label).grid(row=0,column=2,padx=d(10))
         self.previous_button=ttk.Button(paging,text='上一页',command=lambda:self.check(self.catalog['page']-1));self.previous_button.grid(row=0,column=1,sticky='e')
@@ -73,8 +73,9 @@ class ProgramUpdatesWindow:
         self.busy=True;self.callback=callback;self.session.send('rpc',method=method,tag=method,params=params);self.buttons()
 
     def loaded(self,result):
+        first=self.catalog is None
         self.catalog=result;self.current.set('当前版本 · '+result['current'])
-        self.channel.set('测试版' if result.get('channel')=='beta' else '稳定版');self.page_label.set('第 '+str(result.get('page',1))+' 页')
+        self.channel.set(self.ui.startup_updates.channel.get() if first and not result['revision'] else '测试版' if result.get('channel')=='beta' else '稳定版');self.page_label.set('第 '+str(result.get('page',1))+' 页')
         for table in self.tables.values():table.delete(*table.get_children())
         for row in result['releases']:self.tables['release'].insert('','end',iid=row['id'],values=(row['version'],row['published'],f"{row['bytes']/1024**2:.1f} MB"))
         for index,row in enumerate(result['history']):self.tables['backup'].insert('','end',iid=str(index),values=(row['version'],row['path']))
@@ -83,6 +84,9 @@ class ProgramUpdatesWindow:
         self.buttons()
 
     def check(self,page=1):
+        if self.ui.startup_updates.channel.get()!=self.channel.get():
+            self.ui.startup_updates.channel.set(self.channel.get())
+            if not self.ui.startup_updates.save():return
         self.request('program_check',self.job_result,channel='beta' if self.channel.get()=='测试版' else 'stable',page=page)
 
     def job_result(self,result):
@@ -136,6 +140,10 @@ class ProgramUpdatesWindow:
 
 
 def open_program_updates(ui):
+    if ui.startup_updates.timer is not None:
+        ui.root.after_cancel(ui.startup_updates.timer);ui.startup_updates.timer=None
+    if ui.startup_updates.worker_alive:
+        ui.startup_updates.open_when_finished=True;ui.startup_updates.cancel();return None
     previous=getattr(ui,'program_updates_window',None)
     if previous is not None and not previous.closed:previous.window.deiconify();previous.window.lift();return previous
     ui.program_updates_window=ProgramUpdatesWindow(ui,'global' if ui.server.get()=='国际服' else 'cn')
