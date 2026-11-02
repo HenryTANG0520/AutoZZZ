@@ -58,6 +58,9 @@ class OneDragonExecution:
         from .onedragon_patrol import PatrolOrderControl
         self.patrol_control = PatrolOrderControl(ctx)
         self.patrol_control.install()
+        from .coffee_choice import CoffeeSelectionControl
+        self.coffee_control = CoffeeSelectionControl(ctx)
+        self.coffee_control.install()
         from .onedragon_resources import ResourceConfirmation
         self.resource_confirmation = ResourceConfirmation()
         self.resource_control = None
@@ -648,5 +651,6 @@ class OneDragonExecution:
         for adapter in (self.login_control,self.redemption_control,self.assistant_control,self.script_control):adapter.close()
         self.notification_control.close()
         self.patrol_control.close()
+        self.coffee_control.close()
         self.adapter.close()
         self.battle_control.close()

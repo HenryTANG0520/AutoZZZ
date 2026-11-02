@@ -41,8 +41,17 @@ class BattleInputControl:
         @wraps(execute)
         def guarded_execute(executor):
             if not owner.allowed or owner.allowed_epoch!=owner.control.epoch:
-                executor.running=False
-                return False
+                with executor._op_lock:
+                    if not executor.running:
+                        # stop() has already retired this slot.
+                        return False
+                    executor.running=False
+                # No executor.stop() owns this not-yet-started job. Upstream's
+                # _on_task_done retires its scheduling slot only for True;
+                # False leaves running_executor_cnt > 0 and freezes normal
+                # attacks after a transient HUD/observation rejection.
+                # This retires the worker, not a game battle or resource claim.
+                return True
             token = _battle_input.set(True)
             try:return execute(executor)
             finally:_battle_input.reset(token)

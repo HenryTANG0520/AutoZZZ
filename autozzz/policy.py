@@ -28,13 +28,14 @@ def guard_click(scene: Scene, target: Token | tuple[float, float]) -> None:
             raise AutomationError(f"非战斗每日禁止操作：{token.text}")
 
 
-def coffee_is_free(scene: Scene) -> bool:
+def coffee_is_free(scene: Scene, name: str = "汀曼特调") -> bool:
     """Only observed zero-cost coffee is allowed in this first implementation."""
     if scene.has(("菲林", "付费", "充值", "不免费", "非免费", "not free")):
         return False
     # The calibrated Tin Master dialogue directly redeems the daily free drink.
     options = [t for t in scene.tokens if t.within((1400/1920, 530/1080, 1915/1920, 835/1080))
-               and normalize(t.text) == normalize("来杯汀曼特调")]
+               and name in ("汀曼特调", "鲜萃红茶")
+               and normalize(t.text) == normalize("来杯" + name)]
     dialogue = (scene.has("汀曼", (800/1920, 750/1080, 1100/1920, 850/1080))
                 and scene.has(("想要喝点什么", "想喝点什么"), (500/1920, 800/1080, 1500/1920, 1040/1080))
                 and len(options) == 1)

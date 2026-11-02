@@ -613,6 +613,9 @@ class Runner:
             self.log("正在加载中文 OCR 模型。F9 暂停/继续，F10 紧急停止。")
             vision = Vision(self.settings.ocr_confidence)
             context = Context(self, self._window, vision)
+            if self.settings.coffee and not entry_only and battle_plan is None:
+                from .coffee_choice import saved_coffee
+                context.coffee_name_resolver = lambda: saved_coffee(ROOT, self.settings.server)
             workflow = DailyWorkflow(context)
             initial = self._initial_snapshot(context)
             context.evidence(initial, "start")

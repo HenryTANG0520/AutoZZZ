@@ -149,7 +149,7 @@ class DailyWorkflow:
 
     def _coffee_screen(self, scene):
         return (scene.has("点单", roi(1650, 820, 1920, 1060), exact=True)
-                and scene.has(("汀曼特调", "新艾利都特调", "浓缩咖啡")))
+                and scene.has(("汀曼特调", "鲜萃红茶", "新艾利都特调", "浓缩咖啡")))
 
     def _coffee_dialog(self, scene):
         return (scene.has("汀曼", roi(800, 750, 1100, 850))
@@ -844,7 +844,7 @@ class DailyWorkflow:
         # Background shop signs and unrelated NPCs must never be approached.
         candidates = [t for t in scene.tokens if t.within(roi(650, 15, 1300, 700))
                       and t.score >= self.c.settings.ocr_confidence
-                      and normalize(t.text).strip("><＜＞《》〈〉「」『』‹›❮❯") in names]
+                      and normalize(t.text).strip("><＜＞《》〈〉「」『』‹›❮❯ sS") in names]
         return candidates[0] if len(candidates) == 1 else None
 
     def _daily_target_open(self, task, scene):
@@ -979,6 +979,10 @@ class DailyWorkflow:
         return self._partial("scratch", scene, "饼铺领取达到有限重试上限，尚未验证完成。")
 
     def coffee(self):
+        if not hasattr(self.c, 'coffee_name') and hasattr(self.c, 'coffee_name_resolver'):
+            self.c.coffee_name = self.c.coffee_name_resolver()
+            self.c.log(f"刷本计划对应每日饮品：{self.c.coffee_name}。")
+        name = getattr(self.c, 'coffee_name', '汀曼特调')
         scene = self._snapshot()
         if self._daily_verified(scene):
             self._record_daily_complete(scene)
@@ -1002,9 +1006,9 @@ class DailyWorkflow:
         for _ in range(3):
             if not self._coffee_dialog(scene):
                 break
-            option = scene.find("来杯汀曼特调", OPTIONS, exact=True)
+            option = scene.find("来杯" + name, OPTIONS, exact=True)
             if option:
-                if not coffee_is_free(scene):
+                if not coffee_is_free(scene, name):
                     return self._partial("coffee", scene, "没有已校准的免费每日饮品依据，未点单。")
                 self.c.evidence(scene, "coffee_daily_dialogue")
                 self.c.click(scene, option)
@@ -1020,9 +1024,9 @@ class DailyWorkflow:
             self._unknown(scene, "咖啡交互出现未知页面")
         self.c.sleep(1)
         scene = self._snapshot()
-        coffee = scene.find("汀曼特调", roi(100, 630, 1200, 1080))
+        coffee = scene.find(name, roi(100, 630, 1200, 1080), exact=True)
         if coffee is None:
-            return self._partial("coffee", scene, "未识别到汀曼特调，未选择其他咖啡。")
+            return self._partial("coffee", scene, f"未识别到{name}，未选择其他饮品。")
         self.c.click(scene, (coffee.center[0], max(0, coffee.center[1] - 50 / 1080)))
         scene = self._snapshot()
         if not coffee_is_free(scene):
