@@ -46,6 +46,13 @@ class CityFundRewardsWorkflow(DailyWorkflow):
         return all(self._city_unique(scene, label, FUND_TABS) for label in
                    ("等级回馈", "成长任务", "城募赠礼"))
 
+    def _city_opening(self, scene):
+        """Free new-period introduction; never the paid unlock button."""
+        target = self._city_unique(scene, "开启丽都城募", (.75, .90, .99, .985))
+        return target if (target and not self._city_page(scene)
+                          and scene.has("成长计划", (.04, .1, .47, .88))
+                          and scene.has("典藏计划", (.45, .1, .97, .88))) else None
+
     def _city_tab_selected(self, scene, label, area):
         target = self._city_unique(scene, label, area)
         return bool(target and green_claim(scene, target.box))
@@ -86,6 +93,8 @@ class CityFundRewardsWorkflow(DailyWorkflow):
         if pending == "world":
             return self._world(scene)
         if pending == "fund":
+            return self._city_page(scene) or bool(self._city_opening(scene))
+        if pending == "opened_fund":
             return self._city_page(scene)
         if pending == "growth":
             return self._city_growth_page(scene)
@@ -116,6 +125,12 @@ class CityFundRewardsWorkflow(DailyWorkflow):
         return None
 
     def _city_enter(self, scene):
+        opening = self._city_opening(scene)
+        if opening:
+            self.c.evidence(scene, "city_fund_new_period")
+            self._city_click(scene, opening)
+            self._city_stage, self._city_pending = "growth_tab", "opened_fund"
+            return None
         if self._city_page(scene):
             self._city_stage = "growth_tab"
             return None
@@ -181,6 +196,9 @@ class CityFundRewardsWorkflow(DailyWorkflow):
                 self._city_stage, self._city_pending = "growth_tab", "fund"
                 result = None
             elif self._city_stage == "growth_tab":
+                if self._city_opening(scene):
+                    result = self._city_enter(scene)
+                    continue
                 if not self._city_page(scene):
                     return self._partial("city_fund", scene, "城募页的三标签和等级信息尚未核实。")
                 if self._city_growth_page(scene):

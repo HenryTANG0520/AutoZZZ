@@ -253,6 +253,20 @@ class FundReplay:
 
 
 class CityFundRewardTests(unittest.TestCase):
+    def test_new_period_free_opening_requires_exact_button_and_both_plans(self):
+        workflow = CityFundRewardsWorkflow(FundReplay())
+        tokens = [token("开启丽都城募", .89, .94), token("成长计划", .14, .81),
+                  token("典藏计划（赠送云游戏42日畅玩卡）", .66, .81)]
+        image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        self.assertIs(workflow._city_opening(Scene(tokens, image)), tokens[0])
+        self.assertIsNone(workflow._city_opening(Scene(tokens[:2], image)))
+        for label in ("解锁丽都城募", "购买丽都城募", "开启"):
+            self.assertIsNone(workflow._city_opening(Scene([token(label, .89, .94), *tokens[1:]], image)))
+        workflow._city_pending = "fund"
+        self.assertTrue(workflow._city_ready(Scene(tokens, image)))
+        workflow._city_pending = "opened_fund"
+        self.assertFalse(workflow._city_ready(Scene(tokens, image)))
+
     def test_reaching_max_level_during_growth_claim_still_claims_level_reward(self):
         # 2026-10-14 capture: growth's All Claim changed Lv.59 to MAX/Lv.60,
         # replaced the weekly-cap label, and added the level-tab notification.

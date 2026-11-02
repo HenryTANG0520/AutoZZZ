@@ -627,6 +627,12 @@ class Runner:
                 if result.status == "ok":self.report.failure_task = ""
                 self.log(result.detail)
                 return self.report
+            if self.settings.city_fund and not entry_only:
+                opening_workflow = self._reward_workflow("city_fund", context)
+                if opening_workflow._city_opening(initial):
+                    result = self._resume_step(opening_workflow.city_fund)
+                    self.report.results.append(result)
+                    self.log(result.detail)
             main_result = self._resume_step(workflow.ensure_main)
             if entry_only:
                 if not isinstance(main_result, TaskResult) or main_result.task != "main" or main_result.status != "ok":
