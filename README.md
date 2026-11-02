@@ -1,6 +1,6 @@
 # AutoZZZ
 
-> **当前状态：2026-11-02 按用户要求暂停开发。** 本轮修改与验证已记录，完整迁移目标尚未完成。恢复交接、剩余项目及未使用的测试额度见 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)。
+> **当前状态：2026-11-02 已按用户要求恢复实机验收。** 停攻适配问题已修复，国服当前队伍已完成七场巡防复测；完整迁移目标尚未完成。剩余验收分组见 [LIVE_ACCEPTANCE.md](LIVE_ACCEPTANCE.md)，历史暂停交接见 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)。
 
 > **本项目于 2026-10-28 恢复开发。** 后续以完善交互设计为重点，开发方向转向基于[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)的二次开发。现有代码尚未完成向上游执行框架的迁移。
 
