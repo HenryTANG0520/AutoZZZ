@@ -58,9 +58,13 @@ class GroupRunControl:
                 return group.round_success(GroupApplication.STATUS_NEXT)
             finally:context.current_group_id,context.current_app_id=previous
             skipped=isinstance(result.status,str) and result.status.startswith("应用已完成")
-            state="skipped" if skipped else "failed" if not result.is_success or idx in group._fail_app_idx_list else "success"
-            with self.lock:detail=self.items.get(item.app_id,{}).get("detail")
-            if skipped or not detail:detail=result.status
+            # 组节点返回的是“下一个”，不能取代子应用的实际终态。
+            with self.lock:record=dict(self.items.get(item.app_id,{}))
+            state="skipped" if skipped else "failed" if not result.is_success or idx in group._fail_app_idx_list else record.get("state","failed")
+            if state=="running":state="failed"
+            detail=record.get("detail")
+            if skipped:detail=result.status
+            elif not detail:detail="应用失败，未提供结果原因" if state=="failed" else "应用完成，未提供结果说明"
             self.update(item.app_id,state,detail)
             return result
 

@@ -23,6 +23,7 @@ class ChargeBudgetControl:
         self.restore_mode,self.restore_authorized=restore_mode,restore_authorized
         self.restore_control=None;self.restore_cost=0
         self.synthesis_authorized=synthesis_authorized;self.synthesis_control=None
+        self.failures=[]
 
     def check_restore_budget(self):
         if self.restore_mode=='不使用' or not self.restore_authorized:self._block('本轮未确认使用储蓄电量或以太电池。')
@@ -65,7 +66,7 @@ class ChargeBudgetControl:
             allowed = {20,40,60,80,100}
             if operation.plan.card_num!="默认数量":allowed={20*int(operation.plan.card_num)}
         else:allowed={self.CATEGORIES[category]}
-        if cost not in allowed:raise ValueError("当前副本消耗与所选计划不一致。")
+        if cost not in allowed:raise ValueError(f"当前副本消耗与所选计划不一致：画面 {available}/{cost}，计划消耗 {sorted(allowed)}。")
         return available,cost
 
     def _reserve(self,owner,cost:int):
@@ -148,11 +149,26 @@ class ChargeBudgetControl:
                 return operation.round_success(ChargePlanApp.STATUS_ROUND_FINISHED)
             return original(operation)
 
+        def challenge_complete(operation,original):
+            previous=operation.previous_node
+            if not previous.is_success:
+                self.failures.append(dict(plan_id=operation.current_plan.uid,
+                    detail=str(previous.status or "副本执行失败")))
+            return original(operation)
+
+        def back_to_world(operation,original):
+            result=original(operation)
+            if result.is_success and self.failures:
+                return operation.round_fail("刷本未完成："+"；".join(item['detail'] for item in self.failures))
+            return result
+
         for cls in (CombatSimulation,AreaPatrol,ExpertChallenge,NotoriousHunt):
             self._patch_node(cls,"click_next",before_next)
             self._patch_node(cls,"after_battle",after_battle)
         self._patch_node(ChooseNextOrFinishAfterBattle,"check_next",repeat)
         self._patch_node(ChargePlanApp,"find_next_plan",next_plan)
+        self._patch_node(ChargePlanApp,"challenge_complete",challenge_complete)
+        self._patch_node(ChargePlanApp,"back_to_world",back_to_world)
         if self.restore_mode!='不使用':
             from .onedragon_restore import RestoreChargeControl
             self.restore_control=RestoreChargeControl(self.ctx,self.control,self.restore_mode,self);self.restore_control.install()
@@ -167,7 +183,8 @@ class ChargeBudgetControl:
 
     def status(self) -> dict:
         return dict(id=self.budget.data["id"],reserved=self.budget.reserved,remaining=self.budget.remaining,
-                    rounds_left=self.budget.rounds_left,pending=len(self.budget.pending),limited=self.limited)
+                    rounds_left=self.budget.rounds_left,pending=len(self.budget.pending),limited=self.limited,
+                    failures=[dict(item) for item in self.failures])
 
     def close(self):
         if self.synthesis_control is not None:self.synthesis_control.close()

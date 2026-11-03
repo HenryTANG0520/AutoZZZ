@@ -61,6 +61,9 @@ class OneDragonExecution:
         from .coffee_choice import CoffeeSelectionControl
         self.coffee_control = CoffeeSelectionControl(ctx)
         self.coffee_control.install()
+        from .onedragon_daily import DailyInterfaceControl
+        self.daily_control = DailyInterfaceControl(ctx)
+        self.daily_control.install()
         from .onedragon_resources import ResourceConfirmation
         self.resource_confirmation = ResourceConfirmation()
         self.resource_control = None
@@ -451,6 +454,7 @@ class OneDragonExecution:
                 self.script_control.reset()
                 self.redemption_control.reset()
                 self.login_control.reset()
+                self.daily_control.reset()
                 self.charge_control=None
                 self.group_control=None
                 self.hunt_control=None
@@ -603,6 +607,7 @@ class OneDragonExecution:
             result["notifications"] = self.ctx.push_service.status()
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
+            result["daily_interfaces"]=self.daily_control.status()
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
             bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
             result["window_handle"]=None if bound is None else bound.hwnd
@@ -652,5 +657,6 @@ class OneDragonExecution:
         self.notification_control.close()
         self.patrol_control.close()
         self.coffee_control.close()
+        self.daily_control.close()
         self.adapter.close()
         self.battle_control.close()

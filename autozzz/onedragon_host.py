@@ -494,6 +494,9 @@ class ManagedController(ZPcController):
                 self.control.checkpoint(require_frame=True)
                 from one_dragon.base.geometry.point import Point
                 self._position(Point(start.x+(end.x-start.x)*i/steps, start.y+(end.y-start.y)*i/steps))
+                # 与上游 drag_mouse 保持一致：SetCursorPos 本身在部分游戏界面
+                # 不会产生拖拽反馈，需补发真实 MOVE 事件。仍经过当前观察与焦点保护。
+                self.keyboard_controller.mouse.move(0,0)
                 if not self.control.hold(move_duration/steps):
                     return
             self.control.hold(release_wait)
