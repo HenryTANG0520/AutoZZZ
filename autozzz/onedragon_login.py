@@ -41,7 +41,8 @@ class LoginControl:
 
     def _state(self,operation,variant):
         config=self.ctx.game_account_config
-        identity=hashlib.sha256(json.dumps([self.ctx.current_instance_idx,config.game_region,config.account,config.password],ensure_ascii=False).encode()).hexdigest()
+        identity=hashlib.sha256(json.dumps([self.ctx.current_instance_idx,config.game_region,config.account,
+            config.password,config.bilibili_account_name],ensure_ascii=False).encode()).hexdigest()
         state=getattr(operation,'_autozzz_login',None)
         if state is None:
             state=operation._autozzz_login=dict(variant=variant,identity=identity,epoch=self.control.epoch,phase='account_focus',submitted=False,agreement=False)
@@ -113,9 +114,39 @@ class LoginControl:
         except ClipboardFailure as exc:return operation.round_fail(str(exc))
         except Exception:return operation.round_fail('登录输入未完成，请检查输入方式或助手权限。')
 
+    def _bilibili_account(self,operation,original):
+        if not self.enforce_submission:
+            return original(operation)
+        self.control.checkpoint(require_frame=True)
+        state=self._state(operation,'cn_b')
+        if state['submitted']:
+            return operation.round_success('B服-登录')
+        if state['phase']=='account_focus':
+            import cv2
+            from one_dragon.utils import cv2_utils
+            name=self.ctx.game_account_config.bilibili_account_name.strip()
+            area=self.ctx.screen_loader.get_area('打开游戏','B服新-账号列表')
+            if not name or area is None or operation.last_screenshot is None:
+                return operation.round_fail('缺少B服账号名称或登录列表画面。')
+            # Use the pinned SDK's list area and white-text mask, but require one exact name.
+            part=cv2_utils.crop_image_only(operation.last_screenshot,area.rect)
+            mask=cv2.inRange(part,(220,220,220),(255,255,255))
+            image=cv2.bitwise_and(part,part,mask=cv2_utils.dilate(mask,5))
+            matches=[match for text,rows in self.ctx.ocr.run_ocr(image).items()
+                     if text.strip()==name for match in rows]
+            if len(matches)!=1:
+                return operation.round_retry('未唯一核实配置的B服账号。',wait=.5)
+            with physical_input_scope(self.ctx.controller):
+                if not self.ctx.controller.click(matches[0].center+area.left_top):
+                    return operation.round_retry('未选中已核实的B服账号。',wait=.5)
+            state['phase']='submit'
+            return operation.round_wait('等待B服登录面板。',wait=.5)
+        result=self._witness(operation,state,'submit',lambda:operation.round_by_find_and_click_area(
+            operation.last_screenshot,'打开游戏','B服-登录',success_wait=5,retry_wait=1))
+        return operation.round_success('B服-登录') if state['submitted'] else result
+
     def _world_validation(self,operation):
-        manual_bilibili=self.ctx.game_account_config.game_region=='cn_b' and (operation.already_login or self.progress['manual_wait'])
-        if self.enforce_submission and not self.progress['submitted'] and not manual_bilibili:
+        if self.enforce_submission and not self.progress['submitted']:
             return operation.round_fail('尚未核实本次换号登录，不能继续运行该账号。')
         if self.enforce_region and not self.progress['server_verified']:
             return operation.round_fail('已进入游戏，但尚未核实国际服服务器；请返回登录页后重试。')
@@ -179,6 +210,8 @@ class LoginControl:
         for name,variant in (('input_account_password','cn'),('input_account_password_new','cn_new'),('input_account_password_intl','global')):
             def password(operation,variant=variant):return owner._password(operation,variant)
             self._patch(EnterGame,name,password)
+        bili_account=EnterGame.switch_bilibili_account
+        self._patch(EnterGame,'switch_bilibili_account',lambda operation:owner._bilibili_account(operation,bili_account))
         def screen(operation):
             if operation.last_screenshot is None:return check(operation)
             result=owner._world(operation)

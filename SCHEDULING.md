@@ -38,6 +38,12 @@
 
 Windows 行为依据：[任务安全上下文](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)、[任务设置](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings)、[正在运行的实例](https://learn.microsoft.com/en-us/windows/win32/taskschd/registeredtask-getinstances)。
 
+## 2026-11-06 国服源码自然触发
+
+Windows 在 05:07:01 按时启动 `b03f72b` 的 `pythonw -m autozzz`，原生流程打开国服并绑定游戏窗口。游戏可见且未最小化，其他进程持有前台，计划停在等待游戏恢复焦点。现场读取的 Windows 前台锁定间隔为 2,147,483,647 毫秒。无人值守登录尚未通过，Windows 对程序取得前台的限制见 [SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)。
+
+原定时实例收到合作停止，于 05:09:48 退出。临时计划移除，随后核实原游戏的 PID、创建时间与窗口并正常关闭，交还 AutoHSR。无电量消耗。证据见 `runs/source-scheduled-b03f72b-cn-20261106/` 的实例记录、`foreground-observation.json` 和 `client-cleanup.json`。
+
 ## 2026-11-05 国服每日实机
 
 Windows 任务计划程序按需触发隔离的管理员级计划，运行实际安装的 `dev-b21dacd`。第一次冷启动助手与游戏，重复触发返回原实例，合作停止后原助手进程退出。第二次得到新实例，核实当日 400 活跃度与四档奖励全部领取后，由 AutoZZZ 正常关闭所绑定的游戏进程。两份历史分别记录停止与成功，临时计划已移除。证据见 `runs/scheduled-live-b21dacd-cn-20261105/result.json`。

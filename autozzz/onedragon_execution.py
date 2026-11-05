@@ -455,7 +455,10 @@ class OneDragonExecution:
                                                 phase=lambda text:setattr(self,"preparation_step",text),attempt=attempt,
                                                 options=LaunchOptions.from_config(self.ctx.game_config),guard=self._validate_task_input,
                                                 hdr_lease=self.startup_control.hdr_lease(self.ctx.game_account_config.game_path))
-                        try:identity=self.startup.run(auto_launch=True)
+                        try:
+                            identity=self.startup.run(auto_launch=True)
+                            if identity is not None:
+                                identity['process_created']=self.startup.previous_process[1]
                         finally:self.startup=None;self.preparation_step=""
                         if identity is None:self.state="stopped";return
                     def factory(ctx):
@@ -665,6 +668,13 @@ class OneDragonExecution:
             window=self.ctx.controller.game_win
             if window.bound is None or window.bound.hwnd!=expected_window["window_handle"] or window.process_id!=expected_window["process_id"]:
                 raise RuntimeError("启动后游戏窗口身份已变化，请重新准备登录。")
+            if 'process_created' in expected_window:
+                from .onedragon_startup import game_processes
+                rows=game_processes()
+                if (len(rows)!=1 or rows[0]['pid']!=window.process_id
+                    or rows[0]['created']!=expected_window['process_created'] or not window.identity_valid()):
+                    window.clear_binding()
+                    raise RuntimeError('启动后游戏进程身份已变化，未发送登录输入。')
         if hasattr(self.ctx.controller,'begin_input_policy'):self.ctx.controller.begin_input_policy(app_id)
         with self.lock:
             self.control.reset()

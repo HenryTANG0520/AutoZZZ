@@ -29,6 +29,7 @@ class NotoriousHuntControl:
         self.results: list[dict] = []
         self.failures: list[dict] = []
         self.skipped: list[dict] = []
+        self.reward: dict[str, str] | None = None
 
     def patch_node(self, cls: Any, name: str, handler: Any) -> None:
         original = getattr(cls, name)
@@ -124,9 +125,25 @@ class NotoriousHuntControl:
         def choose_next(operation, original):
             token = _current_hunt.set(operation)
             try:
-                return original(operation)
+                if operation.use_charge_power:
+                    return original(operation)
+                # 「完成」也可能是「再来一次」未识别后的回退，不能据此写入零次数。
+                op = ChooseNextOrFinishAfterBattle(
+                    operation.ctx, operation.can_run_times > 0, is_agent_plan=operation.plan.is_agent_plan
+                )
+                return operation.round_by_op_result(op.execute())
             finally:
                 _current_hunt.reset(token)
+
+        def wait_back_to_entry(operation, original):
+            result = original(operation)
+            if result.is_success and not operation.use_charge_power and operation.can_run_times > 0:
+                try:
+                    left = owner.read_free_times(operation)
+                except ValueError as exc:
+                    return operation.round_retry(str(exc), wait=.5)
+                operation.run_record.left_times = left
+            return result
 
         def free_repeat(operation, original):
             hunt = current_hunt()
@@ -148,13 +165,29 @@ class NotoriousHuntControl:
                 return operation.round_wait("等待恶名狩猎奖励入口", wait=1)
             return original(operation)
 
+        def back_after_reward(operation, original):
+            previous = operation.previous_node
+            claim_stage = previous.name == "全部领取"
+            owner.reward = dict(outcome="clicked" if previous.is_success else "unverified",
+                                stage="claim" if claim_stage else "entry", status=previous.status or "")
+            result = original(operation)
+            if result.is_success and not previous.is_success:
+                # 本轮没有新胜利时，缺少领取按钮也可能只是没有待领奖励。
+                if (claim_stage and previous.status == "未找到 全部领取"
+                        and not any(item["mode"] == "weekly" for item in owner.results)):
+                    return result
+                return operation.round_fail(f"恶名狩猎奖励领取未核实（{previous.status or previous.name}）。")
+            return result
+
         self.patch_node(NotoriousHunt, "decide_notorious_hunt", decide)
         self.patch_node(NotoriousHunt, "click_next", before_next)
         self.patch_node(NotoriousHunt, "wait_battle_screen", battle_loaded)
         self.patch_node(NotoriousHunt, "after_battle", after_battle)
         self.patch_node(NotoriousHunt, "check_next", choose_next)
+        self.patch_node(NotoriousHunt, "wait_back_to_entry", wait_back_to_entry)
         self.patch_node(ChooseNextOrFinishAfterBattle, "check_next", free_repeat)
         self.patch_node(NotoriousHuntApp, "click_reward_entry", reward_entry)
+        self.patch_node(NotoriousHuntApp, "back_to_world", back_after_reward)
 
         finish = NotoriousHunt.after_operation_done
         @wraps(finish)
@@ -192,10 +225,13 @@ class NotoriousHuntControl:
             cls.execute = guarded
 
     def status(self) -> dict:
-        return dict(free_completed=sum(item["mode"] == "weekly" for item in self.results),
-                    paid_completed=sum(item["mode"] == "deep" for item in self.results),
-                    results=[dict(item) for item in self.results], failures=[dict(item) for item in self.failures],
-                    skipped=[dict(item) for item in self.skipped])
+        result = dict(free_completed=sum(item["mode"] == "weekly" for item in self.results),
+                      paid_completed=sum(item["mode"] == "deep" for item in self.results),
+                      results=[dict(item) for item in self.results], failures=[dict(item) for item in self.failures],
+                      skipped=[dict(item) for item in self.skipped])
+        if self.reward is not None:
+            result["reward"] = dict(self.reward)
+        return result
 
     def close(self) -> None:
         for cls, name, original, was_local in reversed(self.originals):

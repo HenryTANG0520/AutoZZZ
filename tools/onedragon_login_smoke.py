@@ -219,6 +219,12 @@ def main():
             assert tick(operation.check_screen).is_success
             checks.append('bilibili_phone_or_captcha_waits_without_input_then_accepts_actual_world_detection')
 
+            operation=reset('cn_b');login.reset('account');fixture.manual_b=True
+            assert not tick(operation.check_screen).is_fail and login.status()['manual_wait']
+            fixture.manual_b=False;fixture.world=True
+            assert tick(operation.check_screen).is_fail and not login.status()['world_verified']
+            checks.append('bilibili_fixed_account_does_not_use_a_previous_manual_wait_as_login_proof')
+
             operation=reset();fill(operation,'cn')
             operation.check_screen_to_interact=forbidden
             result=tick(operation.check_screen);assert not result.is_fail and login.status()['manual_wait'] and fixture.submits==1
@@ -372,11 +378,15 @@ def main():
                 bound.set()
                 if not allow_bind.wait(4):raise AssertionError('fixture bind was not released')
                 ctx.controller.game_win.bound=SimpleNamespace(hwnd=999);ctx.controller.game_win.process_id=51
+                ctx.controller.game_win.identity_valid=lambda:True
             service.prepare_login('forced_enter');manager.worker.join(5)
             # 提交时 F9 松开，启动轮询时才出现按下沿，后续一直按住。
             f9_samples=iter((0,))
             def startup_key_state(key):return next(f9_samples,0x8000) if key==0x78 else 0
-            with patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),patch.object(ctx.controller,'bind',delayed_bind),patch.object(EnterGame,'__init__',constructed),patch('autozzz.windows.user32.GetAsyncKeyState',side_effect=startup_key_state):
+            with (patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),
+                  patch('autozzz.onedragon_startup.game_processes',return_value=[dict(pid=51,created=1)]),
+                  patch.object(ctx.controller,'bind',delayed_bind),patch.object(EnterGame,'__init__',constructed),
+                  patch('autozzz.windows.user32.GetAsyncKeyState',side_effect=startup_key_state)):
                 service.start_login('forced_enter',timeout_seconds=30,auto_launch=True)
                 deadline=time.monotonic()+3
                 while not manager.manual_pause.is_set() and time.monotonic()<deadline:time.sleep(.01)
