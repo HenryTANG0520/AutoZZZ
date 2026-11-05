@@ -16,6 +16,11 @@ class CoffeeChoiceTests(unittest.TestCase):
         for extra in (dict(plan_times=1, run_times=1), dict(skipped=True)):
             self.assertEqual(choose_coffee([dict(category_name='实战模拟室', **extra)]), '汀曼特调')
 
+    def test_new_game_day_projects_reset_without_changing_progress(self):
+        plan = SimpleNamespace(category_name='实战模拟室', plan_times=1, run_times=1)
+        self.assertEqual(choose_coffee([plan], reset_due=True), '鲜萃红茶')
+        self.assertEqual(plan.run_times, 1)
+
     def test_mixed_and_native_plans_use_same_rule(self):
         rows = [SimpleNamespace(category_name='区域巡防'), SimpleNamespace(category_name='实战模拟室')]
         self.assertEqual(choose_coffee(rows), '鲜萃红茶')

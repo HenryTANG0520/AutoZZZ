@@ -34,7 +34,8 @@ class AutomaticOverlayCapture:
                 or control.status().get('state')!='running' or not control.status().get('fresh_frame')
                 or not 0<=time.time()-stamp<=1.8):return None
         current=self.runtime.snapshot()
-        if current['window_identity']!=snapshot['window_identity'] or not snapshot['window_identity']:return None
+        if (current['generation']!=snapshot['generation'] or not snapshot['window_identity']
+                or current['window_identity']!=snapshot['window_identity']):return None
         if (image.ndim!=3 or image.shape[2]!=3 or image.shape[0]*image.shape[1]>36_000_000
                 or list(image.shape[:2][::-1])!=snapshot['standard_size']):return None
         from .trace_capture import compose_overlay,atomic_bytes
@@ -44,7 +45,8 @@ class AutomaticOverlayCapture:
         result=compose_overlay(Image.fromarray(image.copy()),snapshot,{'battle':snapshot.get('capture_battle',{})},preferences['layers'],
             preferences['sources'],preferences,font_size=preferences['base_font_size'],opacity=preferences['base_opacity'])
         stream=BytesIO();result.save(stream,format='PNG')
-        if control.epoch!=snapshot['epoch'] or control.status().get('state')!='running':return None
+        if (self.runtime.closed or not self.runtime.enabled or self.runtime.generation!=snapshot['generation']
+                or control.epoch!=snapshot['epoch'] or control.status().get('state')!='running'):return None
         path=Path(path);target=path.with_name(path.stem+preferences['capture_suffix']+'.png')
         if target.exists() or target.is_symlink():return None
         atomic_bytes(target,stream.getvalue());self.saved+=1

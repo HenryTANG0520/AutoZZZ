@@ -220,6 +220,7 @@ class LoginControl:
             return result
         self._patch(EnterGame,'wait_loading',loading)
         logout_init=SwitchAccount.handle_init;logout_confirm=SwitchAccount.more_logout_confirm
+        wait_switch=SwitchAccount.wait_switch_can_click
         def switch_init(operation):
             logout_init(operation);operation._autozzz_logout=dict(clicked=False)
         def confirm_logout(operation):
@@ -227,8 +228,16 @@ class LoginControl:
             owner.progress.update(phase='正在退出当前游戏账号',manual_wait=False)
             if state['clicked']:return operation.round_success('登出确认已尝试')
             return owner._witness(operation,state,'logout',lambda:logout_confirm(operation))
+        def wait_for_login(operation):
+            if owner.ctx.game_account_config.game_region in owner.REGIONS:
+                for area in ('国际服-点击登录','国际服-密码输入区域'):
+                    result = operation.round_by_find_area(operation.last_screenshot,'打开游戏',area)
+                    if result.is_success:
+                        return result
+            return wait_switch(operation)
         self._patch(SwitchAccount,'handle_init',switch_init)
         self._patch(SwitchAccount,'more_logout_confirm',confirm_logout)
+        self._patch(SwitchAccount,'wait_switch_can_click',wait_for_login)
 
     def status(self):return dict(self.progress)
 

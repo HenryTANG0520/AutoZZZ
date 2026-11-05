@@ -20,7 +20,7 @@ def main():
     if args.version is None:parser.error('生成发布清单需要 --version。')
     commit=args.base_commit or (read_manifest(args.package)['base_commit'] if (args.package/MANIFEST).exists() else
         subprocess.check_output(['git','-C',str(Path(__file__).resolve().parents[1]),'rev-parse','HEAD'],text=True).strip())
-    data=create_manifest(args.package,args.version,commit,reindex=args.reindex)
+    data=create_manifest(args.package,args.version,commit,reindex=args.reindex,require_index_match=args.output is not None)
     if args.output is None:print({'version':data['version'],'files':len(data['files'])});return
     if args.output.exists() or args.output.with_suffix(args.output.suffix+'.sha256').exists():raise ValueError('发布 ZIP 或摘要已存在。')
     args.output.parent.mkdir(parents=True,exist_ok=True)

@@ -46,18 +46,18 @@ def main():
     result=dict(checks=[],devices=[],game_accessed=False,real_virtual_device_created=False,game_input_sent=False)
     with ExitStack() as scope:
         for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo',
-                     'pynput.keyboard.Controller.press','pynput.mouse.Controller.press','autozzz.windows.find_game','autozzz.windows.user32.SendInput'):
+                     'pynput.keyboard.Controller.press','pynput.keyboard.Controller.release',
+                     'pynput.mouse.Controller.press','pynput.mouse.Controller.release','pynput.mouse.Controller.scroll',
+                     'autozzz.windows.find_game','autozzz.windows.user32.SendInput','autozzz.windows.user32.PostMessageW',
+                     'autozzz.windows.user32.SetForegroundWindow','autozzz.windows.user32.SetCursorPos'):
             scope.enter_context(patch(name,side_effect=forbidden))
         scope.enter_context(patch.dict(sys.modules,{'vgamepad':fake}))
         scope.enter_context(patch('one_dragon.base.controller.pc_button.pc_button_utils.is_vgamepad_installed',return_value=True))
         service=OneDragonService(defaults.source,data)
         try:
-            config=service.ctx.game_config
-            controller=ManagedController.__new__(ManagedController)
-            controller.game_config=config;controller.background_mode=False;controller.xbox_controller=controller.ds4_controller=None
-            controller.keyboard_controller=NS(reset=lambda:None);controller.btn_controller=controller.keyboard_controller
             control=ExecutionControl(lambda:WindowState(True,True,(0,0,1920,1080)),lambda:release_controller_inputs(controller),lambda:True,lambda:None,lambda:None)
-            controller.control=control;control.observe(lambda:None)
+            controller=ManagedController(service.ctx,control)
+            control.observe(lambda:None)
             for kind,raw_type in (('xbox',XboxButtonController),('ds4',Ds4ButtonController)):
                 getattr(controller,'enable_'+kind)();device=controller.btn_controller
                 assert type(device.raw)is raw_type

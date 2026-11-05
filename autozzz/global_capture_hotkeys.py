@@ -7,8 +7,7 @@ from .global_key_events import KeyEdge
 
 class CapturePoller(TemplatePoller):
     def configure(self,bindings):
-        self.bindings={key:parse_capture_hotkey(value) for key,value in bindings.items()}
-        self.held={key:self._down(combo) for key,combo in self.bindings.items()}
+        self._configure_parsed({key:parse_capture_hotkey(value) for key,value in bindings.items()})
 
 
 class GlobalCaptureHotkeys:

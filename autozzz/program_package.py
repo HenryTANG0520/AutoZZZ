@@ -95,12 +95,15 @@ def verify_runtime_index(root,data,actual):
     return runtime
 
 
-def create_manifest(root,version,base_commit,*,reindex=False):
+def create_manifest(root,version,base_commit,*,reindex=False,require_index_match=False):
     root=Path(root).resolve()
     bundle=json.loads((root/'onedragon/autozzz-bundle.json').read_text(encoding='utf-8'))
-    managed=set(read_manifest(root)['files']) if (root/MANIFEST).exists() and not reindex else None
+    managed=read_manifest(root)['files'] if (root/MANIFEST).exists() and not reindex else None
     entries={name:digest(path) for name,path in files(root) if name!=MANIFEST and not user_file(name) and (managed is None or name in managed)}
-    if managed is not None and set(entries)!=managed:raise ValueError('原清单中的程序文件缺失，不能重新标记发布包。')
+    if managed is not None and entries.keys()!=managed.keys():raise ValueError('原清单中的程序文件缺失，不能重新标记发布包。')
+    if require_index_match and managed is not None and entries!=managed:
+        changed=next(name for name in entries if entries[name]!=managed[name])
+        raise ValueError('程序文件摘要不符：'+changed)
     data=dict(format=1,product='AutoZZZ',version=version,base_commit=base_commit,runtime_revision=bundle['revision'],protocol=bundle['protocol'],files=entries)
     verify_runtime_index(root,data,entries)
     path=root/MANIFEST

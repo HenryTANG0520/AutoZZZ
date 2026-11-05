@@ -262,7 +262,12 @@ class ConfigurationStore:
             return NotificationStore(self.service).describe()
         self.service._assert_idle()
         with profile_lock(self.root):
-            return self._describe(app_id, self.get(app_id))
+            config = self.get(app_id)
+            description = self._describe(app_id, config)
+            if app_id == "charge_plan":
+                from .coffee_choice import configured_coffee
+                description["daily_coffee"] = configured_coffee(config, self.ctx.game_account_config)
+            return description
 
     def compendium(self) -> dict:
         self.ctx.compendium_service.reload()

@@ -568,10 +568,12 @@ class OneDragonExecution:
                             return single_battle_operation(ctx, battle_input=self.battle_control, on_state=record_battle_state)
 
                         self._run_bound_app(app_id, takeover, display_name='接管当前战斗')
-                    elif factory is None:
-                        extra={'keep_running_on_success':True} if close_game_on_success else {}
-                        close_ready=self._run_bound_app(app_id,**extra)
-                    else: self._run_bound_app(app_id, factory)
+                    else:
+                        binding = {'reuse_bound_window': True} if self.rotation_guard is not None else {}
+                        if factory is None:
+                            close_ready = self._run_bound_app(app_id, keep_running_on_success=close_game_on_success, **binding)
+                        else:
+                            self._run_bound_app(app_id, factory, **binding)
                 finally:
                     if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
@@ -581,9 +583,15 @@ class OneDragonExecution:
         return self._submit("running", run)
 
     def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试",expected_window=None,
-                       *,keep_running_on_success=False):
+                       *,keep_running_on_success=False,reuse_bound_window=False):
         self.ctx.push_service.reset_results()
-        self.ctx.controller.bind(self.ctx.game_account_config.game_path)
+        if reuse_bound_window:
+            window = self.ctx.controller.game_win
+            if not window.identity_valid():
+                window.clear_binding()
+                raise RuntimeError("登录后原游戏窗口已关闭或身份发生变化，未启动该账号应用。")
+        else:
+            self.ctx.controller.bind(self.ctx.game_account_config.game_path)
         if expected_window is not None:
             window=self.ctx.controller.game_win
             if window.bound is None or window.bound.hwnd!=expected_window["window_handle"] or window.process_id!=expected_window["process_id"]:

@@ -260,6 +260,9 @@ class RotationSession:
         self._job('prepare_login',{'prepared'},mode=mode)
         result=self._job('start_login',{'success'},game=True,mode=mode,timeout_seconds=timeout,auto_launch=True)
         if not result.get('login',{}).get('world_verified'):raise RuntimeError('登录未核实进入大世界，未启动该账号应用。')
+        identity = result.get('window_identity')
+        if not identity:raise RuntimeError('登录后未核实原游戏窗口身份。')
+        return identity
 
     def _close_game(self,identity,timeout):
         self.phase='关闭原客户端'
@@ -320,7 +323,7 @@ class RotationSession:
                             self._close_game(self.last_identity,timeout)
                         self._disconnect();self._connect(True)
                     self._select_initialize(row,current,server);current=row['idx']
-                    self._login(row,'account' if row['login_required'] else 'enter',timeout)
+                    login_window = self._login(row,'account' if row['login_required'] else 'enter',timeout)
                     if self.returning:
                         self.report['returned_to_start']=True;break
                     record['state']='running';self.phase=row['name']+' · 准备应用组';self._state()
@@ -333,6 +336,8 @@ class RotationSession:
                     result=self._job('start_application',{'success','failed'},game=True,app_id=execution_app,
                                      budget=budget if prepared['uses_charge'] else None,timeout_seconds=timeout,
                                      resource_confirmation=resources.get('confirmation_id') if resources.get('confirmation_required') else None)
+                    if result.get('window_identity') != login_window:
+                        raise RuntimeError(result.get('error') or '账号应用窗口与登录时不同，停止轮换。')
                     record['state']=result['state'];record['applications']=result.get('applications',[])
                     from .charge_evidence import collect_charge_evidence
                     try:record['evidence']=collect_charge_evidence(result,self.paths.data,self.report_dir)

@@ -28,8 +28,26 @@ def desktop_available() -> bool:
     if not handle:return False
     try:
         name=C.create_unicode_buffer(256);needed=W.DWORD()
-        return bool(user.GetUserObjectInformationW(handle,2,name,C.sizeof(name),C.byref(needed)) and name.value=='Default')
+        if not user.GetUserObjectInformationW(handle,2,name,C.sizeof(name),C.byref(needed)) or name.value!='Default':
+            return False
     finally:user.CloseDesktop(handle)
+
+    # OpenInputDesktop can still return Default for a disconnected session.
+    wts=C.WinDLL('wtsapi32',use_last_error=True)
+    state_pointer=C.POINTER(C.c_int)
+    query=wts.WTSQuerySessionInformationW
+    query.argtypes=[W.HANDLE,W.DWORD,C.c_int,C.POINTER(state_pointer),C.POINTER(W.DWORD)]
+    query.restype=W.BOOL
+    wts.WTSFreeMemory.argtypes=[C.c_void_p]
+    wts.WTSFreeMemory.restype=None
+    state,size=state_pointer(),W.DWORD()
+    current_session,connect_state,active=0xffffffff,8,0
+    if not query(None,current_session,connect_state,C.byref(state),C.byref(size)):
+        return False
+    try:
+        return bool(state and size.value==C.sizeof(C.c_int) and state.contents.value==active)
+    finally:
+        if state:wts.WTSFreeMemory(state)
 
 
 def process_identity() -> dict:

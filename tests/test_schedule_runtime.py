@@ -1,3 +1,4 @@
+import ctypes as C
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -13,8 +14,44 @@ import io
 
 from autozzz.config import Settings
 from autozzz.schedule_authorization import authorize,daily_review
-from autozzz.schedule_runtime import run_scheduled
+from autozzz.schedule_runtime import desktop_available,run_scheduled
 from autozzz.schedules import Schedule,ScheduleStore,revision
+
+
+class DesktopAvailabilityTests(unittest.TestCase):
+    def test_requires_active_session_and_default_input_desktop(self):
+        for desktop, state, size, queried, expected in (
+            ('Default', 0, 4, True, True),
+            ('Default', 4, 4, True, False),
+            ('Winlogon', 0, 4, True, False),
+            ('Default', 0, 2, True, False),
+            ('Default', 0, 0, False, False),
+        ):
+            with self.subTest(desktop=desktop, state=state, size=size, queried=queried):
+                session_status = C.c_int(state)
+
+                def query(server, session, info, output, output_size):
+                    self.assertEqual((server, session, info), (None, 0xffffffff, 8))
+                    if queried:
+                        state_pointer = C.cast(output, C.POINTER(C.c_void_p))
+                        state_pointer.contents.value = C.addressof(session_status)
+                        output_size._obj.value = size
+                    return queried
+
+                def name(_handle, _index, buffer, _size, _needed):
+                    buffer.value = desktop
+                    return True
+
+                user32 = NS(OpenInputDesktop=Mock(return_value=100),
+                                         GetUserObjectInformationW=Mock(side_effect=name), CloseDesktop=Mock())
+                wtsapi32 = NS(WTSQuerySessionInformationW=Mock(side_effect=query), WTSFreeMemory=Mock())
+                with patch.object(C, 'WinDLL', side_effect=lambda name, **_: {'user32': user32, 'wtsapi32': wtsapi32}[name]):
+                    self.assertEqual(desktop_available(), expected)
+                user32.CloseDesktop.assert_called_once_with(100)
+                if wtsapi32.WTSQuerySessionInformationW.called and queried:
+                    wtsapi32.WTSFreeMemory.assert_called_once()
+                else:
+                    wtsapi32.WTSFreeMemory.assert_not_called()
 
 
 class ScheduledRuntimeTests(unittest.TestCase):

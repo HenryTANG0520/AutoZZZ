@@ -9,7 +9,9 @@ from unittest.mock import Mock,patch
 from autozzz.program_updates import ASSET,release_rows,ProgramUpdates
 from autozzz.program_update import verify_preflight
 from autozzz.onedragon_bundle import digest
+from autozzz.program_package import MANIFEST,extract_package
 from tests.test_program_update import package
+from tools.package_release import main as package_release
 
 
 class ProgramReleaseTests(unittest.TestCase):
@@ -53,6 +55,25 @@ class ProgramReleaseTests(unittest.TestCase):
             for args in (('7','old'),('other','current')):
                 with self.assertRaises(ValueError):manager.download(*args)
             started.assert_not_called()
+
+    def test_release_export_rejects_a_changed_managed_file_until_explicit_reindex(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=package(root/'package','dev-fixture');archive=root/ASSET
+            original=(source/MANIFEST).read_bytes()
+            (source/'AutoZZZ.exe').write_bytes(b'changed fixture executable')
+            (source/'config.json').write_bytes(b'fixture user settings')
+            command=['package_release.py','--package',str(source),'--version','v1.2.3','--output',str(archive)]
+            with patch('sys.argv',command),self.assertRaisesRegex(ValueError,'AutoZZZ.exe'):
+                package_release()
+            self.assertEqual((source/MANIFEST).read_bytes(),original)
+            self.assertFalse(archive.exists())
+            self.assertFalse(archive.with_suffix('.zip.sha256').exists())
+            with patch('sys.argv',command+['--reindex']),patch('builtins.print'):
+                package_release()
+            extracted=root/'extracted';data=extract_package(archive,extracted)
+            self.assertEqual(data['version'],'v1.2.3')
+            self.assertEqual((extracted/'AutoZZZ/AutoZZZ.exe').read_bytes(),b'changed fixture executable')
+            self.assertFalse((extracted/'AutoZZZ/config.json').exists())
 
     def test_cancellation_and_close_wait_for_original_worker(self):
         manager=ProgramUpdates(NS(source=Path('project/vendor/onedragon')))

@@ -119,7 +119,7 @@ class ResourceActionControl:
 
     def __init__(self, ctx: Any, control: Any, fingerprints: dict[str, str]):
         self.ctx, self.control, self.fingerprints = ctx, control, dict(fingerprints)
-        self.originals: list[tuple[Any, str, Any]] = []
+        self.originals: list[tuple[Any, str, Any, bool]] = []
         self.results: list[dict] = []
         self.files: dict[str, tuple[Path, bytes | None]] = {}
         self.previous_input_validator: Any = control.input_validator
@@ -150,7 +150,7 @@ class ResourceActionControl:
         replacement.operation_node_annotation = node
         if remove_failed:
             replacement.operation_edge_annotation = [copy.copy(edge) for edge in original.operation_edge_annotation if edge.success]
-        self.originals.append((cls, name, original))
+        self.originals.append((cls, name, original, name in vars(cls)))
         setattr(cls, name, replacement)
         return replacement
 
@@ -191,17 +191,22 @@ class ResourceActionControl:
             operation._autozzz_dismantle_submitted = False
             operation._autozzz_resource_result = None
             owner.authorize("drive_disc_dismantle", operation.config)
-        self.originals.append((DriveDiscDismantleApp, "handle_init", initialize))
+        self.originals.append((DriveDiscDismantleApp, "handle_init", initialize,
+                               "handle_init" in vars(DriveDiscDismantleApp)))
         DriveDiscDismantleApp.handle_init = initialize_disc
         finish = DriveDiscDismantleApp.after_operation_done
+        finish_was_local = "after_operation_done" in vars(DriveDiscDismantleApp)
         @wraps(finish)
         def finish_disc(operation, result):
             if result.success and getattr(operation, "_autozzz_resource_result", None) is None:
                 record = dict(app_id="drive_disc_dismantle", state="not_verified", reward_verified=False)
                 operation._autozzz_resource_result = record
                 owner.results.append(record)
-            return finish(operation, result)
-        self.originals.append((DriveDiscDismantleApp, "after_operation_done", finish))
+            if finish_was_local:
+                return finish(operation, result)
+            # The group may install its completion callback on the base class later.
+            return super(DriveDiscDismantleApp, operation).after_operation_done(result)
+        self.originals.append((DriveDiscDismantleApp, "after_operation_done", finish, finish_was_local))
         DriveDiscDismantleApp.after_operation_done = finish_disc
 
         def guard(operation, original):
@@ -309,6 +314,9 @@ class ResourceActionControl:
 
     def close(self) -> None:
         self.control.input_validator = self.previous_input_validator
-        for cls, name, original in reversed(self.originals):
-            setattr(cls, name, original)
+        for cls, name, original, was_local in reversed(self.originals):
+            if was_local:
+                setattr(cls, name, original)
+            else:
+                delattr(cls, name)
         self.originals.clear()

@@ -31,12 +31,11 @@ class HotkeyPoller(BasePoller):
         parsed={key:parse_template_hotkey(value) for key,value in bindings.items()}
         used=[item for item in parsed.values() if item]
         if len(set(used))!=len(used):raise ValueError('模板快捷键不能重复。')
-        self.bindings=parsed;self.held={key:self._down(combo) for key,combo in parsed.items()}
+        self._configure_parsed(parsed)
 
-    def _down(self,combo):
-        if not combo:return False
+    def _modifiers_match(self,combo):
         down=lambda code:bool(self.read_key(code)&0x8000)
-        return down(combo[-1]) and all((down(code) or code==91 and down(92))==(code in combo[:-1]) for code in MODIFIERS.values())
+        return all((down(code) or code==91 and down(92))==(code in combo[:-1]) for code in MODIFIERS.values())
 
 ACTIONS=('battle_1','battle_2','chain','quick','hollow','team','switch','expand')
 DEFAULTS={key:f'Ctrl+{i+1}' for i,key in enumerate(ACTIONS[:6])}|{'switch':'Ctrl+0','expand':'Ctrl+9'}

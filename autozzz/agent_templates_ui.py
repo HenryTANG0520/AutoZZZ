@@ -45,9 +45,12 @@ class TemplateFloat:
         for i,button in enumerate(self.buttons):
             done=bool(self.owner.draft and self.owner.draft['images'][i])
             button.configure(text=('✓ ' if done else '')+self.owner.catalog['steps'][i]['name'])
+            photo_key='float'+str(i)
             if done:
                 image=Image.open(BytesIO(base64.b64decode(self.owner.draft['images'][i])));image.thumbnail((48,48))
-                self.owner.photos['float'+str(i)]=ImageTk.PhotoImage(image,master=self.window);button.configure(image=self.owner.photos['float'+str(i)],compound='top')
+                self.owner.photos[photo_key]=ImageTk.PhotoImage(image,master=self.window);button.configure(image=self.owner.photos[photo_key],compound='top')
+            else:
+                button.configure(image='');self.owner.photos.pop(photo_key,None)
         self.window.update_idletasks();values=self.owner.preferences['values'];x,y=values['float_x'],values['float_y']
         if x==-1:x=40
         if y==-1:y=140
@@ -250,7 +253,8 @@ class AgentTemplatesWindow:
             from .onedragon_trace_ui import TraceWindow
             trace=execution.trace_window
             if trace is None or trace.closed:
-                trace=TraceWindow(execution.window,self.ui.ui_scale,execution.session.trace);trace.window.withdraw();execution.trace_window=trace
+                trace=TraceWindow(execution.window,self.ui.ui_scale,execution.session.trace,initially_hidden=True)
+                execution.trace_window=trace
             trace.update_state(execution.last_state)
             selected=self.selected;token=self.draft['token']
             def captured(value):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from functools import wraps
 import re
+from time import monotonic
 from typing import Any
 
 from .battle_budget import BattleBudget
@@ -15,6 +16,7 @@ class ChargeBudgetControl:
     CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60,"合成电池":60}
     REPEAT_BUTTON = "战斗结果-再来一次"
     FINISH_BUTTON = "战斗结果-完成"
+    REPEAT_CONFIRM_SECONDS = 60
 
     def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False,synthesis_authorized=False,evidence_dir=None):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
@@ -22,7 +24,7 @@ class ChargeBudgetControl:
         self.ctx,self.control,self.budget,self.maximum = ctx,control,budget,max_per_battle
         self.owner,self.cost,self.reservation = None,0,None
         self._repeat_operation = None
-        self._repeat_attempted = False
+        self._repeat_attempt = None
         self._repeat_after_restore = False
         self.originals = []
         self.limited = False
@@ -147,17 +149,38 @@ class ChargeBudgetControl:
             if source_result != SOURCE_VICTORY:
                 self._block("未核实胜利结算，预算保持待核对。")
             if self.owner is not operation or self.reservation is None:self._block("缺少本场出战的预算记录。")
-            result=original(operation)
-            if result.is_success:
+            try:
+                result = original(operation)
+                if not result.is_success:
+                    return result
                 recovery = NativeChargeRecovery(self.budget.path.parent)
                 proof = recovery.record_victory(self.budget, self.reservation,
                                                 source_result=source_result, plan_uid=operation.plan.uid)
                 self.budget.settle(self.reservation, None, verification=proof)
-                self.reservation=None
-                self._repeat_operation=None
-                self._repeat_attempted=False
-                self._repeat_after_restore=False
+            except Exception as exc:
+                # SDK 会重试普通异常。原生节点已可能保存场次，不能再执行一次。
+                self._block("保存原生胜利结算失败，预算保持待核对："+str(exc))
+            self.reservation = None
+            self._repeat_operation = None
+            self._repeat_attempt = None
+            self._repeat_after_restore = False
             return result
+
+        def repeat_battle_loaded(operation):
+            screen = operation.last_screenshot
+            return (operation.round_by_find_area(screen, "战斗画面", "按键-普通攻击").is_success
+                    or (isinstance(self.owner, NotoriousHunt)
+                        and operation.round_by_find_area(screen, "战斗画面", "按键-交互").is_success))
+
+        def wait_for_repeat_frame(operation):
+            epoch, started = self._repeat_attempt
+            now = monotonic()
+            if epoch != self.control.epoch:
+                # Resume waiting for evidence without resubmitting a paid click.
+                self._repeat_attempt = (self.control.epoch, now)
+            elif now - started >= self.REPEAT_CONFIRM_SECONDS:
+                self._block("未核实再来一次后的战斗或补电提示，预算保持待核对。")
+            return operation.round_wait("等待再来一次提交后的新画面", wait=.5)
 
         def repeat(operation,original):
             from .onedragon_hunt import current_hunt
@@ -170,14 +193,13 @@ class ChargeBudgetControl:
             if self.reservation is not None:
                 if self._repeat_operation is not operation:
                     self._block("上一场出战未结算，不能开始新的出战。")
-                if self._repeat_attempted:
+                if self._repeat_attempt is not None:
                     # A focus change or an ambiguous click response can re-enter this node.
                     # Continue from new evidence without clicking the paid button again.
                     recovery = operation.round_by_find_area(screen, "恢复电量", "标题-恢复电量")
-                    battle = operation.round_by_find_area(screen, "战斗画面", "按键-普通攻击")
-                    if recovery.is_success or battle.is_success:
+                    if recovery.is_success or repeat_battle_loaded(operation):
                         return operation.round_success(self.REPEAT_BUTTON)
-                    return operation.round_retry("等待再来一次提交后的新画面", wait=.5)
+                    return wait_for_repeat_frame(operation)
             else:
                 if operation.is_agent_plan and operation.round_by_find_area(screen,"战斗画面","战斗结果-已达成").is_success:
                     result=operation.round_by_find_and_click_area(screen,"战斗画面",self.FINISH_BUTTON,
@@ -197,7 +219,7 @@ class ChargeBudgetControl:
                                                               success_wait=5, retry_wait=1)
             self._repeat_operation=operation
             self._reserve(self.owner,self.cost)
-            self._repeat_attempted=True
+            self._repeat_attempt = (self.control.epoch, monotonic())
             return operation.round_by_find_and_click_area(screen, "战斗画面", self.REPEAT_BUTTON,
                                                           success_wait=1, retry_wait=1)
 
@@ -205,14 +227,18 @@ class ChargeBudgetControl:
             if self._repeat_operation is not operation:
                 return original(operation)
             recovery = operation.round_by_find_area(operation.last_screenshot, "恢复电量", "标题-恢复电量")
-            if recovery.is_success and self._repeat_after_restore:
+            if not recovery.is_success:
+                if repeat_battle_loaded(operation):
+                    return operation.round_success(self.REPEAT_BUTTON)
+                return wait_for_repeat_frame(operation)
+            if self._repeat_after_restore:
                 self._block("恢复后再次提示电量不足，预算保持待核对。")
             result=original(operation)
-            if recovery.is_success and result.is_success and result.status==self.FINISH_BUTTON and operation.try_next:
+            if result.is_success and result.status==self.FINISH_BUTTON and operation.try_next:
                 # The game explicitly rejected the first start for insufficient energy.
                 # A successful authorized restore permits one retry of this same reservation.
                 self._repeat_after_restore=True
-                self._repeat_attempted=False
+                self._repeat_attempt = None
             return result
 
         def open_restore(operation, original):

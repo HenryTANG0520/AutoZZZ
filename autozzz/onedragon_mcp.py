@@ -479,17 +479,22 @@ class McpService:
             return response,headers
 
     def stop(self):
-        with self.lock:
-            self.grant=None
-            self.actions.disable()
-            self.editing.session=None
-            if self.owned_job and self.service.execution_status().get('job_id')==self.owned_job:
-                self.service.stop_execution()
-            server,thread=self.server,self.thread
-            self.server=self.thread=None;self.sessions.clear();self.token=''
-            self.log('MCP服务已停止；如原任务仍退出中，其运行锁继续保留。')
-        if server is not None:server.shutdown();server.server_close()
-        if thread is not None:thread.join(timeout=5)
+        server = thread = None
+        try:
+            with self.lock:
+                self.grant=None
+                self.actions.disable()
+                self.editing.session=None
+                server,thread=self.server,self.thread
+                self.server=self.thread=None;self.sessions.clear();self.token=''
+                try:
+                    if self.owned_job and self.service.execution_status().get('job_id')==self.owned_job:
+                        self.service.stop_execution()
+                finally:
+                    self.log('MCP服务已停止；如原任务仍退出中，其运行锁继续保留。')
+        finally:
+            if server is not None:server.shutdown();server.server_close()
+            if thread is not None:thread.join(timeout=5)
         return self.status()
 
     def close(self):

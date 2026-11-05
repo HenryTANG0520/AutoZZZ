@@ -103,7 +103,10 @@ class TraceOverlay:
 
     def draw(self):
         data=self.snapshot or {};identity=data.get('window_identity') or {};control=data.get('control',{})
+        current=self.state.get('control',{});epoch=current.get('observation_epoch')
         valid=(self.enabled and data.get('enabled') and -1<=time.time()-data.get('created',0)<.8 and identity
+               and (epoch is None or epoch==data.get('epoch')) and not current.get('manual_paused')
+               and not current.get('focus_waiting') and current.get('state')!='stopped'
                and control.get('fresh_frame')is not False and not control.get('manual_paused') and not control.get('focus_waiting') and control.get('state')!='stopped')
         if valid:
             pid=W.DWORD();user32.GetWindowThreadProcessId(identity['hwnd'],C.byref(pid))
@@ -163,14 +166,16 @@ class TraceOverlay:
 
 
 class TraceWindow:
-    def __init__(self,parent,scale,subscribe,*,presentation=None,preferences_path=None):
+    def __init__(self,parent,scale,subscribe,*,presentation=None,preferences_path=None,initially_hidden=False):
         self.capture_root=getattr(getattr(getattr(subscribe,'__self__',None),'paths',None),'data',None)
         self.capture_pending=False;self.capture_message='';self.capture_options=None;self.captured=set();self.hotkey_token=None;self.capture_listeners=[]
         self.scale=scale;self.advanced=None;self.preference_store=TracePreferences(preferences_path)
         try:self.preferences=self.preference_store.load();self.preference_error=None
         except (OSError,ValueError) as exc:self.preferences=deepcopy(DEFAULTS);self.preference_error=str(exc)
         self.subscribe=subscribe;self.closed=False;self.version=0;self.snapshot=None;self.state={};self.displayed=None
-        self.window=tk.Toplevel(parent);self.window.title('AutoZZZ · 调试追踪');self.window.transient(parent)
+        self.window=tk.Toplevel(parent)
+        if initially_hidden:self.window.withdraw()
+        self.window.title('AutoZZZ · 调试追踪');self.window.transient(parent)
         d=lambda n:round(n*scale);width,height=min(d(980),parent.winfo_screenwidth()-d(50)),min(d(740),parent.winfo_screenheight()-d(90))
         self.window.geometry(f'{width}x{height}');self.window.minsize(min(d(740),width),min(d(560),height));self.window.configure(background=theme.PANEL)
         self.window.columnconfigure(0,weight=1);self.window.rowconfigure(2,weight=1)
@@ -276,6 +281,7 @@ class TraceWindow:
         value=snapshot['capture'];key=(value.get('path'),value.get('sha256'))
         if not self.capture_pending or key in self.captured:return
         self.capture_pending=False
+        listeners,self.capture_listeners=self.capture_listeners,[]
         try:
             from io import BytesIO
             from .trace_capture import read_capture,compose_overlay,atomic_bytes
@@ -285,7 +291,6 @@ class TraceWindow:
             current_epoch=self.state.get('control',{}).get('observation_epoch')
             if current_epoch is not None and current_epoch!=value['epoch']:raise ValueError('截图观察已过期。')
             image,path=read_capture(self.capture_root,value)
-            listeners,self.capture_listeners=self.capture_listeners,[]
             for callback in listeners:
                 try:callback(dict(value))
                 except Exception:pass  # A separate editor cannot interrupt the running application's trace.
@@ -303,7 +308,7 @@ class TraceWindow:
 
     def configure(self,clear=False):
         if self.closed:return
-        self.capture_pending=False;self.capture_message=''
+        self.capture_pending=False;self.capture_listeners.clear();self.capture_message=''
         self.version=self.subscribe(bool(self.collect.get()),clear)
         self.snapshot=self.displayed=None;self.frozen.set(False);self.overlay.update(None);self.overlay.hide();self.refresh()
 
@@ -311,7 +316,7 @@ class TraceWindow:
         if self.closed or version is not None and version!=self.version:return
         if snapshot is None:
             self.displayed=None;self.frozen.set(False);self.overlay.hide()
-            self.capture_pending=False;self.capture_message=''
+            self.capture_pending=False;self.capture_listeners.clear();self.capture_message=''
         if snapshot and 'capture' in snapshot:self.receive_capture(snapshot)
         self.snapshot=snapshot;self.overlay.update(snapshot)
         if not self.frozen.get():self.displayed=snapshot
@@ -319,8 +324,9 @@ class TraceWindow:
 
     def update_state(self,state):self.state=state or {};self.overlay.update_state(self.state)
 
-    def error(self,message):
-        self.capture_pending=False
+    def error(self,message,version=None):
+        if version is not None and version!=self.version:return
+        self.capture_pending=False;self.capture_listeners.clear()
         self.overlay.update(None);self.overlay.hide();self.status.set('追踪读取失败：'+message[:180])
 
     def persist_appearance(self):

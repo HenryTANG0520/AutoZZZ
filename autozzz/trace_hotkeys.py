@@ -25,15 +25,20 @@ class HotkeyPoller:
         parsed={key:parse_hotkey(value) for key,value in bindings.items()}
         used=[item for item in parsed.values() if item]
         if len(set(used))!=len(used):raise ValueError('覆盖显隐和截图快捷键不能相同。')
-        self.bindings=parsed;self.held={key:self._down(combo) for key,combo in parsed.items()}
-    def _down(self,combo):
-        return bool(combo) and all(bool(self.read_key(code)&0x8000) for code in combo) and all(
+        self._configure_parsed(parsed)
+    def _configure_parsed(self,parsed):
+        self.bindings=parsed;self.held={key:self._primary_down(combo) for key,combo in parsed.items()}
+    def _primary_down(self,combo):
+        return bool(combo) and bool(self.read_key(combo[-1])&0x8000)
+    def _modifiers_match(self,combo):
+        # Win is not a trace modifier, but it is part of other tools' chords.
+        return not any(self.read_key(code)&0x8000 for code in (0x5B,0x5C)) and all(
             bool(self.read_key(code)&0x8000)==(code in combo[:-1]) for code in MODIFIERS.values())
     def poll(self,active):
         actions=[]
         for key,combo in self.bindings.items():
-            down=self._down(combo)
-            if active and down and not self.held.get(key,True):actions.append(key)
+            down=self._primary_down(combo)
+            if active and down and not self.held.get(key,True) and self._modifiers_match(combo):actions.append(key)
             self.held[key]=down
         return actions
     def close(self):self.bindings={};self.held={}

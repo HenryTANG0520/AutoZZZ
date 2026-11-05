@@ -572,7 +572,7 @@ class ExecutionWindow:
                     payload=event if 'snapshot' in event else self.session.take_trace()
                     if payload is not None and self.trace_window is not None:self.trace_window.update(payload['snapshot'],payload.get('version'))
                 elif kind=='trace_error':
-                    if self.trace_window is not None and not self.trace_window.closed:self.trace_window.error(event['message'])
+                    if self.trace_window is not None and not self.trace_window.closed:self.trace_window.error(event['message'],version=event.get('version'))
                 elif kind=="log":
                     self.write(event["message"])
                     if self.busy and not self.ui.closing:self.ui.overlay.append(event["message"])

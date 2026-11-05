@@ -76,7 +76,7 @@ class OverlayCompletionTests(unittest.TestCase):
     def auto(self):
         control=NS(epoch=3,task_epoch=3,status=lambda:dict(state='running',fresh_frame=True))
         snapshot=dict(epoch=3,generation=1,window_identity=dict(hwnd=1,pid=2),standard_size=[16,8],items={key:[] for key in ('vision','perf','timeline','decision')})
-        runtime=NS(ctx=object(),enabled=True,closed=False,snapshot=lambda:deepcopy(snapshot),_control=lambda:control)
+        runtime=NS(ctx=object(),enabled=True,closed=False,generation=1,snapshot=lambda:deepcopy(snapshot),_control=lambda:control)
         return AutomaticOverlayCapture(runtime),control,runtime
 
     def test_automatic_copy_preserves_source_and_uses_same_observation(self):

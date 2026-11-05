@@ -247,6 +247,19 @@ class McpTests(unittest.TestCase):
         self.assertFalse(self.manager.status()['running']);self.assertIn(('stop',),self.service.calls)
         with socket.socket() as sock:sock.bind(('127.0.0.1',self.port))
 
+    def test_stop_clears_listener_even_when_owned_execution_cleanup_fails(self):
+        self.initialize()
+        self.grant()
+        self.manager.tool('run_prepared_application',{})
+        with patch.object(self.service,'stop_execution',side_effect=RuntimeError('fixture release failure')) as stop:
+            with self.assertRaisesRegex(RuntimeError,'fixture release failure'):
+                self.manager.stop()
+        stop.assert_called_once_with()
+        self.assertFalse(self.manager.status()['running'])
+        self.assertEqual(self.manager.token,'')
+        self.assertEqual(self.manager.sessions,{})
+        with socket.socket() as sock:sock.bind(('127.0.0.1',self.port))
+
     def test_grant_expiry_and_configuration_change_never_start(self):
         self.grant()
         self.manager.grant['expires_at']=0

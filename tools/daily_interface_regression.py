@@ -25,9 +25,10 @@ from zzz_od.operation.choose_predefined_team import ChoosePredefinedTeam
 from one_dragon.base.operation.application.group_application import GroupApplication
 from one_dragon.base.operation.application_base import Application
 from one_dragon.base.geometry.point import Point
+from one_dragon.base.geometry.rectangle import Rect
 
-def success(status=None,**_):return OperationRoundResult(Kind.SUCCESS,status)
-def fail(status=None,**_):return OperationRoundResult(Kind.FAIL,status)
+def success(status=None,data=None,**_):return OperationRoundResult(Kind.SUCCESS,status,data)
+def fail(status=None,data=None,**_):return OperationRoundResult(Kind.FAIL,status,data)
 def by_result(value,status=None,**_):return success(status or value.status) if value.success else fail(status or value.status)
 ctx=NS()
 def op(**kw):return NS(ctx=ctx,round_success=success,round_fail=fail,round_by_op_result=by_result,**kw)
@@ -63,13 +64,23 @@ try:
             round_by_find_and_click_area=lambda *_a,**_kw:success('确认'))
         EngagementRewardApp.check_reward(reward)
         assert reward._autozzz_reward_claimed
+        area=NS(is_template_area=True,rect=Rect(1532,250,1602,350),template_sub_dir='compendium',
+                template_id='completed',template_match_threshold=.7)
+        ctx.screen_loader=NS(get_area=lambda *_:area)
+        matched={1532}
+        ctx.tm=NS(crop_and_match_template=lambda _image,rect,*_a,**_kw:
+            NS(max=object() if rect.x1 in matched else None))
         with patch('zzz_od.application.engagement_reward.engagement_reward_app.BackToNormalWorld',
                    return_value=NS(execute=lambda:OperationResult(True))):
-            reward.previous_node=NS(is_success=False)
+            reward.previous_node=EngagementRewardApp.check_engagement(reward)
             partial=EngagementRewardApp.back_afterwards(reward)
-            assert partial.is_fail and '已领取当前可领奖励' in partial.status and '未满' in partial.status
-            reward.previous_node=NS(is_success=True)
+            assert partial.is_fail and '已确认奖励领取弹窗' in partial.status and '未核实四档' in partial.status
+            assert daily.status()['engagement']==dict(activity_full=True,claimed_current_rewards=True,
+                daily_complete=False,verified_reward_tiers=[4])
+            matched.update((710,984,1258))
+            reward.previous_node=EngagementRewardApp.check_engagement(reward)
             assert EngagementRewardApp.back_afterwards(reward).is_success
+            assert daily.status()['engagement']['verified_reward_tiers']==[1,2,3,4]
 
         # 地图不可用时切换本次路线，不持久改写账号的地点配置。
         original_point='布亚斯特城区 - 片刻闲'

@@ -52,6 +52,10 @@ def main() -> None:
     wait(lambda: not manager.busy)
     assert manager.state == "ready", manager.status()
     ctx, control = service.ctx, manager.control
+    baseline_validator = control.input_validator
+    assert baseline_validator is manager.battle_control.input_guard
+    inherited_disc_methods = {name: getattr(Disc, name) for name in ("handle_init", "after_operation_done")}
+    assert not inherited_disc_methods.keys() & vars(Disc).keys()
     controller = ctx.controller
     window = [WindowState(True, True, (0, 0, 1920, 1080))]
     events, children, checks = [], [], []
@@ -157,6 +161,9 @@ def main() -> None:
             except ValueError: pass
             else: raise AssertionError("运行后旧确认仍可复用")
             checks.append("actual_disc_nodes_reset_filter_apply_scope_verify_reward_and_consume_confirmation_once")
+            assert not inherited_disc_methods.keys() & vars(Disc).keys()
+            assert all(getattr(Disc, name) is method for name, method in inherited_disc_methods.items())
+            checks.append("standalone_disc_restores_inherited_methods_for_later_group")
 
             for missing in ("重置", "按钮-A及以下", "按钮-全选已弃置"):
                 reset()
@@ -228,7 +235,7 @@ def main() -> None:
             with patch.object(temple.SuibianTempleCraft, "execute", changed_inside_child):
                 state = run("suibian_temple", token)
             assert state["state"] == "failed" and ("unconfirmed", "consumer-input") not in events, (state, events)
-            assert control.input_validator == manager.battle_control.check_input
+            assert control.input_validator is baseline_validator
             checks.append("nested_consumer_input_rechecks_resource_file_and_restores_previous_battle_validator_after_exit")
 
             reset()
@@ -252,7 +259,24 @@ def main() -> None:
             assert len(state["resources"]["confirmed"]) == 5, state
             assert all(item["state"] == "success" for item in state["applications"]), state
             assert state["resource_results"][0]["reward_verified"], state
+            assert not inherited_disc_methods.keys() & vars(Disc).keys()
             checks.append("actual_one_dragon_group_runs_both_resource_applications_under_one_confirmed_snapshot")
+
+            reset()
+            scenario["fail"] = "重置"
+            for app in ("suibian_temple", "drive_disc_dismantle"):
+                ctx.run_context.get_run_record(app, ctx.current_instance_idx).reset_record()
+            state = run("one_dragon", prepare("one_dragon"))
+            assert state["state"] == "failed", state
+            results = {item["id"]: item for item in state["applications"]}
+            assert results["suibian_temple"]["state"] == "success", state
+            disc_result = results["drive_disc_dismantle"]
+            assert disc_result["state"] == "failed" and "未识别筛选重置按钮" in disc_result["detail"], state
+            assert not state["resource_results"]
+            assert not any(event[1] in ("按钮-拆解", "按钮-拆解-确认") for event in events)
+            assert not inherited_disc_methods.keys() & vars(Disc).keys()
+            assert control.input_validator is baseline_validator
+            checks.append("actual_group_records_disc_failure_reason_without_irreversible_click")
         print(json.dumps(dict(checks=checks, game_started=False, hardware_input_sent=False, resources_consumed=False), ensure_ascii=False), flush=True)
     finally:
         service.close()

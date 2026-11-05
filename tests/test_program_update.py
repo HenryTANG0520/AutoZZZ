@@ -96,6 +96,21 @@ class ProgramUpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):transaction.apply()
         self.assertEqual((self.old/'config.json').read_text(),'concurrent edit');self.assertFalse(transaction.backup.exists())
 
+    def test_user_change_during_final_process_probe_restores_old_directory(self):
+        transaction=self.prepare();probes=[]
+        def probe(path):
+            probes.append(path)
+            if probes==[self.old,transaction.candidate,self.old]:
+                (self.old/'config.json').write_text('late edit',encoding='utf-8')
+            return []
+        transaction.probe=probe
+        with self.assertRaisesRegex(ValueError,'归档时用户文件已变化'):transaction.apply()
+        self.assertEqual(transaction.data['state'],'rolled_back')
+        self.assertEqual(verify_package(self.old)['version'],'old')
+        self.assertEqual((self.old/'config.json').read_text(encoding='utf-8'),'late edit')
+        self.assertFalse(transaction.backup.exists())
+        self.assertTrue(transaction.candidate.exists())
+
     def test_new_user_data_after_promotion_is_not_overwritten_by_rollback(self):
         transaction=self.prepare()
         def changed(state):

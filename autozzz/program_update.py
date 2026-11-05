@@ -95,9 +95,10 @@ class ProgramUpdate:
         if not self._marker(self.candidate,self.data['new_manifest']):raise ValueError('待安装程序包已变化。')
         return verify_package(self.candidate,strict=True)
 
-    def _users(self):
-        managed=read_manifest(self.target)['files']
-        return {name:path for name,path in files(self.target) if name!=MANIFEST and name not in managed}
+    @staticmethod
+    def _users(root):
+        managed=read_manifest(root)['files']
+        return {name:path for name,path in files(root) if name!=MANIFEST and name not in managed}
 
     def apply(self):
         if self.data['state']!='prepared':raise ValueError('该事务已经执行过，请查询或恢复原事务。')
@@ -108,7 +109,7 @@ class ProgramUpdate:
             if self.probe(self.target) or self.probe(self.candidate):raise RuntimeError('安装目录或新版本仍有程序运行，请等待原进程退出。')
             current={name:digest(path) for name,path in files(self.target) if name in self.data['program_before']}
             if current!=self.data['program_before']:raise ValueError('准备后程序文件已变化，请重新准备更新。')
-            users=self._users();hashes={name:digest(path) for name,path in users.items()}
+            users=self._users(self.target);hashes={name:digest(path) for name,path in users.items()}
             managed_new={key.casefold() for key in new['files']}
             self.state('copying_user_data',user_files=hashes)
             for name,path in users.items():
@@ -117,9 +118,11 @@ class ProgramUpdate:
                 destination=filesystem_path(self.candidate/name)
                 destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,destination)
                 if digest(destination)!=hashes[name]:raise ValueError('用户文件复制未核实：'+name)
-            if {name:digest(path) for name,path in self._users().items()}!=hashes:raise ValueError('复制期间用户文件已变化。')
+            if {name:digest(path) for name,path in self._users(self.target).items()}!=hashes:raise ValueError('复制期间用户文件已变化。')
             if self.probe(self.target):raise RuntimeError('安装目录有新进程启动，更新尚未替换。')
             self.state('moving_old');os.rename(filesystem_path(self.target),filesystem_path(self.backup));self.state('old_moved')
+            if {name:digest(path) for name,path in self._users(self.backup).items()}!=hashes:
+                raise ValueError('归档时用户文件已变化，已停止安装。')
             self.state('moving_new');os.rename(filesystem_path(self.candidate),filesystem_path(self.target));self.state('installed')
             verify_package(self.target)
             if any(digest(filesystem_path(self.target/name))!=expected for name,expected in hashes.items()):raise ValueError('安装后用户文件核对失败。')
@@ -145,7 +148,7 @@ class ProgramUpdate:
         if self.target.exists():
             if not new_here or self.candidate.exists():raise ValueError('恢复目标存在其他文件，未覆盖。')
             expected=self.data.get('user_files',{})
-            actual=self._users()
+            actual=self._users(self.target)
             if set(actual)!=set(expected) or any(digest(actual[name])!=value for name,value in expected.items()):raise ValueError('新目录中的用户资料已变化，未自动回退。')
             os.rename(filesystem_path(self.target),filesystem_path(self.candidate))
         os.rename(filesystem_path(self.backup),filesystem_path(self.target));self.state('rolled_back');return True

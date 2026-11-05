@@ -99,6 +99,7 @@ class MapStore:
         from one_dragon.utils import cv2_utils,yaml_utils
         from zzz_od.application.world_patrol.world_patrol_area import WorldPatrolLargeMap,WorldPatrolLargeMapIcon
         from one_dragon.base.geometry.point import Point
+        revision=self.revision(key)
         road,icons,routes=self._paths(key);image=None;rows=[]
         if road.is_file():
             from PIL import Image
@@ -111,10 +112,11 @@ class MapStore:
                 raw=yaml_utils.safe_load(self.tx.read(icons));data_tree(raw)
                 if not isinstance(raw,list):raise ValueError("地图图标须为列表。")
                 rows=[WorldPatrolLargeMapIcon(**row) for row in raw]
+        if self.revision(key)!=revision:raise ValueError("地图或关联路线已变化，请重新读取。")
         large=WorldPatrolLargeMap(key,image,rows)
         ids=[uuid.uuid4().hex for _ in rows]
         self.base_icons={identifier:icon.to_dict() for identifier,icon in zip(ids,rows)}
-        self.state=dict(id=uuid.uuid4().hex,key=key,version=1,revision=self.revision(key),large=large,ids=ids,
+        self.state=dict(id=uuid.uuid4().hex,key=key,version=1,revision=revision,large=large,ids=ids,
                         anchor=None if image is None else Point(image.shape[1]//2,image.shape[0]//2),mini=None,views=[],match=None,
                         transform=[1.,1.,0.,0.],steps=[],base_size=None if image is None else [image.shape[1],image.shape[0]],
                         dirty=False,threshold=self.preferences['threshold'],use_icons=self.preferences['use_icons'],warning='',base_missing=image is None)

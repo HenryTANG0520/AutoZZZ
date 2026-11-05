@@ -12,6 +12,7 @@ from typing import Any
 from .onedragon_control import ObservationExpired,ExecutionStopped
 
 _battle_input: ContextVar[bool] = ContextVar("autozzz_battle_input",default=False)
+_requires_battle_hud: ContextVar[bool] = ContextVar('autozzz_requires_battle_hud', default=False)
 _permit_scope: ContextVar[int | str | None] = ContextVar('autozzz_battle_permit', default=None)
 _chain_frame: ContextVar[tuple | None] = ContextVar('autozzz_chain_frame', default=None)
 _UNOBSERVED = object()
@@ -122,6 +123,7 @@ class BattleInputControl:
                 'battle_permit_epoch_changed'if self.allowed_epoch!=epoch else
                 self.permit_reason if not self.allowed else
                 'periodic_action_outside_normal_battle'if _permit_scope.get()=='periodic'and self.permit_reason!='battle_visible'else
+                'action_requires_battle_hud' if _requires_battle_hud.get() and self.permit_reason == 'chain_visible' else
                 'fresh_frame_required'if hasattr(control,'observed_epoch')and control.observed_epoch!=epoch else None)
         if reason is None:return None
         return dict(reason=reason,stage=stage,message=str(message)[:160],allowed=self.allowed,
@@ -167,6 +169,12 @@ class BattleInputControl:
         from one_dragon.utils.log_utils import log
         owner=self
         def atomic(operation):
+            # The source main loop can select a chain too. Restrict buttons,
+            # while preserving chain choices, releases, waits and custom states.
+            name = getattr(operation, 'op_name', '')
+            requires_hud = name.startswith('按键-') and not (
+                name.startswith('按键-连携技-') or name.endswith('松开') or getattr(operation, 'is_release', False))
+            hud_scope = _requires_battle_hud.set(requires_hud)
             token=_battle_input.set(True)
             try:
                 checkpoint=getattr(owner.control,'checkpoint',None)
@@ -181,7 +189,9 @@ class BattleInputControl:
                 owner._reset_cancelled_atomic(operation)
                 owner._record_cancellation(evidence)
                 return _CancelledAtomic(evidence)
-            finally:_battle_input.reset(token)
+            finally:
+                _battle_input.reset(token)
+                _requires_battle_hud.reset(hud_scope)
         for index,operation in enumerate(executor.op_list):
             with executor._op_lock:
                 if not executor.running:return False
@@ -210,6 +220,7 @@ class BattleInputControl:
 
     def check_input(self) -> None:
         if _battle_input.get() and (not self.allowed or self.allowed_epoch!=self.control.epoch or not self._current_permit()
+                or (_requires_battle_hud.get() and self.permit_reason == 'chain_visible')
                 or (_permit_scope.get()=='periodic' and self.permit_reason!='battle_visible')):
             message="当前画面不允许战斗输入。"
             # Capture at rejection: a newer HUD frame may restore permission
@@ -225,6 +236,7 @@ class BattleInputControl:
         from one_dragon.base.conditional_operation import operation_executor as executor_source
         from one_dragon.base.conditional_operation.operator import ConditionalOperator
         from one_dragon.base.conditional_operation.state_record_service import StateRecordService
+        from one_dragon.utils import cv2_utils
         from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
         from zzz_od.auto_battle.auto_battle_context import AutoBattleContext
         from zzz_od.auto_battle.atomic_op.btn_common import AtomicBtnCommon,BtnRunStatus
@@ -232,11 +244,13 @@ class BattleInputControl:
         from zzz_od.auto_battle.atomic_op.btn_quick_assist import AtomicBtnQuickAssist
         execute = OperationExecutor._run
         submit = OperationExecutor.run_async
+        init_operator = ConditionalOperator.__init__
         trigger = ConditionalOperator._trigger_scene
         periodic = AutoBattleOperator.operate_periodically
         check = AutoBattleContext.check_battle_state
         chain_check = AutoBattleContext.check_chain_attack
         chain_recognition = AutoBattleContext._check_chain_attack_in_parallel
+        chain_match = AutoBattleContext._match_chain_agent_in
         switch = AutoBattleContext.switch_by_name
         publish = StateRecordService.batch_update_states
         assign = AutoBattleContext.__setattr__
@@ -254,6 +268,13 @@ class BattleInputControl:
                     if getattr(operation,'_autozzz_cancelled_owner',None)is owner:
                         owner._reset_cancelled_atomic(operation)
             self._patch(atomic_type,'stop',guarded_stop)
+
+        @wraps(init_operator)
+        def guarded_operator_init(operator, *args, **kwargs):
+            init_operator(operator, *args, **kwargs)
+            # The source registers its completion callback under this lock.
+            # An already-completed future invokes that callback inline.
+            operator._task_lock = threading.RLock()
 
         @wraps(execute)
         def guarded_execute(executor):
@@ -342,6 +363,22 @@ class BattleInputControl:
                 if evidence is None:raise
                 owner._record_cancellation(evidence)
 
+        @wraps(chain_match)
+        def guarded_chain_match(battle, image, possible_agents):
+            frame = _chain_frame.get()
+            if frame is None or frame[0] is not battle:
+                return chain_match(battle, image, possible_agents)
+
+            # The fixed recognizer passes views of the two portrait regions.
+            # Supply the verified agent for that view so a stale costume hint
+            # cannot change the portrait before the source publishes its states.
+            areas = (battle.area_chain_1, battle.area_chain_2)
+            for portrait in frame[3].portraits:
+                verified = cv2_utils.crop_image_only(frame[1], areas[portrait.side - 1].rect)
+                if image.shape == verified.shape and image.ctypes.data == verified.ctypes.data:
+                    return portrait.agent
+            return None
+
         @wraps(switch)
         def guarded_switch(battle, agent_name):
             if _chain_frame.get() is None:
@@ -384,7 +421,7 @@ class BattleInputControl:
             else:
                 version = owner._frame_permit('battle_not_verified')
             scope = _permit_scope.set(version)
-            frame = _chain_frame.set((battle, screen, screenshot_time) if not in_battle and chain is not None else None)
+            frame = _chain_frame.set((battle, screen, screenshot_time, chain) if chain is not None else None)
             try:
                 return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
             finally:
@@ -393,11 +430,13 @@ class BattleInputControl:
 
         self._patch(OperationExecutor,"_run",guarded_execute)
         self._patch(OperationExecutor,'run_async',guarded_submit)
+        self._patch(ConditionalOperator,'__init__',guarded_operator_init)
         self._patch(ConditionalOperator,'_trigger_scene',guarded_trigger)
         self._patch(AutoBattleOperator,"operate_periodically",guarded_periodic)
         self._patch(AutoBattleContext,"check_battle_state",guarded_check)
         self._patch(AutoBattleContext,'check_chain_attack',guarded_chain_check)
         self._patch(AutoBattleContext,'_check_chain_attack_in_parallel',guarded_chain_recognition)
+        self._patch(AutoBattleContext,'_match_chain_agent_in',guarded_chain_match)
         self._patch(AutoBattleContext,'switch_by_name',guarded_switch)
         self._patch(AutoBattleContext,"__setattr__",guarded_assign)
         self._patch(StateRecordService,'batch_update_states',guarded_publish)

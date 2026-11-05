@@ -149,6 +149,7 @@ class DailyInterfaceControl:
         return op.round_wait('按名称查找预编队伍：'+state['name'], wait=1)
 
     def install(self):
+        from one_dragon.base.geometry.rectangle import Rect
         from zzz_od.operation.compendium.combat_simulation import CombatSimulation
         from zzz_od.operation.choose_predefined_team import ChoosePredefinedTeam
         from zzz_od.application.engagement_reward.engagement_reward_app import EngagementRewardApp
@@ -196,15 +197,39 @@ class DailyInterfaceControl:
             op.__dict__.pop('_autozzz_cards', None)
             return original(op)
 
+        def check_reward_tiers(op, _original):
+            area = self.ctx.screen_loader.get_area('快捷手册', '活跃度奖励-4')
+            if area is None or not area.is_template_area:
+                return op.round_fail('未配置日常奖励已领取标记')
+            # 固定 SDK 的 1080p 奖励栏每档间隔 274 像素，四档共用同一已领取模板。
+            rect = area.rect
+            tiers = []
+            for tier in range(1, 5):
+                offset = (4 - tier) * 274
+                region = Rect(rect.x1 - offset, rect.y1, rect.x2 - offset, rect.y2)
+                match = self.ctx.tm.crop_and_match_template(
+                    op.last_screenshot, region, area.template_sub_dir, area.template_id,
+                    threshold=area.template_match_threshold,
+                ).max
+                if match is not None:
+                    tiers.append(tier)
+            if len(tiers) == 4:
+                return op.round_success('活跃度已满，四档日常奖励均已领取', data=tiers)
+            return op.round_fail('未核实四档日常奖励全部领取', data=tiers)
+
         def reward_done(op, original):
-            completed = op.previous_node.is_success
+            verification = op.previous_node
+            tiers = verification.data or []
             result = original(op)
+            completed = verification.is_success and result.is_success
             claimed = getattr(op, '_autozzz_reward_claimed', False)
-            self.engagement = dict(activity_full=completed, claimed_current_rewards=claimed,
-                daily_complete=completed and result.is_success)
-            if completed and result.is_success:
-                return op.round_success('活跃度已满，日常奖励已领取')
-            detail = '已领取当前可领奖励；活跃度未满，每日尚未完成' if claimed else '活跃度未满，每日尚未完成；未核实新奖励领取'
+            self.engagement = dict(activity_full=4 in tiers, claimed_current_rewards=claimed,
+                daily_complete=completed, verified_reward_tiers=tiers)
+            if verification.is_success:
+                return op.round_success(verification.status) if completed else result
+            detail = verification.status or '未核实每日完成'
+            if claimed:
+                detail = f'本次已确认奖励领取弹窗。{detail}'
             return op.round_fail(detail)
 
         def map_area(op, original):
@@ -221,6 +246,7 @@ class DailyInterfaceControl:
         self.patch(ChoosePredefinedTeam, 'choose_team', self.choose_team)
         self.patch(EngagementRewardApp, 'check_reward', reward_result)
         self.patch(EngagementRewardApp, 'back_at_first', begin_reward)
+        self.patch(EngagementRewardApp, 'check_engagement', check_reward_tiers)
         self.patch(EngagementRewardApp, 'back_afterwards', reward_done)
         self.patch(MapTransport, 'choose_area', map_area)
         self.patch(CoffeeApp, 'transport', lambda op, original:

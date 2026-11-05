@@ -84,6 +84,7 @@ class CloseAfterRunTests(unittest.TestCase):
         engine._input_ready = False
         engine.state, engine.error = "prepared", ""
         engine.client_exit, engine.client_exit_result, engine.run_lease = None, {}, None
+        engine.rotation_guard = None
         engine.control = ExecutionControl(engine._probe, lambda: None, lambda: None, lambda: None, lambda: None)
         engine.control.input_validator = engine._validate_task_input
         engine.prepared_app, engine.prepared_hash = "one_dragon", "fixture-config"

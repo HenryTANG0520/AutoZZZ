@@ -11,8 +11,9 @@ from contextlib import contextmanager,nullcontext
 from typing import Any
 
 from . import windows as win32_io  # 在上游导入 pyautogui 前设置与 AutoZZZ 一致的 DPI。
-from pynput import keyboard
+from pynput import keyboard, mouse
 from pygetwindow import Win32Window
+from one_dragon.base.controller.pc_button import pc_button_utils
 from one_dragon.base.controller.pc_button.keyboard_mouse_controller import KeyboardMouseController
 from one_dragon.base.controller.pc_game_window import PcGameWindow
 from one_dragon.base.controller.pc_screenshot.pc_screenshot_controller import PcScreenshotController
@@ -51,7 +52,7 @@ class ControlledDevice:
     """记录本进程按下的键；不允许恢复旧任务的设备调用。"""
     def __init__(self, raw: Any, control: ExecutionControl,foreground_guard=None,input_scope=None):
         self.raw, self.control = raw, control
-        self.pressed: set[Any] = set()
+        self._pressed: dict[Any, tuple[int, object]] = {}
         self.lock = threading.RLock()
         self.before_press = None
         self.foreground_guard=foreground_guard
@@ -61,26 +62,46 @@ class ControlledDevice:
         if self.foreground_guard is not None:self.foreground_guard()
         return self.control.input(action)
 
-    def press(self, key: Any) -> None:
+    @property
+    def pressed(self) -> set[Any]:
+        with self.lock:
+            return set(self._pressed)
+
+    def press(self, key: Any) -> object:
+        owner = object()
+
         def send():
             with self.lock:
                 if self.before_press is not None:self.before_press(key)
-                self.pressed.add(key)
+                self._pressed[key] = (self.control.task_epoch, owner)
                 self.raw.press(key)
-        self._input(send)
+        try:
+            self._input(send)
+        except Exception:
+            self.release(key, owner=owner)
+            raise
+        return owner
 
-    def release(self, key: Any) -> None:
+    def release(self, key: Any, *, owner: object | None = None) -> None:
         with self.lock:
-            if key in self.pressed:
-                self.raw.release(key)
-                self.pressed.discard(key)
+            active = self._pressed.get(key)
+            if active is None:
+                return
+            epoch, active_owner = active
+            if owner is None:
+                if epoch > self.control.task_epoch:
+                    return
+            elif owner is not active_owner:
+                return
+            self.raw.release(key)
+            del self._pressed[key]
 
     def tap(self, key: Any) -> None:
-        self.press(key)
+        owner = self.press(key)
         try:
             self.control.hold(.03)
         finally:
-            self.release(key)
+            self.release(key, owner=owner)
 
     def type(self, text: str) -> None:
         with self.input_scope() if self.input_scope is not None else nullcontext():
@@ -102,8 +123,9 @@ class ControlledDevice:
         self._input(lambda: self.raw.scroll(dx, dy))
 
     def reset(self) -> None:
-        for key in list(self.pressed):
-            self.release(key)
+        with self.lock:
+            for key, (_, owner) in list(self._pressed.items()):
+                self.release(key, owner=owner)
 
 
 class ControlledKeyboard(KeyboardMouseController):
@@ -116,18 +138,28 @@ class ControlledKeyboard(KeyboardMouseController):
     def tap(self, key: str) -> None:
         self.press(key, .03)
 
+    def _button(self, key: str) -> tuple[ControlledDevice, Any]:
+        if pc_button_utils.is_mouse_button(key):
+            return self.mouse, pc_button_utils.get_mouse_button(key)
+        return self.keyboard, pc_button_utils.get_keyboard_button(key)
+
     def press(self, key: str, press_time: float | None = None) -> None:
         if press_time is not None and (not math.isfinite(press_time) or press_time < 0):
             raise ValueError("按键时长必须是有限非负数。")
-        super().press(key, None)
+        device, button = self._button(key)
+        owner = device.press(button)
         if press_time is not None:
             try:
                 self.control.hold(press_time)
             finally:
-                self.release(key)
+                device.release(button, owner=owner)
+
+    def release(self, key: str) -> None:
+        if key is not None:
+            device, button = self._button(key)
+            device.release(button)
 
     def reset(self) -> None:
-        super().reset()
         self.keyboard.reset()
         self.mouse.reset()
 
@@ -383,11 +415,12 @@ class ManagedController(ZPcController):
         if pos is not None:self._background_cursor(pos)
         if not self.control.hold(.01):self.control.checkpoint(require_frame=True)
         self._send_activate()
+        owner = object()
         try:
-            self.background_mouse.press()
+            self.background_mouse.press(owner=owner)
             if not self.control.hold(max(.02,press_time)):self.control.checkpoint(require_frame=True)
             self._foreground_required=False;return True
-        finally:self.background_mouse.reset()
+        finally:self.background_mouse.reset(owner=owner)
 
     def _background_drag(self,start,end,duration=.5,*,timing=None):
         if type(duration)not in (int,float) or not math.isfinite(duration) or duration<0:raise ValueError('拖动时长必须为有限非负数。')
@@ -396,8 +429,9 @@ class ManagedController(ZPcController):
         release_wait=.2 if timing is None else timing.release_wait
         moving=max(.1,duration-release_wait if timing is None else timing.move_duration)
         self._send_activate()
+        owner = object()
         try:
-            self.background_mouse.press()
+            self.background_mouse.press(owner=owner)
             if not self.control.hold(press_wait):self.control.checkpoint(require_frame=True)
             steps=max(5,round(moving/.02))
             from one_dragon.base.geometry.point import Point
@@ -406,7 +440,7 @@ class ManagedController(ZPcController):
                 if not self.control.hold(moving/steps):self.control.checkpoint(require_frame=True)
             if not self.control.hold(release_wait):self.control.checkpoint(require_frame=True)
             self._foreground_required=False
-        finally:self.background_mouse.reset()
+        finally:self.background_mouse.reset(owner=owner)
 
     def enable_xbox(self) -> None:
         self._enable_gamepad('xbox')
@@ -466,17 +500,18 @@ class ManagedController(ZPcController):
     def _foreground_click(self, pos: Any, press_time: float = .1, pc_alt: bool = False) -> bool:
         if self.using_background:self._physical_checkpoint()
         self.control.checkpoint(require_frame=True)
+        alt_owner = None
         try:
             if pc_alt:
-                self.keyboard_controller.keyboard.press(keyboard.Key.alt)
+                alt_owner = self.keyboard_controller.keyboard.press(keyboard.Key.alt)
                 if not self.control.hold(.2):
                     return False
             self._position(pos)
             self.keyboard_controller.press("mouse_left", max(.03, press_time))
             return True
         finally:
-            if pc_alt:
-                self.keyboard_controller.keyboard.release(keyboard.Key.alt)
+            if alt_owner is not None:
+                self.keyboard_controller.keyboard.release(keyboard.Key.alt, owner=alt_owner)
 
     @physical_input
     def _foreground_drag(self, start: Any, end: Any, duration: float = .5, *, timing: Any = None) -> None:
@@ -485,7 +520,8 @@ class ManagedController(ZPcController):
         press_wait = .02 if timing is None else timing.press_wait
         release_wait = .2 if timing is None else timing.release_wait
         move_duration = max(.1, duration-release_wait if timing is None else timing.move_duration)
-        self.keyboard_controller.press("mouse_left")
+        device = self.keyboard_controller.mouse
+        owner = device.press(mouse.Button.left)
         try:
             if not self.control.hold(press_wait):
                 return
@@ -501,7 +537,7 @@ class ManagedController(ZPcController):
                     return
             self.control.hold(release_wait)
         finally:
-            self.keyboard_controller.release("mouse_left")
+            device.release(mouse.Button.left, owner=owner)
 
     @physical_input
     def scroll(self, down: int, pos: Any = None) -> None:

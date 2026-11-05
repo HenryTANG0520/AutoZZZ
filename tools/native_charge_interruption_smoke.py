@@ -86,7 +86,13 @@ def replay(directory, restore_enabled):
         assert repeat._get_next_node(sent).cn == '恢复电量'
         entry = budget.pending[0].copy()
         stale = step(repeat, '判断再来一次', REPEAT, FINISH)
-        assert stale.result is OperationRoundResultEnum.RETRY and clicks == [REPEAT]
+        assert stale.result is OperationRoundResultEnum.WAIT and clicks == [REPEAT]
+        control.set_manual_pause(True)
+        control.set_manual_pause(False)
+        control.observe(lambda: None)
+        with patch('autozzz.onedragon_charge.monotonic', return_value=time.monotonic() + 120):
+            resumed = step(repeat, '判断再来一次', REPEAT, FINISH)
+        assert resumed.result is OperationRoundResultEnum.WAIT and clicks == [REPEAT] and not control.stopped
 
         if restore_enabled:
             nested = RestoreCharge(ctx)
@@ -150,13 +156,14 @@ def replay_victory_recovery(directory):
         control.observe(lambda: None)
         charge._reserve(operation, 20)
         revision_before = budget.path.read_bytes()
-        with patch.object(budget, '_write', side_effect=OSError('interrupted ledger settlement')):
-            try:
-                operation._execute_one_round()
-            except OSError as exc:
-                assert str(exc) == 'interrupted ledger settlement'
-            else:
-                raise AssertionError('Expected the ledger write to fail after recording the source victory')
+        scope = UpstreamControlAdapter(control)
+        scope.install()
+        try:
+            with patch.object(budget, '_write', side_effect=OSError('interrupted ledger settlement')):
+                result = operation._execute_one_round()
+                assert result.is_fail and control.stopped and 'interrupted ledger settlement' in control.error
+        finally:
+            scope.close()
         assert budget.path.read_bytes() == revision_before
     finally:
         charge.close()

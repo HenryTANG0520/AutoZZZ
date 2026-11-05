@@ -294,6 +294,7 @@ class LibraryStore:
         return route.to_dict(), None, []
 
     def _document(self, kind, key, data=None, *, draft=False):
+        revision = self._revision(kind, key) if kind == "world_patrol_route" and data is None else None
         raw = self._raw(kind, key) if data is None else data
         data_tree(raw)
         fields = []
@@ -303,6 +304,8 @@ class LibraryStore:
             config = store.get(kind + ":" + key); config.data = copy.deepcopy(raw)
             fields = self._challenge_fields(store, kind + ":" + key, config)
         metadata = self._metadata(kind, key)
+        if revision is not None and metadata["revision"] != revision:
+            raise ValueError("资料已变化，请重新读取。")
         if kind == "world_patrol_route" and raw.get("tp_area_id") in self.areas:
             metadata["name"] = self.areas[raw["tp_area_id"]].full_name + " · " + str(raw.get("tp_name", "")) + f" #{raw.get('idx', '')}"
         return dict(metadata, data=raw, fields=fields, draft=draft)
