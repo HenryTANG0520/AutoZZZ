@@ -55,6 +55,8 @@ class AgentTemplates:
         return hashlib.sha256(json.dumps(values,sort_keys=True).encode()).hexdigest()
 
     def catalog(self):
+        from .agent_template_registry import registrations,recognition
+        registered=registrations()
         rows={}
         for step in self.steps:
             parent=self.tx.inside(self.root/'assets/template'/step.sub_dir)
@@ -67,7 +69,7 @@ class AgentTemplates:
         result=[]
         for agent in sorted(rows):
             paths=self.paths(agent);done=sum((path/'raw.png').is_file() for path in paths)
-            if done:result.append(dict(id=agent,completed=done,total=len(self.steps)))
+            if done:result.append(dict(id=agent,completed=done,total=len(self.steps),registration=recognition(agent)))
         archive_root=self.tx.inside(self.root/'archives/agent-templates');archives=[]
         if archive_root.exists():
             for path in sorted(archive_root.iterdir(),reverse=True):
@@ -75,7 +77,7 @@ class AgentTemplates:
                 except (ValueError,OSError):continue
                 archives.append(dict(id=path.name,metadata=meta['metadata']))
         return dict(agents=result,steps=[dict(key=s.key,name=s.name,hint=s.hint,side_selectable=s.side_selectable) for s in self.steps],
-                    archives=archives,pending=self.tx.pending.exists())
+                    archives=archives,pending=self.tx.pending.exists(),registered_templates=list(registered.values()))
 
     def open(self,agent=None):
         if agent is not None:self.agent_id(agent)
@@ -158,7 +160,9 @@ class AgentTemplates:
             encoded=self.png(image)
             images.append(None if encoded is None else base64.b64encode(encoded).decode())
             encoded_mask=self.png(mask);masks.append(None if encoded_mask is None else base64.b64encode(encoded_mask).decode())
+        from .agent_template_registry import recognition
         return dict(token=draft['token'],agent=draft['agent'],signature=draft['signature'],images=images,masks=masks,preview=preview,rect=rect,
+                    registration=None if draft['agent'] is None else recognition(draft['agent']),
                     changed=[i for i,x in enumerate(draft['screens']) if x is not None],sides=draft['sides'],selected=selected)
 
     def save(self,token,agent):
@@ -224,13 +228,13 @@ class AgentTemplates:
         from .agent_template_hotkeys import validate_bindings
         from .config_transaction import atomic_apply
         if type(values)is not dict or set(values)!={'hotkeys','float_enabled','float_expanded','float_x','float_y'}:raise ValueError('模板偏好字段无效。')
-        validate_bindings(values['hotkeys'])
+        bindings=validate_bindings(values['hotkeys'])
         if any(type(values[k])is not bool for k in ('float_enabled','float_expanded')) or any(type(values[k])is not int or not -10000<=values[k]<=10000 for k in ('float_x','float_y')):
             raise ValueError('悬浮窗开关或位置无效。')
         with profile_lock(self.root/'.agent-template-presentation'):
             config=AgentTemplateGeneratorConfig();self.tx.inside(config._get_write_path())
             def apply():
-                for key,value in values['hotkeys'].items():config.set_hotkey(key,value)
+                for key,value in bindings.items():config.set_hotkey(key,value)
                 for key in ('float_enabled','float_expanded','float_x','float_y'):setattr(config,key,values[key])
             atomic_apply(config,revision,apply,self.root)
         return self.preferences()

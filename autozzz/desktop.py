@@ -190,6 +190,8 @@ def _settings(ui, server_names):
     tools=sections['tools'];title(tools,'开发工具')
     from .agent_templates_ui import open_agent_templates
     ttk.Button(tools,text='代理人头像模板…',command=lambda:open_agent_templates(ui),style='Accent.TButton').grid(row=1,column=0,sticky='w',pady=d(10))
+    from .onedragon_devtools_ui import open_devtools
+    ttk.Button(tools,text='图像、模板与画面…',command=lambda:open_devtools(ui,'global' if ui.server.get()=='国际服' else 'cn')).grid(row=2,column=0,sticky='w',pady=d(10))
     from .program_updates_ui import open_program_updates
     ttk.Button(updates,text='版本与归档…',command=lambda:open_program_updates(ui),style='Accent.TButton').grid(row=1,column=0,sticky='w',pady=d(10))
     ttk.Checkbutton(updates,text='启动时检查更新',variable=ui.startup_updates.enabled,command=ui.startup_updates.save).grid(row=2,column=0,sticky='w',pady=d(8))

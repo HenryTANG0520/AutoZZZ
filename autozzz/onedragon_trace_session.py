@@ -10,6 +10,14 @@ class TraceSubscription:
         self.emit=emit;self.lock=threading.RLock();self.enabled=False;self.version=0
         self.applied=None;self.next_poll=0.;self.clear_version=0;self.error=''
         self.latest=None;self.notification_pending=False;self.capture_version=None;self.capture_deadline=0.
+        self.poll_interval=.2;self.preference_next=0.
+
+    def refresh_preferences(self):
+        if time.monotonic()<self.preference_next:return
+        self.preference_next=time.monotonic()+1
+        from .trace_preferences import TracePreferences
+        try:self.poll_interval=TracePreferences().load()['state_poll_interval_ms']/1000
+        except (OSError,ValueError):pass  # Keep last valid setting; never interrupt the running game.
 
     def _deliver(self,snapshot,version=None):
         with self.lock:
@@ -51,8 +59,9 @@ class TraceSubscription:
                     with self.lock:
                         if version==self.version:self._deliver(None,version)
             if not enabled:return
+            self.refresh_preferences()
             if time.monotonic()<self.next_poll:return
-            self.next_poll=time.monotonic()+.2
+            self.next_poll=time.monotonic()+self.poll_interval
             snapshot=call('trace_snapshot') if enabled else None
             with self.lock:capture=version==self.version==self.capture_version
             if capture:

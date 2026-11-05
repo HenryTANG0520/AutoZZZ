@@ -43,6 +43,8 @@ def validate_environment(config, repo):
         raise ValueError("截图方式无效。")
     if config.resource_source not in {item.value for item in repo.resource_source_options}:
         raise ValueError("资源下载源无效。")
+    if getattr(config,'pip_source',repo.get_source_default('pip_source')) not in {item.value for item in repo.get_source_values('pip_source')}:
+        raise ValueError('Python 依赖下载源无效。')
 
 
 class EnvironmentStore:
@@ -88,6 +90,7 @@ class EnvironmentStore:
                 fields.append(field_value("clear_" + key, "清除" + label, False, "bool", group="网络"))
             fields.append(field_value("auto_fetch_gh_proxy_url", "自动获取 GitHub 代理地址", config.auto_fetch_gh_proxy_url, "bool", group="网络"))
             enum("resource_source", "资源下载源", [dict(label=v.label, value=v.value) for v in config.repo_config.resource_source_options], "下载")
+            enum('pip_source','Python 依赖下载源',[dict(label=v.label,value=v.value) for v in config.repo_config.get_source_values('pip_source')],'下载')
             enum("screenshot_method", "截图方式", [dict(label=v.value.label, value=v.value.value) for v in ScreenshotMethodEnum], "运行")
             fields.append(field_value("is_debug", "详细日志", config.is_debug, "bool", group="运行"))
         else:
@@ -140,7 +143,7 @@ class EnvironmentStore:
             # 校验候选值时只改内存；所有领域 setter 最终统一原子发布。
             if app_id == "_environment":
                 from types import SimpleNamespace
-                names = ("proxy_type", "personal_proxy", "gh_proxy_url", "auto_fetch_gh_proxy_url", "resource_source", "screenshot_method", "is_debug")
+                names = ("proxy_type", "personal_proxy", "gh_proxy_url", "auto_fetch_gh_proxy_url", "resource_source", "screenshot_method", "is_debug",'pip_source')
                 candidate = {name: updates.get(name, getattr(config, name)) for name in names}
                 candidate.update(is_personal_proxy=candidate["proxy_type"] == "personal", is_gh_proxy=candidate["proxy_type"] == "ghproxy")
                 validate_environment(SimpleNamespace(**candidate), self.ctx.repo_config)

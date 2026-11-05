@@ -13,8 +13,7 @@ from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
-from .agent_template_hotkeys import DEFAULTS,ACTIONS,validate_bindings
-from .trace_hotkeys import HotkeyPoller
+from .agent_template_hotkeys import DEFAULTS,ACTIONS,validate_bindings,HotkeyPoller
 
 
 class TemplateFloat:
@@ -81,11 +80,11 @@ class AgentTemplatesWindow:
         self.search.trace_add('write',lambda *_:self.filter_list())
         self.book=ttk.Notebook(self.window);self.book.grid(row=1,column=0,sticky='nsew',padx=d(12))
         listing=ttk.Frame(self.book);listing.rowconfigure(0,weight=1);listing.columnconfigure(0,weight=1);self.book.add(listing,text='模板列表')
-        self.table=ttk.Treeview(listing,columns=('id','progress'),show='headings',selectmode='browse');self.table.heading('id',text='模板名称');self.table.heading('progress',text='完成');self.table.column('id',width=d(460));self.table.column('progress',width=d(100));self.table.grid(row=0,column=0,sticky='nsew')
+        self.table=ttk.Treeview(listing,columns=('id','progress','support'),show='headings',selectmode='browse');self.table.heading('id',text='模板 ID');self.table.heading('progress',text='完成');self.table.heading('support',text='引擎角色');self.table.column('id',width=d(300));self.table.column('progress',width=d(80));self.table.column('support',width=d(180));self.table.grid(row=0,column=0,sticky='nsew')
         sy=ttk.Scrollbar(listing,command=self.table.yview);sy.grid(row=0,column=1,sticky='ns');self.table.configure(yscrollcommand=sy.set);self.table.bind('<Double-1>',lambda _:self.open_selected())
         self.editor=ttk.Frame(self.book,padding=d(12));self.editor.columnconfigure(0,weight=1);self.editor.rowconfigure(3,weight=1);self.book.add(self.editor,text='六步编辑')
         name=ttk.Frame(self.editor);name.grid(row=0,column=0,sticky='ew');name.columnconfigure(1,weight=1)
-        ttk.Label(name,text='模板名称').grid(row=0,column=0,padx=(0,d(10)));self.name=tk.StringVar(self.window);self.name_entry=ttk.Entry(name,textvariable=self.name);self.name_entry.grid(row=0,column=1,sticky='ew')
+        ttk.Label(name,text='角色模板 ID').grid(row=0,column=0,padx=(0,d(10)));self.name=tk.StringVar(self.window);self.name_entry=ttk.Combobox(name,textvariable=self.name);self.name_entry.grid(row=0,column=1,sticky='ew')
         self.save_button=ttk.Button(name,text='保存六类模板',command=self.save);self.save_button.grid(row=0,column=2,padx=(d(10),0));self.controls.append(self.save_button)
         self.name.trace_add('write',lambda *_:self.changed_name())
         self.step_bar=ttk.Frame(self.editor);self.step_bar.grid(row=1,column=0,sticky='ew',pady=d(10));self.step_buttons=[]
@@ -146,8 +145,11 @@ class AgentTemplatesWindow:
     def reload(self):
         def loaded(value):
             self.catalog=value;self.filter_list();self.archives.delete(*self.archives.get_children())
+            self.name_entry.configure(values=[row['template_id']+' · '+row['name'] for row in value.get('registered_templates',[])])
             for row in value['archives']:self.archives.insert('','end',iid=row['id'],values=(row['metadata'].get('agent',''),row['metadata'].get('action',''),row['id']))
             self.status.set('存在未完成保存，请在归档页恢复。' if value['pending'] else '六类模板使用一条龙参考区域与遮罩；重拍后需重新准备战斗。')
+            if not value['pending'] and self.draft and self.draft.get('registration') and not self.draft['registration']['registered']:
+                self.status.set('未注册素材：可编辑保存；不会新增引擎角色、状态或技能。')
             if self.preferences is None:self.request('agent_template_preferences',self.preferences_loaded)
         self.request('agent_template_catalog',loaded)
 
@@ -164,7 +166,8 @@ class AgentTemplatesWindow:
         if self.catalog is None:return
         self.table.delete(*self.table.get_children());query=self.search.get().strip().lower()
         for row in self.catalog['agents']:
-            if query in row['id']:self.table.insert('','end',iid=row['id'],values=(row['id'],f"{row['completed']}/{row['total']}"))
+            registration=row.get('registration',{})
+            if query in row['id'] or query in registration.get('name','').lower():self.table.insert('','end',iid=row['id'],values=(row['id'],f"{row['completed']}/{row['total']}",registration.get('name') or '未注册素材'))
 
     def confirm_close(self):return not self.dirty or messagebox.askokcancel('放弃模板草稿','有未保存的截图或模板名称修改，放弃？',parent=self.window)
     def open_selected(self):
@@ -180,7 +183,8 @@ class AgentTemplatesWindow:
             for i,step in enumerate(self.catalog['steps']):
                 self.step_bar.columnconfigure(i%3,weight=1);button=ttk.Button(self.step_bar,text=step['name'],command=lambda i=i:self.choose_step(i));button.grid(row=i//3,column=i%3,sticky='ew',padx=2,pady=2);self.step_buttons.append(button)
         self.book.select(1);self.display(draft);self.toggle_float(save=False)
-        if draft['agent'] is None:self.status.set('模板ID须与源角色定义一致；保存新ID不会自动新增角色识别能力。')
+        if draft['agent'] is None:self.status.set('可选择已有角色或外观ID，也可输入自定义素材ID；保存素材不会新增引擎角色或技能。')
+        elif not draft.get('registration',{}).get('registered',True):self.status.set('未注册素材：可编辑保存；不会新增引擎角色、状态或技能。')
     def changed_name(self):
         if self.draft is not None and self.draft['agent'] is None:self.dirty=bool(self.name.get() or self.draft['changed'])
     def choose_step(self,index):
@@ -213,8 +217,11 @@ class AgentTemplatesWindow:
         if self.draft:self.request('agent_template_side',self.display,token=self.draft['token'],side='right' if self.side.get()=='右侧' else 'left')
     def save(self):
         if self.draft is None:return
-        def saved(value):self.dirty=False;self.display(value['draft']);self.name.set(value['draft']['agent']);self.name_entry.configure(state='disabled');self.reload();self.status.set('模板已保存并归档旧版本；重新准备后生效。')
-        self.request('agent_template_save',saved,token=self.draft['token'],agent=self.name.get().strip())
+        def saved(value):
+            self.dirty=False;self.display(value['draft']);self.name.set(value['draft']['agent']);self.name_entry.configure(state='disabled');self.reload()
+            if value['draft'].get('registration',{}).get('registered',True):self.status.set('模板已保存并归档旧版本；重新准备后生效。')
+            else:self.status.set('未注册素材已保存并归档旧版本；不会新增引擎角色、状态或技能。')
+        self.request('agent_template_save',saved,token=self.draft['token'],agent=self.name.get().split(' · ',1)[0].strip())
     def delete(self):
         selected=self.table.selection()
         if not selected or not messagebox.askokcancel('删除模板','删除六类模板并归档，可在归档页恢复？',parent=self.window):return
@@ -291,12 +298,12 @@ class AgentTemplatesWindow:
         if self.preferences is None:return
         dialog=tk.Toplevel(self.window);dialog.title('模板快捷键');dialog.transient(self.window)
         body=ttk.Frame(dialog,padding=16);body.pack(fill='both',expand=True);body.columnconfigure(1,weight=1)
-        ttk.Label(body,text='格式如 Ctrl+Shift+1；留空禁用。F9/F10保留。').grid(row=0,column=0,columnspan=2,sticky='w',pady=(0,12))
+        ttk.Label(body,text='支持 Win、F1—F24、numpad_0—9、Home 等命名键、vk_数字。留空禁用；F9/F10保留。',wraplength=470).grid(row=0,column=0,columnspan=2,sticky='w',pady=(0,12))
         labels=[s['name'] for s in self.catalog['steps']]+['切换窗口','展开/收起悬浮窗'];variables={}
         for i,(key,label) in enumerate(zip(ACTIONS,labels),1):
             ttk.Label(body,text=label).grid(row=i,column=0,sticky='w',padx=(0,14),pady=4)
             var=tk.StringVar(dialog,self.preferences['values']['hotkeys'][key]);variables[key]=var;ttk.Entry(body,textvariable=var,width=25).grid(row=i,column=1,sticky='ew')
-        modifier=tk.StringVar(dialog,'Ctrl');ttk.Combobox(body,textvariable=modifier,values=('Ctrl','Alt','Shift','Ctrl+Shift','Ctrl+Alt'),state='readonly',width=12).grid(row=9,column=0,sticky='w',pady=10)
+        modifier=tk.StringVar(dialog,'Ctrl');ttk.Combobox(body,textvariable=modifier,values=('Ctrl','Alt','Shift','Ctrl+Shift','Ctrl+Alt','Win','Ctrl+Win'),state='readonly',width=12).grid(row=9,column=0,sticky='w',pady=10)
         def batch():
             for i,key in enumerate(ACTIONS[:6]):variables[key].set(modifier.get()+'+'+str(i+1))
         ttk.Button(body,text='批量设置六个截图键',command=batch).grid(row=9,column=1,sticky='e')

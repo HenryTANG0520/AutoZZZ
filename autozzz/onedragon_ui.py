@@ -32,6 +32,8 @@ class StrategyWindow:
         self.controls: list[ttk.Widget] = []
         self.names: list[str] = []
         self.loaded_name = ""
+        self.loaded_revision = ""
+        self.last_archive = ""
         self.merged = True
         self.policy_kind='auto_battle'
         self.kind=tk.StringVar(self.window,'自动战斗')
@@ -84,6 +86,9 @@ class StrategyWindow:
         self.default_button=self._button(buttons, "设为条件战斗默认", self.select)
         self.default_button.pack(side="left", padx=(0, 8))
         ttk.Button(buttons, text="关闭", command=self.close).pack(side="left")
+        management=ttk.Frame(footer);management.grid(row=3,column=0,sticky='w',pady=(8,0))
+        self._button(management,'删除自定义策略…',self.remove).pack(side='left',padx=(0,8))
+        self._button(management,'恢复最近删除',self.restore).pack(side='left')
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.window.bind("<Destroy>", self._destroyed, add="+")
         self._run(self._initial, self._loaded)
@@ -175,6 +180,7 @@ class StrategyWindow:
         policy = result.get("policy", result)
         self.name.set(policy["name"])
         self.loaded_name = policy["name"]
+        self.loaded_revision = policy.get('revision','')
         self._set_text(policy["content"])
         self.status.set("已读取 · 尚未修改")
 
@@ -214,10 +220,40 @@ class StrategyWindow:
         def saved(result: dict) -> None:
             self.dirty = False
             self.loaded_name = name
+            self.loaded_revision = result.get('revision','')
             self.names = sorted(set(self.names + [name]))
             self.selector.configure(values=self.names)
             self.status.set(f"已保存 · {len(result['scenes'])} 个场景")
         self._run(lambda client: self._call(client, "policy_save", name=name, content=content,kind=self.policy_kind), saved)
+
+    def remove(self):
+        if self.busy:return
+        if self.dirty or self.name.get()!=self.loaded_name or not self.loaded_revision:
+            self.status.set('请先重新读取要删除的策略。');return
+        name,revision,kind=self.loaded_name,self.loaded_revision,self.policy_kind
+        if not messagebox.askokcancel('删除自定义策略','删除“'+name+'”？原文件会归档；仍被使用的策略不会删除。',parent=self.window):return
+        def removed(result):
+            self.last_archive=result['archive_id'];self.names=[item for item in self.names if item!=name]
+            self.selector.configure(values=self.names);self.name.set('');self.loaded_name=self.loaded_revision=''
+            self._set_text('');self.status.set('已删除并归档 · 可恢复最近删除')
+        self._run(lambda client:self._call(client,'policy_remove',name=name,revision=revision,kind=kind),removed)
+
+    def restore(self):
+        if self.busy:return
+        if not self.last_archive:self.status.set('本窗口没有最近删除的策略。');return
+        if self.dirty and not messagebox.askokcancel('放弃草稿','恢复会替换当前未保存草稿。',parent=self.window):return
+        identifier=self.last_archive
+        def operation(client):
+            result=self._call(client,'policy_restore',archive_id=identifier)
+            result['catalog']=self._call(client,'policies',kind=result['kind'])
+            return result
+        def restored(result):
+            self.policy_kind=result['kind'];self.kind.set('自动战斗' if self.policy_kind=='auto_battle' else '闪避')
+            self.default_button.configure(text='设为条件战斗默认' if self.policy_kind=='auto_battle' else '设为闪避默认')
+            self.names=[item['name'] for item in result['catalog']]
+            self.selector.configure(values=self.names);self._loaded(result);self.last_archive=''
+            self.status.set('已恢复 · 默认策略保持原配置')
+        self._run(operation,restored)
 
     def select(self) -> None:
         if self.dirty or self.name.get() != self.loaded_name:

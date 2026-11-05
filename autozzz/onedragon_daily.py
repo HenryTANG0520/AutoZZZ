@@ -56,8 +56,10 @@ class DailyInterfaceControl:
                 return op.round_wait('等待怪物卡配置结果', wait=.5)
             try:
                 from .onedragon_charge import ChargeBudgetControl
-                probe = object.__new__(ChargeBudgetControl)
-                probe.ctx = self.ctx
+                probe = getattr(self.ctx,'autozzz_charge_control',None)
+                if probe is None:
+                    probe = object.__new__(ChargeBudgetControl)
+                    probe.ctx = self.ctx
                 available, cost = probe._read_cost(op)
             except ValueError as exc:
                 if state['attempts'] >= 2:

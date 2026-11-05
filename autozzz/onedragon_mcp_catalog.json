@@ -1,0 +1,957 @@
+{
+  "source_hashes": {
+    "prompts.py": "bdfec46e3612f2e4b0f889faf4a5844db06d2acbe3095686fa61ce51cc9bd964",
+    "config_app.py": "9308eb62c58e0c9295fd2187db2b8c92ef631f6fca277140a56f29d238de6449",
+    "service_app.py": "888d62eaa073a3785d34dc5f66de2b60c6b1b08cb97e59b536142c1559e28477",
+    "app.py": "c447c228e536d5027c43ee0672703283db8675bbb6fdc38e1c59ec9afa1498dc"
+  },
+  "instructions": "绝区零一条龙 MCP:操作一台 Windows 上的绝区零实机(1080p)。\n\n工具分两类(非穷尽,完整列表见各 tool 描述):\n- 观察(不改游戏状态):analyze_screen / capture_game_screen / check_game_window / get_run_status / list_*\n- 操作(改游戏状态):click_game / key_tap / drag / input_text / open_game / run_operation / run_one_dragon / run_standalone_app / close_game / stop_run\n\n操作三件套(任何改状态的动作都按这个循环):\n1. 先看:analyze_screen 截当前画面 → 看 screens 命中 + ocr_texts 判断在哪。\n2. 再动:click_game(点 UI)/ key_tap(按键)/ run_operation(跑预设流程)。\n3. 后验:操作后画面常变,等 ~1s 再 analyze_screen / 视觉验证是否到达预期,别假设点击一定成功。\n\n约束:\n- 输入注入到活跃游戏窗口,需游戏在线(先 check_game_window);大世界等锁光标画面,click_game 传 pc_alt=True。\n- 出错别猜:画面不对 / op 失败 → 先 analyze_screen 看现状 + 查 log(.debug/zzz_od_mcp/main_server.log),再决定。\n- 安全:不主动改用户配置(yml);消耗周限的玩法(防卫战/恶名狩猎等)先向用户确认再跑。\n\n开发者场景(验证 op / 画面建档 / 调试):调 get_mcp_usage_guide('zzz_dev_validate_op')。",
+  "tools": [
+    {
+      "name": "check_game_window",
+      "description": "检查绝区零游戏窗口状态(只读,不改状态)。观察类。\n\n返回窗口标题、有效性、激活态、缩放比例及客户区矩形(与 HTTP ``/game/window`` 同构)。\n\nReturns:\n    ``WindowStatus``(win_title / is_win_valid / is_win_active / is_win_scale /\n    x / y / width / height;位置字段不可用时为 None);backend 抛错时返回\n    ``{'error': <原因>}``。\n\n    判游戏是否在跑 / 窗口是否存在,看 ``is_win_valid``:**勿据 win_title 判断** ——\n    win_title 是 controller 缓存的预期标题(从配置来),游戏未启动时仍可能为该\n    预期常量、非 None;is_win_valid=False 才表示没找到匹配窗口。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "检查游戏窗口"
+      }
+    },
+    {
+      "name": "capture_game_screen",
+      "description": "捕获游戏画面并保存截图，返回截图绝对路径。观察类。\n\n只截图不分析用本 tool;需 OCR / 画面匹配用 ``analyze_screen``。\n\nReturns:\n    截图文件的绝对路径；backend 抛错时返回 ``错误: <原因>``。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "捕获游戏截图"
+      }
+    },
+    {
+      "name": "analyze_screen",
+      "description": "分析画面(截图 + OCR + 画面匹配),返回结构化结果。观察类,不改游戏状态。\n\n只需截图标路径用 ``capture_game_screen``;本 tool 截图 + 分析。\n\nscreenshot 省略 → 截当前游戏画面(需游戏在线),精准命中回写当前画面名;\nscreenshot 传入 → 解析指定截图、**无需游戏在线**:绝对路径按路径读 / 纯名字到\n``.debug/images/<名字>.png`` 读;**不回写**识别状态。用于离线校验/反哺 screen_info。\n\nsave_image=True(**仅实时模式**)→ 把截图落盘并把路径放进 ``screenshot_path``\n返回,供 vision 复用(省掉另调 capture_game_screen)。离线模式忽略。\n\nReturns:\n    ``AnalyzeScreenResult``(成功标志、OCR 文本列表、画面匹配结果、错误描述、\n    screenshot_path、vision_hint)。\n    决策优先看 ``screens``(精准命中 1 个 ``is_precise=True``;否则 top_n 个候选);\n    需要散落文本(未归类到任何 area 的 OCR 文本)再看 ``ocr_texts``。\n    ``vision_hint``(success 时):本结果仅含 OCR + 模板匹配的部分识别,不等同完整\n    视觉理解;需要全面判断画面时配合视觉工具 / 多模态再看(能力边界提醒,非错误)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "screenshot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "截图来源:None=实时截当前画面(需游戏在线);传路径=读该图(无需游戏在线);纯名字=读 .debug/images/<名字>.png",
+            "title": "Screenshot",
+            "default": null
+          },
+          "save_image": {
+            "type": "boolean",
+            "description": "仅实时模式:把截图落盘并回传 screenshot_path 供 vision 复用;离线模式忽略",
+            "title": "Save Image",
+            "default": false
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "分析游戏画面"
+      }
+    },
+    {
+      "name": "upsert_screen_area",
+      "description": "按 area_name 在指定 screen 插入或更新一个 area(写 yml + reload)。操作类,改 screen_info。\n\narea_name 存在则整体更新,不存在则追加。area_type 支持 none、text、template；\ntext 可不填写固定目标，用作动态 OCR 范围，color_range 仅用于文本识别前的颜色过滤。\n校验:screen 存在、area_name 非空、pc_rect 合法、\n模板引用存在(template_id 非空时)。写回 yml 并 reload,下次 analyze_screen 即生效。无需游戏在线。\n\nReturns:\n    dict: ``{success, screen_name, area_name, action(inserted/updated), area_count, error}``。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "screen_name": {
+            "type": "string",
+            "title": "Screen Name"
+          },
+          "area_name": {
+            "type": "string",
+            "title": "Area Name"
+          },
+          "pc_rect": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "area 矩形 [x1,y1,x2,y2],1080p 游戏坐标;模板 bbox 建议每边 +10px",
+            "title": "Pc Rect"
+          },
+          "area_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "text",
+                  "template"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "区域类型；None 表示按旧字段安全推断",
+            "title": "Area Type",
+            "default": null
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "lcs_percent": {
+            "type": "number",
+            "title": "Lcs Percent",
+            "default": 0.5
+          },
+          "color_range": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Range",
+            "default": null
+          },
+          "template_sub_dir": {
+            "type": "string",
+            "title": "Template Sub Dir",
+            "default": ""
+          },
+          "template_id": {
+            "type": "string",
+            "title": "Template Id",
+            "default": ""
+          },
+          "template_match_threshold": {
+            "type": "number",
+            "title": "Template Match Threshold",
+            "default": 0.7
+          },
+          "goto_list": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goto List",
+            "default": null
+          },
+          "id_mark": {
+            "type": "boolean",
+            "title": "Id Mark",
+            "default": false
+          },
+          "gamepad_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gamepad Key",
+            "default": null
+          }
+        },
+        "required": [
+          "screen_name",
+          "area_name",
+          "pc_rect"
+        ]
+      },
+      "annotations": {
+        "title": "增改画面区域"
+      }
+    },
+    {
+      "name": "delete_screen_area",
+      "description": "按 area_name 删除指定 screen 的一个 area(写 yml + reload)。操作类,不可逆。\n\nscreen_name + area_name 定位;area 不存在则 success=False。\n写回 yml 并 reload,下次 analyze_screen 即生效。\n\nReturns:\n    dict: ``{success, screen_name, area_name, action(deleted), area_count, error}``。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "screen_name": {
+            "type": "string",
+            "title": "Screen Name"
+          },
+          "area_name": {
+            "type": "string",
+            "title": "Area Name"
+          }
+        },
+        "required": [
+          "screen_name",
+          "area_name"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "title": "删除画面区域"
+      }
+    },
+    {
+      "name": "close_game",
+      "description": "关闭游戏(发关闭窗口信号,秒级)。操作类。\n\ncontroller 吞异常不返成功标志,故只表「信号已发」—— 用 check_game_window\n验证是否真关。backend 未就绪 / 窗口未就绪时返 ``错误: <原因>``。\n\nReturns:\n    backend ``close_game`` 返回的文本;backend 抛错时返回 ``错误: <原因>``。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "title": "关闭游戏"
+      }
+    },
+    {
+      "name": "click_game",
+      "description": "点击游戏窗口内坐标(1080p 游戏空间,同 screen_info pc_rect 中心)。操作类。\n\n鼠标点击用本 tool;键盘按键用 ``key_tap``;鼠标拖拽用 ``drag``。\n\n坐标经控制器缩放到真实屏幕;不在窗口内则不点击(in_window=False)。需游戏窗口就绪。\n\npc_alt=True 时点击前先按住 Alt 解锁光标 —— 大世界等 pc_alt=true 画面必需\n(绝区零锁光标,不按 Alt 点击落空)。判断依据:目标画面对应 screen_info\n的 ``pc_alt`` 字段;框架内部点击(跑 application)会自动带,经 MCP 手动点击\npc_alt 画面时需显式传 True。其余画面保持 False。\n\n⚠️ 操作后建议 sleep:底层 click 无内置等待,点 UI 常触发画面切换(菜单/弹窗/\n进画面),连续操作或 ``capture_game_screen`` 前建议 sleep ~1s 等动画(否则截过渡帧)。\n\nReturns:\n    ``{success, x, y, in_window, pc_alt, error?}``;backend 抛错时 success=False + error。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "press_time": {
+            "type": "number",
+            "description": "按住时长(秒);默认 0.1(游戏识别下限,0=极短按可能无效)",
+            "title": "Press Time",
+            "default": 0.1
+          },
+          "pc_alt": {
+            "type": "boolean",
+            "description": "点击前是否按住 Alt 解锁光标;大世界等 pc_alt=true 画面必需,其余 False",
+            "title": "Pc Alt",
+            "default": false
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      },
+      "annotations": {
+        "title": "点击游戏坐标"
+      }
+    },
+    {
+      "name": "key_tap",
+      "description": "键盘按键(press_time=0 短按,>0 长按)。操作类。\n\n键盘按键用本 tool;鼠标点击用 ``click_game``;拖拽用 ``drag``。\n\n覆盖框架 btn_controller 能发的键:移动 ``w``/``a``/``s``/``d``、交互 ``f``、\n``esc``、``space`` 等(键名沿用框架约定)。press_time>0 长按(如移动长按 1-2s)。\n需游戏窗口就绪。\n\n⚠️ 操作后建议 sleep(底层无内置等待):移动 wasd ~1s 等角色到位(不等就 interact\n可能失效,见 scratch_card issue #2405)、交互 ``f`` ~1-2s 进场景/对话、``esc``\n~0.5s 开关菜单。连续操作前按需 sleep。\n\nReturns:\n    ``{success, key, press_time, error?}``;backend 抛错时 success=False + error。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "框架键名:w/a/s/d 移动、f 交互、esc、space 等(沿用框架 btn_controller 约定)",
+            "title": "Key"
+          },
+          "press_time": {
+            "type": "number",
+            "description": "按住时长(秒);0=短按 tap,>0=长按(如移动长按 1-2s)",
+            "title": "Press Time",
+            "default": 0.0
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "annotations": {
+        "title": "键盘按键"
+      }
+    },
+    {
+      "name": "drag",
+      "description": "鼠标按住拖拽((x1,y1)→(x2,y2),1080p 游戏坐标,同 screen_info pc_rect)。操作类。\n\n鼠标拖拽用本 tool;点击用 ``click_game``;按键用 ``key_tap``。\n\n覆盖刮刮卡刮开、八卦收集来回拖、咖啡拖动等。需游戏窗口就绪。\n\n⚠️ 操作后建议 sleep:底层 drag 无内置等待,拖后画面变化(刮/滚),连续操作或\ncapture 前建议 sleep ~0.5s。\n\nReturns:\n    ``{success, x1, y1, x2, y2, duration, error?}``;backend 抛错时 success=False + error。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x1": {
+            "type": "number",
+            "title": "X1"
+          },
+          "y1": {
+            "type": "number",
+            "title": "Y1"
+          },
+          "x2": {
+            "type": "number",
+            "title": "X2"
+          },
+          "y2": {
+            "type": "number",
+            "title": "Y2"
+          },
+          "duration": {
+            "type": "number",
+            "description": "拖拽耗时(秒),默认 1.0",
+            "title": "Duration",
+            "default": 1.0
+          }
+        },
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2"
+        ]
+      },
+      "annotations": {
+        "title": "鼠标拖拽"
+      }
+    },
+    {
+      "name": "input_text",
+      "description": "向当前焦点输入框输入文本(账号/密码等)。操作类。\n\n需先用 click_game 点击输入框聚焦。需游戏窗口就绪。\n\nReturns:\n    ``{success, method, masked_text, error?}``;backend 抛错时 success=False + error。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "要输入的文本(账号/密码/兑换码等)",
+            "title": "Text"
+          },
+          "use_clipboard": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None=跟随 game_config.type_input_way;True=强制剪贴板;False=强制逐键",
+            "title": "Use Clipboard",
+            "default": null
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "annotations": {
+        "title": "输入文本"
+      }
+    },
+    {
+      "name": "open_game",
+      "description": "打开游戏(可选自动登录)。长耗时,需交互式桌面。操作类。\n\nenter=True(默认)→ 打开 + 自动登录(= 原 open_and_enter_game,到大世界);\nenter=False → 只打开 + 等窗口就绪,停在「打开游戏」ready 态(不登录),\n供调用方分步驱动登录流程。\nblock=True(默认)阻塞到完成;block=False 立刻返回,用 get_run_status 查进度。\n副作用:操作游戏(启动 exe / 可能登录);单跑道,已有运行时返回错误(含 source + 提示)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "enter": {
+            "type": "boolean",
+            "description": "True=打开+自动登录到大世界;False=只打开停在 ready 态不登录",
+            "title": "Enter",
+            "default": true
+          },
+          "block": {
+            "type": "boolean",
+            "description": "True=阻塞到完成;False=立刻返回,用 get_run_status 查进度",
+            "title": "Block",
+            "default": true
+          }
+        }
+      },
+      "annotations": {
+        "title": "打开游戏"
+      }
+    },
+    {
+      "name": "run_one_dragon",
+      "description": "按当前 GUI/配置的一条龙设置启动完整一条龙运行。\n\n跑全套已启用应用用本 tool;单个应用用 ``run_standalone_app``;单个 operation 用 ``run_operation``。\n\nblock=False(默认)立刻返回,用 get_run_status 查进度;block=True 阻塞到结束。\n副作用:操作游戏并运行已启用的一条龙应用组;单跑道,已有运行时返回错误。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "block": {
+            "type": "boolean",
+            "description": "False=立刻返回用 get_run_status 查进度(默认);True=阻塞到一条龙结束",
+            "title": "Block",
+            "default": false
+          }
+        }
+      },
+      "annotations": {
+        "title": "运行一条龙"
+      }
+    },
+    {
+      "name": "run_standalone_app",
+      "description": "启动独立应用。\n\n单个应用用本 tool;全套用 ``run_one_dragon``;单个 operation 用 ``run_operation``。\n\napp_id 为空时使用 GUI「应用运行」当前选中的应用。block=False(默认)立刻返回,\n用 get_run_status 查进度;block=True 阻塞到结束。副作用:操作游戏并运行目标应用。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "独立应用 ID;None=用 GUI「应用运行」当前选中项",
+            "title": "App Id",
+            "default": null
+          },
+          "block": {
+            "type": "boolean",
+            "description": "False=立刻返回用 get_run_status 查进度(默认);True=阻塞到结束",
+            "title": "Block",
+            "default": false
+          }
+        }
+      },
+      "annotations": {
+        "title": "运行独立应用"
+      }
+    },
+    {
+      "name": "list_applications",
+      "description": "列出当前实例可运行应用、独立应用列表和当前选中项(无副作用)。\n\n列应用用本 tool;列可运行 operation 用 ``list_operations``。\n\n返回的 ``current_instance_idx`` 是激活实例的 idx(账号下标):**idx N → config/0N 目录**\n(idx 1 → config/01 账号01,idx 2 → config/02 账号02),**不是** config/0<idx+1>。\n激活实例看 ``config/one_dragon.yml`` 的 ``instance_list`` 里 ``active: true`` 项;\n改某实例配置前据此定位目录,别把 idx 当目录号做偏移。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "列出可运行应用"
+      }
+    },
+    {
+      "name": "get_predefined_teams",
+      "description": "列出当前实例的预备编队(真实配队,过滤占位)。观察类。\n\n返回每队的 idx/name/auto_battle/agent_id_list/agent_name_list(中文)/weakness_list\n(中文,防卫战配置优先,没配取角色伤害属性);按 idx 选配队用\n``run_operation(zzz_od.operation.choose_predefined_team.ChoosePredefinedTeam,\n{target_team_idx_list:[idx]})``。读当前实例缓存(只读不刷;GUI 改 yml 后需重载/跑 app)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "读取预备编队列表"
+      }
+    },
+    {
+      "name": "get_run_status",
+      "description": "查当前/最近一次运行状态(无副作用)。观察类。\n\n运行中返当前节点/耗时/重试;非运行返结果/失败定位。停止运行用 ``stop_run``。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "查询运行状态"
+      }
+    },
+    {
+      "name": "stop_run",
+      "description": "发出停止信号,operation 在当前节点完成后退出(非强杀)。操作类。\n\n返回仅表信号已发出(过渡期 get_run_status 仍显示 running)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "title": "停止运行"
+      }
+    },
+    {
+      "name": "list_operations",
+      "description": "列出可运行的自定义 operation(扫描 operation/+hollow_zero/ 承载包,纯反射不实例化)。\n\n列 operation 用本 tool;列应用用 ``list_applications``。\n\n返回每个 operation 的 op_id(<module>.<ClassName>)与 __init__ 参数 schema(已剔除\nself/ctx)。用 describe_operation 看单个详情,用 run_operation 按 op_id 运行。无副作用。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "列出可运行 operation"
+      }
+    },
+    {
+      "name": "describe_operation",
+      "description": "描述单个 operation 的参数 schema(纯反射,不实例化)。\n\nop_id 格式 ``<dotted module path>.<ClassName>``,可从 list_operations 获取。\n每个参数标 json_serializable(标量/list/dict=True、复杂数据类如 ChargePlanItem=False,\n提示走 application);整体 debuggable 表示所有必填参数是否可经 JSON 传入。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "op_id": {
+            "type": "string",
+            "description": "operation 定位标识 <module>.<ClassName>,可从 list_operations 获取",
+            "title": "Op Id"
+          }
+        },
+        "required": [
+          "op_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "查看 operation 参数"
+      }
+    },
+    {
+      "name": "run_operation",
+      "description": "按 op_id(package.path.ClassName)运行任意 operation;args 传构造参数。\n\n单个 operation 用本 tool;全套用 ``run_one_dragon``;单个应用用 ``run_standalone_app``。\n\nargs 传 JSON 标量/列表/字典;``@dataclass``+``from_dict`` 参数(如 ChargePlanItem)传 dict,实例化前自动反序列化;其余复杂数据类走 application。\n用 list_operations / describe_operation 查 op_id 与参数。\nblock=False(默认)立刻返回,用 get_run_status 查进度;block=True 阻塞到结束。\n副作用:操作游戏;单跑道,已有运行时返回错误(含 source + 提示)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "op_id": {
+            "type": "string",
+            "description": "operation 定位标识 <module>.<ClassName>,可从 list_operations 获取",
+            "title": "Op Id"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "构造参数 dict;JSON 标量/列表/字典,@dataclass+from_dict 参数(如 ChargePlanItem)传 dict 自动反序列化;其余复杂数据类走 application",
+            "title": "Args",
+            "default": null
+          },
+          "block": {
+            "type": "boolean",
+            "description": "False=立刻返回用 get_run_status 查进度(默认);True=阻塞到结束",
+            "title": "Block",
+            "default": false
+          }
+        },
+        "required": [
+          "op_id"
+        ]
+      },
+      "annotations": {
+        "title": "运行 operation"
+      }
+    },
+    {
+      "name": "add_config_item",
+      "description": "加一个数据类列表项(如 charge_plan plan / standalone_app app)。操作类,改配置。\n\n通用入口,按 ``app_id`` 路由到该 config 的领域方法。写入前校验,不合法拒绝。\n改配置前建议先调 ``describe_config`` 查字段结构、合法值与只读项。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "app 配置 id,如 charge_plan",
+            "title": "App Id"
+          },
+          "list_field": {
+            "type": "string",
+            "description": "列表字段名(plan_list/app_list)",
+            "title": "List Field"
+          },
+          "item_dict": {
+            "type": "object",
+            "description": "列表项 dict(经 from_dict 反序列化)",
+            "title": "Item Dict"
+          },
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前实例)",
+            "title": "Instance Idx",
+            "default": null
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "组 id;None=默认组",
+            "title": "Group Id",
+            "default": null
+          }
+        },
+        "required": [
+          "app_id",
+          "list_field",
+          "item_dict"
+        ]
+      },
+      "annotations": {
+        "title": "增改配置列表项"
+      }
+    },
+    {
+      "name": "delete_config_item",
+      "description": "删一个数据类列表项。操作类,改配置,可逆性低。\n\n改配置前建议先调 ``describe_config`` 查字段结构、合法值与只读项。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "app 配置 id,如 charge_plan",
+            "title": "App Id"
+          },
+          "list_field": {
+            "type": "string",
+            "description": "列表字段名",
+            "title": "List Field"
+          },
+          "item_id": {
+            "type": "string",
+            "description": "项标识:charge_plan/notorious_hunt 用 plan_id;standalone_app/_group 用 app_id",
+            "title": "Item Id"
+          },
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前实例)",
+            "title": "Instance Idx",
+            "default": null
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "组 id;None=默认组",
+            "title": "Group Id",
+            "default": null
+          }
+        },
+        "required": [
+          "app_id",
+          "list_field",
+          "item_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "title": "删除配置列表项"
+      }
+    },
+    {
+      "name": "get_config",
+      "description": "读配置字段或全部 data。观察类,不改配置。\n\n改配置前建议先调 ``describe_config`` 查字段结构、合法值与只读项。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "app 配置 id,如 charge_plan",
+            "title": "App Id"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "字段名;None=返全 data",
+            "title": "Key",
+            "default": null
+          },
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前)",
+            "title": "Instance Idx",
+            "default": null
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "组 id;None=默认",
+            "title": "Group Id",
+            "default": null
+          }
+        },
+        "required": [
+          "app_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "读取配置"
+      }
+    },
+    {
+      "name": "set_config",
+      "description": "写配置的简单字段(开关/下拉/输入)。操作类,改配置。\n\n只读字段(run_times/plan_id 等)拒绝。写穿 ctx 缓存实例。\n改配置前建议先调 ``describe_config`` 查字段结构、合法值与只读项。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "app 配置 id,如 charge_plan",
+            "title": "App Id"
+          },
+          "key": {
+            "type": "string",
+            "description": "字段名(如 loop/restore_charge)",
+            "title": "Key"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "description": "字段值",
+            "title": "Value"
+          },
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前)",
+            "title": "Instance Idx",
+            "default": null
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "组 id;None=默认",
+            "title": "Group Id",
+            "default": null
+          }
+        },
+        "required": [
+          "app_id",
+          "key",
+          "value"
+        ]
+      },
+      "annotations": {
+        "title": "修改配置字段"
+      }
+    },
+    {
+      "name": "describe_config",
+      "description": "描述配置结构(可改字段 / 只读 / list item 结构 / add 示例)。观察类。\n\n返回 set_fields(可改 + enum options) + ro_fields(只读) + list_fields(item 结构 + add_example)。\n智能体看到后可直接生成正确的 set/add 调用。不知道 app_id 时先 list_app_configs。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "app 配置 id,如 charge_plan",
+            "title": "App Id"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "可选:查特定 category 的 mission_type 合法值",
+            "title": "Category",
+            "default": null
+          },
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前)",
+            "title": "Instance Idx",
+            "default": null
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "组 id;None=默认",
+            "title": "Group Id",
+            "default": null
+          }
+        },
+        "required": [
+          "app_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "描述配置结构"
+      }
+    },
+    {
+      "name": "list_app_configs",
+      "description": "列出可改配置的 app_id(首次发现入口)。观察类。\n\n返回每个 config 的 app_id + description + supported_ops + item_kind + id_kind。\n智能体看到 item_kind 知道 item 是 dataclass / str / dict,不会套错模板。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instance_idx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "实例 idx(idx N→config/0N:idx 1→config/01 账号01;None=当前)",
+            "title": "Instance Idx",
+            "default": null
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "列出可改配置"
+      }
+    },
+    {
+      "name": "list_mcp_usage_guides",
+      "description": "列出 zzz_od MCP 可用操作指南,相当于帮助目录。观察类。\n\n每项含 ``mode``(user/dev):user 项面向普通使用者(跑龙/独立应用),dev 项面向开发者(验证 op/调试)。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "列出操作指南"
+      }
+    },
+    {
+      "name": "get_mcp_usage_guide",
+      "description": "读取 zzz_od MCP 操作指南,相当于某个任务的 --help。观察类。\n\nArgs:\n    name: 指南名称,可先调用 ``list_mcp_usage_guides`` 查看。\n    app_id: 独立应用 ID,仅 ``zzz_run_standalone_app`` 使用。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Id",
+            "default": null
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "title": "读取操作指南"
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "zzz_check_status",
+      "arguments": [],
+      "title": "绝区零状态检查",
+      "description": "检查游戏窗口、画面识别与当前后台运行状态。"
+    },
+    {
+      "name": "zzz_run_one_dragon",
+      "arguments": [],
+      "title": "运行绝区零一条龙",
+      "description": "按当前实例配置启动一条龙，并持续查询运行状态。"
+    },
+    {
+      "name": "zzz_run_standalone_app",
+      "arguments": [
+        {
+          "name": "app_id",
+          "required": false
+        }
+      ],
+      "title": "运行绝区零独立应用",
+      "description": "选择或使用当前选中独立应用，启动后持续查询运行状态。"
+    }
+  ]
+}

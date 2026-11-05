@@ -41,8 +41,8 @@ def main():
                 for size in ('default','minimum'):
                     if size=='minimum':view.window.geometry('%dx%d'%view.window.minsize())
                     for i in range(3):view.book.select(i);root.update();check_layout(view.window);checks.append(f'{scale}-{size}-{i}')
-                view.open_agent();pump(root,lambda:view.draft is not None and not view.busy)
-                view.name.set('autozzz_gui_fixture')
+                view.open_agent('anby');pump(root,lambda:view.draft is not None and not view.busy)
+                view.name.set('anby')
                 for i in range(6):
                     view.selected=i;view.import_png(image);pump(root,lambda:not view.busy)
                     assert view.draft['images'][i] and view.draft['masks'][i],view.status.get()
@@ -51,15 +51,15 @@ def main():
                 view.mask.set(True);view.draw();root.update();check_layout(view.window)
                 if view.float is not None:
                     view.toggle_expand();pump(root,lambda:not view.busy);root.update();check_layout(view.float.window)
-                view.save();pump(root,lambda:not view.busy and not view.dirty and any(row['id']=='autozzz_gui_fixture' for row in view.catalog['agents']))
-                view.book.select(0);view.search.set('fixture');root.update();assert view.table.get_children()==('autozzz_gui_fixture',)
-                view.table.selection_set('autozzz_gui_fixture')
+                view.save();pump(root,lambda:not view.busy and not view.dirty and any(row['id']=='anby' for row in view.catalog['agents']))
+                view.book.select(0);view.search.set('anby');root.update();assert 'anby' in view.table.get_children()
+                view.table.selection_set('anby')
                 with patch('autozzz.agent_templates_ui.messagebox.askokcancel',return_value=True):view.delete()
-                pump(root,lambda:not view.busy and not any(row['id']=='autozzz_gui_fixture' for row in view.catalog['agents']))
+                pump(root,lambda:not view.busy and not any(row['id']=='anby' for row in view.catalog['agents']))
                 deletion=next(row for row in view.catalog['archives'] if row['metadata']['action']=='delete')
                 view.archives.selection_set(deletion['id'])
                 with patch('autozzz.agent_templates_ui.messagebox.askokcancel',return_value=True):view.restore()
-                pump(root,lambda:not view.busy and any(row['id']=='autozzz_gui_fixture' for row in view.catalog['agents']))
+                pump(root,lambda:not view.busy and any(row['id']=='anby' for row in view.catalog['agents']))
                 view.open_agent();pump(root,lambda:not view.busy);view.name.set('unsaved')
                 with patch('autozzz.agent_templates_ui.messagebox.askokcancel',return_value=False):assert view.close()is False
                 view.close(confirmed=True);pump(root,lambda:view.closed and not view.worker.is_alive())

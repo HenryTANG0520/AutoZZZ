@@ -12,6 +12,8 @@ from .onedragon_runtime import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, UPSTREAM_REV
 
 def close_service(service):
     try:
+        mcp=getattr(service,'_mcp_service',None)
+        if mcp is not None:mcp.close()
         execution=getattr(service,'_execution',None)
         if execution is not None:
             try:execution.stop()
@@ -61,7 +63,9 @@ def main() -> int:
                 elif method in METHODS:
                     if service._rotation_guard is not None and method not in ('execution_status','pause_execution','stop_execution','rotation_release','trace_configure','trace_snapshot'):
                         service._rotation_guard.check()
-                    result = getattr(service, method)(**request["params"])
+                    if method=='mcp_stop':result=getattr(service,method)(**request['params'])
+                    else:
+                        with service._dispatch_lock:result = getattr(service, method)(**request["params"])
                 else:
                     raise ValueError(f"未开放的一条龙方法：{method}")
                 response = dict(id=request_id, result=result)

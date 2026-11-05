@@ -42,7 +42,7 @@ class TemplateHotkeyTests(unittest.TestCase):
     def test_source_style_and_native_style_share_bindings(self):
         self.assertEqual(validate_bindings({key:value.lower() for key,value in DEFAULTS.items()}),DEFAULTS)
     def test_duplicate_reserved_and_invalid_keys_rejected(self):
-        for value in ('Ctrl+F9','Alt+F10','Ctrl+Ctrl+1','Ctrl+CapsLock','1'):
+        for value in ('Ctrl+F9','Alt+F10','Ctrl+Ctrl+1','Ctrl+MouseLeft','1'):
             with self.subTest(value=value),self.assertRaises(ValueError):validate_bindings(dict(DEFAULTS,battle_1=value))
         with self.assertRaises(ValueError):validate_bindings(dict(DEFAULTS,battle_1=DEFAULTS['battle_2']))
 
@@ -70,10 +70,10 @@ class TemplateCaptureTests(unittest.TestCase):
         self.change_geometry=False
         self.scope=patch.dict('sys.modules',{'autozzz.onedragon_host':SimpleNamespace(BoundGameWindow=Window,WindowCapture=Screenshot)})
         self.scope.start();self.addCleanup(self.scope.stop)
-    def run_capture(self):
+    def run_capture(self,lock=None):
         from autozzz.agent_template_capture import capture
         with patch('autozzz.agent_template_capture.RunLock',return_value=nullcontext()),patch('autozzz.windows.find_game',return_value=SimpleNamespace(hwnd=100)),patch('autozzz.windows.kernel32.OpenProcess',return_value=10),patch('autozzz.windows.user32.GetWindowThreadProcessId'),patch('autozzz.windows.user32.GetForegroundWindow',side_effect=lambda:self.front),patch('autozzz.windows.user32.IsIconic',return_value=False),patch('autozzz.windows.user32.GetAsyncKeyState',return_value=0):
-            return capture(self.root,str(self.game))
+            return capture(self.root,str(self.game),lock=lock)
     def test_capture_png_is_rgb_and_uses_shared_hash_protocol(self):
         from autozzz.trace_capture import read_capture
         result=self.run_capture();image,_=read_capture(self.root,result)
@@ -84,6 +84,14 @@ class TemplateCaptureTests(unittest.TestCase):
             self.front=100;self.valid=True;self.change_geometry=False;setattr(self,attribute,value)
             with self.subTest(attribute=attribute),self.assertRaises(ValueError):self.run_capture()
         self.assertFalse(list(self.root.glob('autozzz/trace-captures/*.png')))
+    def test_native_developer_capture_retains_inherited_lease_scope(self):
+        owner=self
+        class LeaseScope:
+            entered=False;exited=False
+            def __enter__(self):self.entered=True;return self
+            def __exit__(self,*args):self.exited=True
+        lease=LeaseScope();self.run_capture(lock=lease)
+        self.assertTrue(lease.entered and lease.exited);self.assertEqual(self.captured,1)
 
 
 if __name__=='__main__':unittest.main()

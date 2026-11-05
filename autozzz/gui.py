@@ -678,10 +678,19 @@ class AutoZZZWindow:
         schedules_alive=schedules is not None and schedules.worker is not None and schedules.worker.is_alive()
         agent_templates=getattr(self,'agent_templates_window',None)
         template_worker_alive=agent_templates is not None and agent_templates.worker.is_alive()
-        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive and not schedules_alive and not startup_update_alive and not template_worker_alive:
+        maintenance_alive=self._maintenance_workers_alive()
+        if self.closing and not worker_alive and not strategy_worker_alive and not application_worker_alive and not execution_worker_alive and not account_worker_alive and not notification_worker_alive and not library_worker_alive and not downloads_worker_alive and not pip_alive and not plugin_alive and not updates_alive and not schedules_alive and not startup_update_alive and not template_worker_alive and not maintenance_alive:
             self._destroy_root()
             return
         self.root.after(80, self._drain)
+
+    def _maintenance_workers_alive(self):
+        # A closed child window can still own an installer or SDK process.
+        for name in ('gamepad_install_window','source_workspace_window','devtools_window','environment_tools_window'):
+            window=getattr(self,name,None)
+            worker=getattr(window,'worker',None)
+            if worker is not None and worker.is_alive():return True
+        return False
 
     def _close(self) -> None:
         if self.closing:
@@ -715,6 +724,14 @@ class AutoZZZWindow:
         schedules=getattr(self,'schedules_window',None)
         if schedules is not None and not schedules.closed:schedules.close(confirmed=True)
         if agent_templates is not None and not agent_templates.closed:agent_templates.close(confirmed=True)
+        gamepad_install=getattr(self,'gamepad_install_window',None)
+        if gamepad_install is not None and not gamepad_install.closed:gamepad_install.close()
+        source_workspace=getattr(self,'source_workspace_window',None)
+        if source_workspace is not None and not source_workspace.closed:source_workspace.close()
+        devtools=getattr(self,'devtools_window',None)
+        if devtools is not None and not devtools.closed:devtools.close()
+        environment_tools=getattr(self,'environment_tools_window',None)
+        if environment_tools is not None and not environment_tools.closed:environment_tools.close()
         if applications is not None:
             applications.close(discard=True)
         execution=getattr(self,"execution_window",None)
@@ -728,7 +745,7 @@ class AutoZZZWindow:
             self._stop()
         self.root.withdraw()
         # Keep Tk and the worker alive until cooperative cancellation and report writing finish.
-        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()) and (schedules is None or schedules.worker is None or not schedules.worker.is_alive()) and (agent_templates is None or not agent_templates.worker.is_alive()) and not self.startup_updates.worker_alive:
+        if (self.worker is None or not self.worker.is_alive()) and (strategies is None or strategies.worker is None or not strategies.worker.is_alive()) and (applications is None or applications.worker is None or not applications.worker.is_alive()) and (execution is None or not execution.worker.is_alive()) and (accounts is None or not accounts.worker.is_alive()) and (notifications is None or not notifications.worker.is_alive()) and (library is None or not library.worker.is_alive()) and (downloads is None or not downloads.worker.is_alive()) and (self.pip_controller is None or not self.pip_controller.worker_alive) and (plugins is None or not plugins.worker.is_alive()) and (program_updates is None or not program_updates.worker.is_alive()) and (schedules is None or schedules.worker is None or not schedules.worker.is_alive()) and (agent_templates is None or not agent_templates.worker.is_alive()) and not self.startup_updates.worker_alive and not self._maintenance_workers_alive():
             self._destroy_root()
 
     def _destroy_root(self):

@@ -87,10 +87,23 @@ def main():
                     pump(root, lambda: not dialog.busy)
                     assert not dialog.dirty and "已保存" in dialog.status.get(), dialog.status.get()
                     assert (policies / imported.name).read_bytes() == imported.read_bytes()
+                    with patch('autozzz.onedragon_ui.messagebox.askokcancel',return_value=True):
+                        button(dialog,'删除自定义策略…').invoke()
+                    pump(root,lambda:not dialog.busy)
+                    assert not (policies/imported.name).exists() and dialog.last_archive,dialog.status.get()
+                    button(dialog,'恢复最近删除').invoke();pump(root,lambda:not dialog.busy)
+                    assert (policies/imported.name).read_bytes()==imported.read_bytes(),dialog.status.get()
+                    assert dialog.loaded_revision and dialog.name.get()==imported.stem
+                    checks.append('custom_policy_archive_remove_restore_real_sdk')
                     button(dialog, "设为条件战斗默认").invoke()
                     pump(root, lambda: not dialog.busy)
                     assert dialog.status.get() == "已设为条件战斗默认策略", dialog.status.get()
                     checks.append("import_save_select_real_upstream_policy")
+                    with patch('autozzz.onedragon_ui.messagebox.askokcancel',return_value=True):
+                        button(dialog,'删除自定义策略…').invoke()
+                    pump(root,lambda:not dialog.busy)
+                    assert '仍被引用' in dialog.status.get() and (policies/imported.name).is_file(),dialog.status.get()
+                    checks.append('active_policy_reference_prevents_removal')
                     dialog.name.set("未读取的新策略")
                     button(dialog, "设为条件战斗默认").invoke()
                     assert "请先读取或保存" in dialog.status.get() and not dialog.busy

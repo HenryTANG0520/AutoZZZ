@@ -477,7 +477,8 @@ class OneDragonExecution:
                         from .onedragon_synthesis import ACTION as SYNTHESIS
                         self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"],
                             restore_mode=self.prepared_requirements.get('restore_charge','不使用'),restore_authorized=ACTION in self.resource_confirmation.accepted,
-                            synthesis_authorized=SYNTHESIS in self.resource_confirmation.accepted)
+                            synthesis_authorized=SYNTHESIS in self.resource_confirmation.accepted,
+                            evidence_dir=self.data/'autozzz/charge-evidence'/self.job_id)
                         self.charge_control.install()
                     if self.prepared_requirements.get("uses_hunt"):
                         from .onedragon_hunt import NotoriousHuntControl

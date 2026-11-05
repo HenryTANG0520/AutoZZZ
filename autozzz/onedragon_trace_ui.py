@@ -231,7 +231,10 @@ class TraceWindow:
         from .onedragon_trace_settings_ui import TraceSettingsWindow
         if self.advanced is not None and not self.advanced.closed:
             self.advanced.window.lift();return
-        self.advanced=TraceSettingsWindow(self.window,self.scale,self.preferences,self.save_preferences,groups=overlay_groups(self.snapshot or {},self.state,self.overlay.layers,self.preferences))
+        draft=deepcopy(self.preferences)
+        for row in recent_rows(self.snapshot or {},'perf'):
+            if len(draft['metrics'])<100:draft['metrics'].setdefault(row['metric'],True)
+        self.advanced=TraceSettingsWindow(self.window,self.scale,draft,self.save_preferences,groups=overlay_groups(self.snapshot or {},self.state,self.overlay.layers,self.preferences))
 
     def save_panel(self,key,changes):
         value=deepcopy(self.preferences);value['panels'][key].update(changes)

@@ -7,12 +7,14 @@ from .overlay import NativePresentation
 
 
 class TracePanel:
-    def __init__(self,parent,key,scale,save,*,presentation=None):
+    def __init__(self,parent,key,scale,save,*,presentation=None,renderer=None):
+        self.renderer=renderer
         self.key=key;self.scale=scale;self.save=save;self.drag=None;self.visible=False;self.closed=False;self.mode=None
         self.window=tk.Toplevel(parent,takefocus=False);self.window.withdraw();self.window.overrideredirect(True)
-        self.window.title('AutoZZZ · '+{'state':'条件','decision':'决策','timeline':'时间线','perf':'性能'}[key])
+        title={'state':'条件','decision':'决策','timeline':'时间线','perf':'性能','log':'日志'}[key]
+        self.window.title('AutoZZZ · '+title)
         self.window.configure(background='#101820');self.bar=tk.Frame(self.window,background='#243b4a',height=round(26*scale))
-        self.label=tk.Label(self.bar,text={'state':'条件','decision':'决策','timeline':'时间线','perf':'性能'}[key],background='#243b4a',foreground='#fff',font=(theme.FONT,9))
+        self.label=tk.Label(self.bar,text=title,background='#243b4a',foreground='#fff',font=(theme.FONT,9))
         self.label.pack(side='left',fill='x',expand=True)
         for text,command in (('×',lambda:self.change(visible=False)),('−',lambda:self.change(collapsed=not self.config['collapsed']))):
             tk.Button(self.bar,text=text,command=command,relief='flat',background='#243b4a',foreground='#fff',takefocus=False,width=2).pack(side='right')
@@ -35,7 +37,10 @@ class TracePanel:
         else:self.bar.pack_forget()
         if desktop and config['collapsed']:self.canvas.pack_forget();bounds=(*bounds[:3],round(26*self.scale))
         else:self.canvas.pack(fill='both',expand=True)
-        self.canvas.delete('all');self.canvas.create_text(8,6,text='\n'.join(lines),anchor='nw',width=max(1,bounds[2]-16),font=(theme.FONT,config['font_size']),fill=color)
+        self.canvas.delete('all')
+        if self.renderer is not None:
+            self.renderer(self.canvas,(0,0,bounds[2],max(1,bounds[3]-(round(26*self.scale) if desktop else 0))),config,color)
+        else:self.canvas.create_text(8,6,text='\n'.join(lines),anchor='nw',width=max(1,bounds[2]-16),font=(theme.FONT,config['font_size']),fill=color)
         if desktop and not config['collapsed']:
             self.canvas.create_line(bounds[2]-16,bounds[3]-round(26*self.scale)-4,bounds[2]-4,bounds[3]-round(26*self.scale)-16,fill='#9db4be',width=2)
         if self.drag is not None:bounds=(self.window.winfo_x(),self.window.winfo_y(),self.window.winfo_width(),self.window.winfo_height())

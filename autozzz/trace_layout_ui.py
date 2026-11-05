@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import tkinter as tk
 from tkinter import ttk
-from .trace_preferences import PANELS,panel_bounds
+from .trace_preferences import ALL_PANELS,PANEL_LABELS,panel_bounds
 from . import theme
 
 
@@ -32,7 +32,7 @@ class TraceLayoutWindow:
         self.window.columnconfigure(0,weight=1);self.window.rowconfigure(1,weight=1)
         bar=ttk.Frame(self.window,padding=d(12));bar.grid(row=0,column=0,sticky='ew')
         self.panel=tk.StringVar(self.window,'条件');self.dock=tk.StringVar(self.window,'自由')
-        combo=ttk.Combobox(bar,textvariable=self.panel,values=('条件','决策','时间线','性能'),state='readonly',width=8);combo.pack(side='left')
+        combo=ttk.Combobox(bar,textvariable=self.panel,values=PANEL_LABELS,state='readonly',width=8);combo.pack(side='left')
         combo.bind('<<ComboboxSelected>>',lambda _:self.select())
         ttk.Combobox(bar,textvariable=self.dock,values=('自由','左上','右上','左下','右下'),state='readonly',width=8).pack(side='left',padx=d(8))
         ttk.Button(bar,text='停靠',command=self.docking).pack(side='left')
@@ -47,7 +47,7 @@ class TraceLayoutWindow:
         self.window.bind('<Destroy>',lambda e:self.close() if e.widget is self.window else None,add='+')
 
     def select(self):
-        self.selected=PANELS[('条件','决策','时间线','性能').index(self.panel.get())];self.paint()
+        self.selected=ALL_PANELS[PANEL_LABELS.index(self.panel.get())];self.paint()
 
     def docking(self):
         panel=self.value['panels'][self.selected];dock=self.dock.get()
@@ -57,7 +57,7 @@ class TraceLayoutWindow:
 
     def paint(self):
         self.canvas.delete('all');w,h=self.canvas.winfo_width(),self.canvas.winfo_height()
-        for key,label in zip(PANELS,('条件','决策','时间线','性能')):
+        for key,label in zip(ALL_PANELS,PANEL_LABELS):
             x,y,pw,ph=panel_bounds(self.value['panels'][key],(w,h));color='#70d5b5' if key==self.selected else '#7d98b0'
             self.canvas.create_rectangle(x,y,x+pw,y+ph,outline=color,fill='#263745',width=2,tags=(key,))
             lines=self.groups.get(key) or [label]
@@ -66,10 +66,10 @@ class TraceLayoutWindow:
 
     def down(self,event):
         w,h=self.canvas.winfo_width(),self.canvas.winfo_height();x,y=event.x*1920/w,event.y*1080/h
-        for key in reversed(PANELS):
+        for key in reversed(ALL_PANELS):
             px,py,pw,ph=panel_bounds(self.value['panels'][key],(1920,1080))
             if px<=x<=px+pw and py<=y<=py+ph:
-                self.selected=key;self.panel.set(('条件','决策','时间线','性能')[PANELS.index(key)])
+                self.selected=key;self.panel.set(PANEL_LABELS[ALL_PANELS.index(key)])
                 self.drag=(key,dict(self.value['panels'][key]),x-px,y-py,x>=px+pw-30 and y>=py+ph-30);break
         self.paint()
 

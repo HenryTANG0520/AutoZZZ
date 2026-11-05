@@ -13,7 +13,7 @@ from .onedragon_control import ExecutionStopped
 class ChargeBudgetControl:
     CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60,"合成电池":60}
 
-    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False,synthesis_authorized=False):
+    def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False,synthesis_authorized=False,evidence_dir=None):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
         if type(max_per_battle)is not int or not 20<=max_per_battle<=100:raise ValueError("单次电量上限须为 20—100。")
         self.ctx,self.control,self.budget,self.maximum = ctx,control,budget,max_per_battle
@@ -24,6 +24,8 @@ class ChargeBudgetControl:
         self.restore_control=None;self.restore_cost=0
         self.synthesis_authorized=synthesis_authorized;self.synthesis_control=None
         self.failures=[]
+        from .charge_evidence import ChargeEvidence
+        self.evidence=ChargeEvidence(evidence_dir) if evidence_dir is not None else None
 
     def check_restore_budget(self):
         if self.restore_mode=='不使用' or not self.restore_authorized:self._block('本轮未确认使用储蓄电量或以太电池。')
@@ -51,9 +53,20 @@ class ChargeBudgetControl:
         from one_dragon.utils import cv2_utils
         from one_dragon.base.geometry.rectangle import Rect
         button=self.ctx.screen_loader.get_area("实战模拟室","下一步").rect
-        part=cv2_utils.crop_image_only(operation.last_screenshot,Rect(max(0,button.x1-210),button.y1,button.x1,button.y2))
+        # 费用右侧会延伸到下一步按钮边缘内。旧 x2=button.x1 把 100
+        # 裁为 10，且 OCR 仍给出高置信度。保留两侧与上下的完整字形。
+        rect=Rect(max(0,button.x1-230),max(0,button.y1-10),button.x1+50,button.y2+10)
+        part=cv2_utils.crop_image_only(operation.last_screenshot,rect)
+        raw=self.ctx.ocr.run_ocr(part)
+        try:return self._validate_cost(operation,raw)
+        except ValueError as exc:
+            evidence=getattr(self,'evidence',None)
+            if evidence is not None:evidence.record(operation.last_screenshot,part,rect,raw,str(exc),operation.plan)
+            raise
+
+    def _validate_cost(self,operation,raw) -> tuple[int,int]:
         results=[]
-        for text,matches in self.ctx.ocr.run_ocr(part).items():
+        for text,matches in raw.items():
             parsed=re.fullmatch(r"\s*(\d+)\s*/\s*(\d{1,3})\s*",text)
             if parsed and matches.max is not None and matches.max.confidence>=.7:
                 results.append(tuple(map(int,parsed.groups())))
@@ -85,6 +98,7 @@ class ChargeBudgetControl:
         self.control.checkpoint(require_frame=True)
 
     def install(self):
+        self.ctx.autozzz_charge_control=self
         from zzz_od.operation.compendium.combat_simulation import CombatSimulation
         from zzz_od.operation.compendium.area_patrol import AreaPatrol
         from zzz_od.operation.compendium.expert_challenge import ExpertChallenge
@@ -184,10 +198,13 @@ class ChargeBudgetControl:
     def status(self) -> dict:
         return dict(id=self.budget.data["id"],reserved=self.budget.reserved,remaining=self.budget.remaining,
                     rounds_left=self.budget.rounds_left,pending=len(self.budget.pending),limited=self.limited,
-                    failures=[dict(item) for item in self.failures])
+                    failures=[dict(item) for item in self.failures],
+                    evidence=[] if self.evidence is None else self.evidence.status(),
+                    evidence_errors=[] if self.evidence is None else list(self.evidence.errors))
 
     def close(self):
         if self.synthesis_control is not None:self.synthesis_control.close()
         if self.restore_control is not None:self.restore_control.close()
         for cls,name,original in reversed(self.originals):setattr(cls,name,original)
         self.originals.clear()
+        if getattr(self.ctx,'autozzz_charge_control',None) is self:delattr(self.ctx,'autozzz_charge_control')

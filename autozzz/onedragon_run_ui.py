@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import queue
+import threading
+from concurrent.futures import Future
 import tkinter as tk
 from tkinter import ttk,filedialog
 import uuid
@@ -29,6 +31,8 @@ class ExecutionWindow:
         self.last_report=None
         self.battle_monitor=None
         self.trace_window=None
+        self.mcp_window=None
+        self.mcp_requests={};self.mcp_requests_lock=threading.Lock()
         self.resource_confirmation_id=""
         self.resource_required=False
         self.poll_token=None
@@ -69,6 +73,10 @@ class ExecutionWindow:
         style.map('RunTool.TButton',foreground=[('active',theme.ACCENT),('focus',theme.ACCENT)])
         self.trace_button=ttk.Button(header,text='调试追踪…',command=self.show_trace,style='RunTool.TButton')
         self.trace_button.grid(row=0,column=2,sticky='e',padx=(d(14),0))
+        self.mcp_button=None
+        if app_id not in ('_rotation','_login'):
+            self.mcp_button=ttk.Button(header,text='MCP服务…',command=self.show_mcp,style='RunTool.TButton')
+            self.mcp_button.grid(row=0,column=3,sticky='e',padx=(d(8),0))
         if route_debug is not None:
             theme.wrapped_label(header,text=f"{route_debug['key']} · 已完成 {route_debug['start_index']} 个移动点" if route_debug['start_index'] else f"{route_debug['key']} · 从起点传送",style="Hint.TLabel").grid(row=1,column=0,columnspan=2,sticky="ew",pady=(d(8),0))
             self.auto_launch.set(False)
@@ -232,6 +240,29 @@ class ExecutionWindow:
         self.trace_window.update_state(self.last_state)
         self.trace_window.window.deiconify();self.trace_window.window.lift()
 
+    def mcp_rpc(self,method,params):
+        tag='mcp-'+uuid.uuid4().hex;future=Future()
+        with self.mcp_requests_lock:
+            if self.closing or self.closed:raise RuntimeError('运行窗口正在关闭。')
+            self.mcp_requests[tag]=future
+        self.session.send('rpc',tag=tag,method=method,params=params)
+        try:return future.result()
+        finally:
+            with self.mcp_requests_lock:self.mcp_requests.pop(tag,None)
+
+    def cancel_mcp_requests(self):
+        with self.mcp_requests_lock:
+            for future in self.mcp_requests.values():
+                if not future.done():future.set_exception(RuntimeError('运行窗口已关闭，原请求未重复执行。'))
+            self.mcp_requests.clear()
+
+    def show_mcp(self):
+        if self.closing or self.app_id in ('_rotation','_login'):return
+        from .onedragon_mcp_ui import McpWindow
+        if self.mcp_window is None or self.mcp_window.closed:
+            self.mcp_window=McpWindow(self.window,self.mcp_rpc,self.ui.ui_scale)
+        self.mcp_window.window.deiconify();self.mcp_window.window.lift()
+
     def budget_records(self):
         from .budget_ui import BudgetWindow
         BudgetWindow(self.window,self.profile,self.ui.ui_scale)
@@ -250,6 +281,8 @@ class ExecutionWindow:
 
     def disposed(self,event):
         if event.widget is self.window:
+            self.cancel_mcp_requests()
+            if self.mcp_window is not None:self.mcp_window.destroy()
             if self.trace_window is not None:self.trace_window.close()
             if self.poll_token is not None:
                 self.window.after_cancel(self.poll_token)
@@ -358,6 +391,15 @@ class ExecutionWindow:
                         self.update_buttons();continue
                     self.status.set("正在读取当前账号配置")
                     self.session.send("rpc",method="account_list",tag="run-account-list",params={})
+                elif kind in ('rpc_result','rpc_error') and str(event.get('tag','')).startswith('mcp-'):
+                    with self.mcp_requests_lock:
+                        future=self.mcp_requests.get(event['tag'])
+                        if future is not None and not future.done():
+                            if kind=='rpc_error':future.set_exception(RuntimeError(event['message']))
+                            else:future.set_result(event['result'])
+                elif kind=='rpc_error':
+                    self.status.set(event['message']);self.write(event['message'])
+                    if self.loading_account:self.loading_account=False;self.connected=False
                 elif kind=="rpc_result" and event["tag"]=="run-account-list":
                     snapshot=event["result"]
                     self.instance_idx=snapshot["current"]
@@ -504,6 +546,7 @@ class ExecutionWindow:
                         self.ui.root.deiconify()
                         self.window.deiconify()
                 elif kind=="closed":
+                    self.cancel_mcp_requests()
                     self.connected=self.prepared=self.busy=self.bootstrapping=False
                     if self.closing:
                         self.closed=True
@@ -515,8 +558,10 @@ class ExecutionWindow:
 
     def close(self):
         if not self.closing:
-            if self.trace_window is not None:self.trace_window.close()
             self.closing=True
+            self.cancel_mcp_requests()
+            if self.mcp_window is not None:self.mcp_window.destroy()
+            if self.trace_window is not None:self.trace_window.close()
             self.status.set("正在停止并关闭…")
             self.session.close()
             self.update_buttons()

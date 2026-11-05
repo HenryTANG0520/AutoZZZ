@@ -283,6 +283,9 @@ class RotationSession:
                                      budget=budget if prepared['uses_charge'] else None,timeout_seconds=timeout,
                                      resource_confirmation=resources.get('confirmation_id') if resources.get('confirmation_required') else None)
                     record['state']=result['state'];record['applications']=result.get('applications',[])
+                    from .charge_evidence import collect_charge_evidence
+                    try:record['evidence']=collect_charge_evidence(result,self.paths.data,self.report_dir)
+                    except (OSError,ValueError) as exc:record['evidence_errors']=[str(exc)]
                     if result.get('budget',{}).get('pending'):raise RuntimeError('存在未核实的战斗消耗，停止后续账号。')
                     previous=row;self._save()
                 if len(rows)==1:self.report['returned_to_start']=True

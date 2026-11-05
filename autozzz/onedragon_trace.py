@@ -43,6 +43,9 @@ class TraceRuntime:
         self.closed=False;self.enabled=False;self.epoch=None;self.generation=0;self.discarded=0
         self.originals={}
         self.bus.enabled=False;self.bus.clear()
+        from .trace_auto_capture import AutomaticOverlayCapture
+        self.automatic_capture=AutomaticOverlayCapture(self)
+        self.automatic_capture.install()
         for kind in KINDS:
             name='add_'+kind;original=getattr(self.bus,name);self.originals[name]=original
             setattr(self.bus,name,self._guard(original))
@@ -108,6 +111,7 @@ class TraceRuntime:
         from .onedragon_runtime import UPSTREAM_REVISION
         result=dict(format=1,revision=UPSTREAM_REVISION,enabled=enabled,generation=generation,epoch=epoch,created=now,discarded=self.discarded,
                     items={kind:[] for kind in KINDS},counts={},truncated={},window_identity=None,standard_size=[1920,1080])
+        result['automatic_capture']=dict(saved=self.automatic_capture.saved,error=self.automatic_capture.error)
         if source is not None:
             for kind,(ttl,limit) in KINDS.items():
                 rows=[];available=0;remaining=240_000
@@ -137,3 +141,4 @@ class TraceRuntime:
             self.closed=True;self.enabled=False;self.bus.enabled=False;self.bus.clear()
             for name,original in self.originals.items():setattr(self.bus,name,original)
             self.originals.clear()
+            self.automatic_capture.close()

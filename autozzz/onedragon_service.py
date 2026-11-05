@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import threading
 from enum import Enum
 from typing import Any
 import uuid
@@ -43,6 +44,11 @@ class OneDragonService:
         self._pip = None
         self._plugins = None
         self._program_updates=None
+        self._gamepad_dependencies=None
+        self._source_workspace=None
+        self._environment_tools=None
+        self._dispatch_lock=threading.RLock()
+        self._mcp_service=None
         self._run_lease=run_lease
         self._rotation_guard=None
         self._rotation_sealed=False
@@ -60,6 +66,12 @@ class OneDragonService:
 
     def _create_context(self):
         """调用方持有 profile_lock；专用设置在整个界面生命周期保留它。"""
+        from .gamepad_install import activate_gamepad_support
+        try:activate_gamepad_support(self.data)
+        except (ValueError,OSError) as exc:
+            # 损坏的可选依赖不进入sys.path；保留前台功能与显式修复入口。
+            from one_dragon.utils.log_utils import log
+            log.warning('虚拟手柄依赖未激活：%s',exc)
         from .onedragon_host import ManagedZContext
         ctx=ManagedZContext();ctx.plugin_run_lease=self._run_lease
         ctx.register_application_factory();self._ctx=ctx
@@ -486,7 +498,7 @@ class OneDragonService:
             raise ValueError("请输入策略名称。")
         if name in (".", "..") or any(char in name for char in '/\\\0<>:"|?*') or name.endswith((".", " ")):
             raise ValueError("策略名称不能包含路径或文件名保留字符。")
-        if name.endswith((".sample", ".merged")):
+        if name.casefold().endswith((".sample", ".merged")):
             raise ValueError("策略名称不能以 .sample 或 .merged 结尾。")
         if len(name) > 100 or name.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
             raise ValueError("策略名称无效。")
@@ -522,7 +534,17 @@ class OneDragonService:
 
     def policy_read(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> dict:
         path = self._policy_path(name, merged,kind)
-        return dict(name=name, filename=path.name, content=path.read_text(encoding="utf-8"))
+        from .policy_archives import checksum
+        raw=path.read_bytes()
+        return dict(name=name, filename=path.name, content=raw.decode('utf-8'),revision=checksum(raw))
+
+    def policy_remove(self,name:str,revision:str,kind:str='auto_battle'):
+        from .policy_archives import PolicyArchives
+        return PolicyArchives(self).remove(name,kind,revision)
+
+    def policy_restore(self,archive_id:str):
+        from .policy_archives import PolicyArchives
+        return PolicyArchives(self).restore(archive_id)
 
     def policy_validate(self, name: str, merged: bool = True, kind: str = 'auto_battle') -> dict:
         self._assert_idle()
@@ -581,6 +603,8 @@ class OneDragonService:
         finally:
             temporary.unlink(missing_ok=True)
         validation["name"] = name
+        from .policy_archives import checksum
+        validation['revision']=checksum(target.read_bytes())
         return validation
 
     def policy_check(self, content: str, kind: str = 'auto_battle') -> dict:
@@ -606,6 +630,9 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        if getattr(self,'_source_workspace',None) is not None and self._source_workspace.busy:raise RuntimeError('源码操作仍在运行，请等待或取消原任务。')
+        if getattr(self,'_environment_tools',None) is not None and self._environment_tools.busy:raise RuntimeError('下载源或代理检查仍在运行，请等待或取消原任务。')
+        if getattr(self,'_gamepad_dependencies',None) is not None and self._gamepad_dependencies.busy:raise RuntimeError('虚拟手柄安装仍在运行，请等待原任务结束。')
         if getattr(self,'_program_updates',None) is not None and self._program_updates.busy:raise RuntimeError('程序版本操作仍在进行，请查询或取消原任务。')
         if self._plugins is not None and self._plugins.busy:raise RuntimeError('插件操作仍在处理，请等待原任务结束。')
         if self._downloads is not None and self._downloads.busy:
@@ -640,7 +667,28 @@ class OneDragonService:
     def execution_status(self) -> dict:
         if self._execution is None:
             return dict(state="idle", busy=False, ready=False, job_id="", error="")
-        return self._execution.status()
+        result=self._execution.status()
+        manager=getattr(self,'_mcp_service',None)
+        if manager is not None and manager.owned_job==result.get('job_id'):
+            result['mcp_run']=manager.run_description()
+        return result
+
+    @property
+    def mcp_service(self):
+        if self._mcp_service is None:
+            from .onedragon_mcp import McpService
+            self._mcp_service=McpService(self)
+        return self._mcp_service
+
+    def mcp_start(self,port=23001):return self.mcp_service.start(port)
+    def mcp_status(self):return self.mcp_service.status()
+    def mcp_grant(self,budget=None,timeout_seconds=600,resource_confirmation=None,expires_seconds=900):
+        return self.mcp_service.authorize(budget,timeout_seconds,resource_confirmation,expires_seconds)
+    def mcp_revoke(self):return self.mcp_service.revoke()
+    def mcp_stop(self):return self.mcp_service.stop()
+    def mcp_edit_enable(self,scopes):return self.mcp_service.edit_enable(scopes)
+    def mcp_edit_disable(self):return self.mcp_service.edit_disable()
+    def mcp_edit_restore(self,kind,id):return self.mcp_service.edit_restore(kind,id)
 
     def prepare_application(self,app_id:str,route_debug:dict|None=None) -> dict:
         self._assert_idle()
@@ -695,6 +743,44 @@ class OneDragonService:
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation)
 
+    @property
+    def gamepad_dependencies(self):
+        if self._gamepad_dependencies is None:
+            from .gamepad_install import GamepadDependencies
+            self._gamepad_dependencies=GamepadDependencies(self)
+        return self._gamepad_dependencies
+
+    def gamepad_catalog(self):return self.gamepad_dependencies.catalog()
+    def gamepad_install_start(self,action,revision,confirmed=False):
+        return self.gamepad_dependencies.start(action,revision,confirmed)
+    def gamepad_install_status(self,job_id=None):return self.gamepad_dependencies.status(job_id)
+    def gamepad_install_cancel(self,job_id):return self.gamepad_dependencies.cancel(job_id)
+
+    @property
+    def source_workspace(self):
+        if self._source_workspace is None:
+            from .source_workspace import SourceWorkspace
+            self._source_workspace=SourceWorkspace(self)
+        return self._source_workspace
+
+    def source_catalog(self):return self.source_workspace.catalog()
+    def source_start(self,action,branch=None):return self.source_workspace.start(action,branch)
+    def source_status(self):return self.source_workspace.status()
+    def source_cancel(self):return self.source_workspace.cancel()
+
+    @property
+    def environment_tools(self):
+        if self._environment_tools is None:
+            from .environment_tools import EnvironmentTools
+            self._environment_tools=EnvironmentTools(self)
+        return self._environment_tools
+
+    def environment_tools_catalog(self):return self.environment_tools.catalog()
+    def environment_tools_start(self,action,revision):return self.environment_tools.start(action,revision)
+    def environment_tools_status(self,job_id=None):return self.environment_tools.status(job_id)
+    def environment_tools_cancel(self,job_id):return self.environment_tools.cancel(job_id)
+    def environment_tools_apply(self,job_id,value,revision):return self.environment_tools.apply(job_id,value,revision)
+
     def pause_execution(self, paused: bool) -> dict:
         if self._execution is None:
             raise RuntimeError("当前没有一条龙执行任务。")
@@ -744,6 +830,10 @@ class OneDragonService:
             if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
 
     def _close_resources(self) -> None:
+        if getattr(self,'_mcp_service',None) is not None:self._mcp_service.close()
+        if getattr(self,'_environment_tools',None) is not None:self._environment_tools.close()
+        if getattr(self,'_source_workspace',None) is not None:self._source_workspace.close()
+        if getattr(self,'_gamepad_dependencies',None) is not None:self._gamepad_dependencies.close()
         if getattr(self,'_program_updates',None) is not None:self._program_updates.close()
         if self._plugins is not None:self._plugins.close()
         if self._pip is not None:self._pip.close()
@@ -803,3 +893,7 @@ METHODS.update({'program_catalog','program_check','program_download','program_im
 METHODS.add('schedule_review')
 METHODS.update({'agent_template_catalog','agent_template_open','agent_template_import','agent_template_side','agent_template_save','agent_template_remove',
                 'agent_template_restore','agent_template_recover','agent_template_preferences','agent_template_preferences_save','agent_template_capture','agent_template_view'})
+METHODS.update({'gamepad_catalog','gamepad_install_start','gamepad_install_status','gamepad_install_cancel'})
+METHODS.update({'source_catalog','source_start','source_status','source_cancel'})
+METHODS.update({'mcp_start','mcp_status','mcp_grant','mcp_revoke','mcp_stop','policy_remove','policy_restore'})
+METHODS.update({'mcp_edit_enable','mcp_edit_disable','mcp_edit_restore','environment_tools_catalog','environment_tools_start','environment_tools_status','environment_tools_cancel','environment_tools_apply'})

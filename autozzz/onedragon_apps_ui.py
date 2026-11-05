@@ -381,6 +381,27 @@ class ApplicationsPanel:
             if self.current_id in ("_models","_environment"):
                 ttk.Button(self.content,text="资源下载…",command=self.downloads).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1
+            if self.current_id=="_environment":
+                from .source_workspace_ui import SourceBranchesWindow
+                def source_workspace():
+                    existing=getattr(self.ui,'source_workspace_window',None)
+                    if existing is not None and not existing.closed:
+                        existing.window.deiconify();existing.window.lift();return
+                    self.ui.source_workspace_window=SourceBranchesWindow(self.ui,"global" if self.profile.get()=="国际服" else "cn")
+                ttk.Button(self.content,text="上游源码分支…",command=source_workspace).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
+                row+=1
+                def environment_tools():
+                    existing=getattr(self.ui,'environment_tools_window',None)
+                    if existing is not None and not existing.closed:
+                        existing.window.deiconify();existing.window.lift();return
+                    from .environment_tools_ui import EnvironmentToolsWindow
+                    self.ui.environment_tools_window=EnvironmentToolsWindow(self.ui,'global' if self.profile.get()=='国际服' else 'cn')
+                ttk.Button(self.content,text='下载源与代理…',command=environment_tools).grid(row=row,column=0,sticky='w',pady=(0,round(18*self.scale)))
+                row+=1
+            if self.current_id in ("_game_input","_environment"):
+                from .gamepad_install_ui import open_gamepad_install
+                ttk.Button(self.content,text="虚拟手柄安装 / 修复…",command=lambda:open_gamepad_install(self.ui,"global" if self.profile.get()=="国际服" else "cn")).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
+                row+=1
             if self.current_id in ("lost_void", "withered_domain", "world_patrol") or self.current_id.startswith(("lost_void_challenge:", "hollow_zero_challenge:")):
                 ttk.Button(self.content, text="管理方案与路线…", command=self.library).grid(row=row, column=0, sticky="w", pady=(0, round(18*self.scale)))
                 row += 1

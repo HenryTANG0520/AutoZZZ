@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 import ctypes as C
 from ctypes import wintypes as W
 import time
@@ -13,6 +13,7 @@ import tkinter as tk
 class LogLine:
     text: str
     level: str = "info"
+    created: float = field(default_factory=time.monotonic)
 
 
 def overlay_bounds(left, top, width, height):
@@ -56,9 +57,9 @@ class NativePresentation:
             raise OSError(C.get_last_error(), "覆盖日志无法从截图中排除")
         return handle
 
-    def game_bounds(self, handle):
+    def game_bounds(self, handle, *, require_foreground=True):
         if (not isinstance(handle, int) or not self.user32.IsWindow(handle)
-                or self.user32.IsIconic(handle) or self.user32.GetForegroundWindow() != handle):
+                or self.user32.IsIconic(handle) or (require_foreground and self.user32.GetForegroundWindow() != handle)):
             return None
         rect, point = W.RECT(), W.POINT()
         if not self.user32.GetClientRect(handle, C.byref(rect)) or not self.user32.ClientToScreen(handle, C.byref(point)):
@@ -71,7 +72,7 @@ class NativePresentation:
 
 
 class GameLogOverlay:
-    def __init__(self, root, game_handle, warn, *, presentation=None):
+    def __init__(self, root, game_handle, warn, *, presentation=None,preferences_path=None):
         self.root, self.game_handle, self.warn = root, game_handle, warn
         self.lines = deque(maxlen=40)
         self.enabled = True
@@ -83,6 +84,11 @@ class GameLogOverlay:
         self._bounds = None
         self._dirty = True
         self._timer = None
+        self.log_panel_enabled=True;self.log_fade_seconds=0;self.preference_next=0
+        from .trace_preferences import TracePreferences,DEFAULTS
+        from copy import deepcopy
+        self.preference_store=TracePreferences(preferences_path);self.preferences=deepcopy(DEFAULTS)
+        self.desktop_panel=None;self.scale=float(root.tk.call('tk','scaling'))*72/96
         self.window = tk.Toplevel(root, takefocus=False)
         self.window.withdraw()
         self.window.overrideredirect(True)
@@ -126,40 +132,83 @@ class GameLogOverlay:
         if self.visible:
             self.window.withdraw()
             self.visible = False
+        panel=getattr(self,'desktop_panel',None)
+        if panel is not None:panel.hide()
+
+    def save_panel(self,key,changes):
+        # Load the latest revision before editing only log presentation; other windows' fields survive.
+        value=self.preference_store.load();value['panels']['log'].update(changes)
+        self.preference_store.save(value);self.preferences=value;self._dirty=True
+
+    def _desktop_render(self,canvas,bounds,config,color):
+        self._render_text(canvas,bounds,max(8,round(config['font_size']*96/72*self.scale)),color)
 
     def _render(self, bounds, game_width):
+        config=self.preferences['panels']['log']
+        self._render_text(self.canvas,bounds,max(12,round(config['font_size']*96/72*game_width/1920)),self.preferences['text_color'])
+        self._dirty=False
+
+    def _render_text(self,canvas,bounds,size,color):
         width, height = bounds[2:]
-        self.canvas.delete("all")
-        size = max(12, round(15 * game_width/1920))
+        canvas.delete("all")
         font = ("Microsoft YaHei UI", -size)
         gap = max(3, round(size*.25))
         title = f"AutoZZZ  ·  {self.status}  |  F9 暂停  F10 停止"
-        self.canvas.create_text(2, 2, anchor="nw", text=title, width=width-4, fill="#000000", font=font)
-        heading = self.canvas.create_text(0, 0, anchor="nw", text=title, width=width-4, fill="#9ce1ff", font=font)
-        cutoff = self.canvas.bbox(heading)[3] + gap*2
+        canvas.create_text(2, 2, anchor="nw", text=title, width=width-4, fill="#000000", font=font)
+        heading = canvas.create_text(0, 0, anchor="nw", text=title, width=width-4, fill="#9ce1ff", font=font)
+        cutoff = canvas.bbox(heading)[3] + gap*2
         y = height-gap
-        colors = {"warning": "#ffda82", "error": "#ff9393", "info": "#f0f1f5"}
+        colors = {"warning": "#ffda82", "error": "#ff9393", "info": color}
         for line in reversed(self.lines):
-            shadow = self.canvas.create_text(2, y+2, anchor="sw", text=line.text, width=width-6, fill="black", font=font)
-            item = self.canvas.create_text(0, y, anchor="sw", text=line.text, width=width-6,
+            shadow = canvas.create_text(2, y+2, anchor="sw", text=line.text, width=width-6, fill="black", font=font)
+            item = canvas.create_text(0, y, anchor="sw", text=line.text, width=width-6,
                                            fill=colors.get(line.level, colors["info"]), font=font)
-            top = self.canvas.bbox(item)[1]
+            top = canvas.bbox(item)[1]
             if top < cutoff:
-                self.canvas.delete(item, shadow)
+                canvas.delete(item, shadow)
                 break
             y = top-gap
-        self._dirty = False
 
     def _tick(self):
         if self.closed:
             return
         try:
-            game = self.presentation.game_bounds(self.game_handle()) if self.handle else None
-            bounds = overlay_bounds(*game) if game else None
-            if (not self.enabled or not self.handle or not bounds
+            now=time.monotonic()
+            if now>=self.preference_next:
+                self.preference_next=now+1
+                try:
+                    from .trace_preferences import TracePreferences
+                    preferences=(self.preference_store if hasattr(self,'preference_store') else TracePreferences()).load()
+                    if preferences!=getattr(self,'preferences',None):self._dirty=True
+                    self.preferences=preferences
+                    self.log_panel_enabled=preferences['log_panel_enabled']
+                    self.log_fade_seconds=preferences['log_fade_seconds']
+                    if self.lines.maxlen!=preferences['log_max_lines']:
+                        self.lines=deque(self.lines,maxlen=preferences['log_max_lines']);self._dirty=True
+                except (OSError,ValueError):pass
+            while self.log_fade_seconds and self.lines and now-self.lines[0].created>self.log_fade_seconds:
+                self.lines.popleft();self._dirty=True
+            config=self.preferences['panels']['log'];desktop=config['mode']=='desktop'
+            game = (self.presentation.game_bounds(self.game_handle(),require_foreground=False) if desktop
+                    else self.presentation.game_bounds(self.game_handle())) if self.handle else None
+            from .trace_preferences import panel_bounds
+            bounds=None
+            if game and game[2]>=960 and game[3]>=540:
+                x,y,w,h=panel_bounds(config,game[2:]);bounds=(game[0]+x,game[1]+y,w,h)
+            if (not self.enabled or not self.log_panel_enabled or not config['visible'] or not self.handle or not bounds
                     or not (self.active or time.monotonic() < self.linger_until)):
                 self._hide()
+            elif desktop:
+                if self.visible:self.window.withdraw();self.visible=False
+                if self.desktop_panel is None:
+                    from .trace_panels_ui import TracePanel
+                    self.desktop_panel=TracePanel(self.root,'log',self.scale,self.save_panel,
+                        presentation=self.presentation,renderer=self._desktop_render)
+                self.desktop_panel.show([],config,(config['desktop_x'],config['desktop_y'],
+                    round(config['w']*self.scale),round(config['h']*self.scale)),self.preferences['text_color'])
             else:
+                if self.desktop_panel is not None:self.desktop_panel.hide()
+                self.window.attributes('-alpha',config['opacity']/100)
                 if bounds != self._bounds:
                     self.window.geometry(f"{bounds[2]}x{bounds[3]}")
                     self._bounds, self._dirty = bounds, True
@@ -169,9 +218,10 @@ class GameLogOverlay:
                     self.window.deiconify()
                     self.visible = True
                 self.presentation.show(self.handle, bounds)
+                self.handle=self.presentation.prepare(self.window)
         except (OSError, tk.TclError):
             self._hide()
-        self._timer = self.root.after(200, self._tick)
+        self._timer = self.root.after(getattr(self,'preferences',{}).get('follow_interval_ms',200), self._tick)
 
     def close(self):
         if self.closed:
@@ -179,4 +229,5 @@ class GameLogOverlay:
         self.closed = True
         if self._timer is not None:
             self.root.after_cancel(self._timer)
+        if self.desktop_panel is not None:self.desktop_panel.close()
         self.window.destroy()

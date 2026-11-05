@@ -67,6 +67,7 @@ def build(output: Path):
     bridge_files=tracked(root,'assets','LICENSE','LICENSE_NOTICE.md','launcher.py','requirements.txt','requirements-dev.txt','setup.ps1')
     bridge_files += ['tools/build.ps1','tools/package_onedragon_runtime.py','tools/setup_onedragon.ps1','tools/package_release.py']
     bridge_files += sorted(path.relative_to(root).as_posix() for path in (root/'autozzz').rglob('*.py') if '__pycache__' not in path.parts)
+    bridge_files += ['autozzz/onedragon_mcp_catalog.json']
     copy_files(root,output/'bridge',bridge_files)
     files={name:digest(path) for name,path in sorted(tree_files(output))}
     metadata=dict(format=1,revision=UPSTREAM_REVISION,protocol=PROTOCOL_VERSION,python_version=facts['version'],

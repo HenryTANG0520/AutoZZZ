@@ -10,7 +10,7 @@ import tempfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from autozzz.config import ROOT
-from autozzz.onedragon_runtime import OneDragonClient,RuntimePaths,RequestPending
+from autozzz.onedragon_runtime import OneDragonClient,RuntimePaths,RequestPending,RemoteError
 
 
 def main():
@@ -39,7 +39,8 @@ def main():
                     try:client.finish_start(timeout=.5);break
                     except RequestPending:continue
             catalog=call('agent_template_catalog');assert len(catalog['steps'])==6
-            draft=call('agent_template_open');token=draft['token']
+            assert any(row['template_id']=='anby' and row['agent_id']=='anby' for row in catalog['registered_templates'])
+            draft=call('agent_template_open',agent='anby');token=draft['token']
             for i in range(6):
                 draft=call('agent_template_import',token=token,index=i,path=str(screenshot))
                 assert draft['images'][i] and draft['masks'][i] and draft['rect']
@@ -60,18 +61,37 @@ def main():
                     if args.output:(args.output/'chain-right-raw.png').write_bytes(base64.b64decode(other['images'][i]))
                     call('agent_template_side',token=token,side='left')
                 checks.append(catalog['steps'][i]['key'])
-            saved=call('agent_template_save',token=token,agent='autozzz_fixture');assert saved['archive']
-            reopened=call('agent_template_open',agent='autozzz_fixture')
+            saved=call('agent_template_save',token=token,agent='anby');assert saved['archive']
+            reopened=call('agent_template_open',agent='anby')
             assert all(reopened['images']) and reopened['images']==draft['images'] and not reopened['changed']
-            removed=call('agent_template_remove',agent='autozzz_fixture',signature=reopened['signature'])
-            assert not any(row['id']=='autozzz_fixture' for row in removed['catalog']['agents'])
+            removed=call('agent_template_remove',agent='anby',signature=reopened['signature'])
+            assert not any(row['id']=='anby' for row in removed['catalog']['agents'])
             restored=call('agent_template_restore',identifier=removed['archive'])
-            assert any(row['id']=='autozzz_fixture' for row in restored['catalog']['agents'])
-            reopened=call('agent_template_open',agent='autozzz_fixture')
+            assert any(row['id']=='anby' for row in restored['catalog']['agents'])
+            reopened=call('agent_template_open',agent='anby')
             assert reopened['images']==draft['images'];checks.append('source_save_png_mask_delete_archive_restore')
-            before=call('agent_template_preferences');values=before['values'];values['hotkeys']['battle_1']='Ctrl+Shift+1'
+            before=call('agent_template_preferences');values=before['values'];values['hotkeys']['battle_1']='Win+numpad_7'
             prefs=call('agent_template_preferences_save',values=values,revision=before['revision'])
-            assert prefs['values']['hotkeys']['battle_1']=='Ctrl+Shift+1';checks.append('source_hotkeys_presentation_config')
+            assert prefs['values']['hotkeys']['battle_1']=='Win+NUMPAD_7';checks.append('source_extended_hotkeys_presentation_config')
+            assert reopened['registration']['registered'] and reopened['registration']['agent_id']=='anby'
+            checks.append('registered_engine_agent_mapped')
+            registered_before=call('agent_template_catalog')['registered_templates']
+            custom=call('agent_template_open');custom_id='unregistered_new_character'
+            for i in range(6):custom=call('agent_template_import',token=custom['token'],index=i,path=str(screenshot))
+            saved=call('agent_template_save',token=custom['token'],agent=custom_id)
+            assert not saved['draft']['registration']['registered'] and saved['draft']['registration']['agent_id'] is None
+            assert saved['catalog']['registered_templates']==registered_before
+            custom=call('agent_template_open',agent=custom_id);old_images=custom['images']
+            custom=call('agent_template_import',token=custom['token'],index=2,path=str(screenshot),side='right')
+            saved=call('agent_template_save',token=custom['token'],agent=custom_id)
+            assert saved['draft']['images'][2]!=old_images[2] and not saved['draft']['registration']['registered']
+            restored=call('agent_template_restore',identifier=saved['archive'])
+            custom=call('agent_template_open',agent=custom_id);assert custom['images']==old_images
+            removed=call('agent_template_remove',agent=custom_id,signature=custom['signature'])
+            restored=call('agent_template_restore',identifier=removed['archive'])
+            assert any(row['id']==custom_id and not row['registration']['registered'] for row in restored['catalog']['agents'])
+            assert restored['catalog']['registered_templates']==registered_before
+            checks.append('unknown_asset_create_save_edit_restore_does_not_register_engine_agent')
             execution=call('execution_status');assert not execution['ready'] and not execution['busy']
         finally:
             while True:

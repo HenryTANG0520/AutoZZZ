@@ -22,6 +22,7 @@ class RuntimeSession:
         self.stop_requested=threading.Event()
         self.runner=None
         self.phase,self.job_id="",""
+        self.mcp_active=False
         self.parameters={}
         from .config import ROOT
         self.report_root=Path(report_root) if report_root is not None else ROOT/"runs"/"onedragon"
@@ -93,6 +94,10 @@ class RuntimeSession:
     def _finish_report(self,state):
         with self.report_lock:
             if self.report is not None and self.report.get("status")=="running":
+                from .charge_evidence import collect_charge_evidence
+                try:self.report['evidence']=collect_charge_evidence(state,getattr(self.paths,'data',None),self.report_dir)
+                except (OSError,ValueError) as exc:
+                    self.report['evidence_errors']=[str(exc)]
                 self.report.update(status=state["state"],execution=state,finished_at=datetime.now().astimezone().isoformat())
                 try:self._save_report()
                 except OSError as exc:self.emit(dict(type="error",message="报告写入失败："+str(exc),busy=bool(self.phase)))
@@ -112,6 +117,10 @@ class RuntimeSession:
     def _handle(self,client,command,params):
         if command=="rpc":
             result=self._call(client,params["method"],**params.get("params",{}))
+            if params['method']=='mcp_start':self.mcp_active=True
+            elif params['method']=='mcp_stop':
+                if self.mcp_active:self._status(client)
+                self.mcp_active=False
             self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
         elif command=="prepare":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
@@ -152,7 +161,17 @@ class RuntimeSession:
 
     def _status(self,client):
         state=self._call(client,"execution_status")
+        adopted=False
+        if self.mcp_active and self.job_id and state['job_id']!=self.job_id:
+            remote=state.get('mcp_run',{})
+            if (not self.phase and remote.get('job_id')==state['job_id']
+                and remote.get('prepared_job')==self.job_id and remote.get('app_id')==self.parameters.get('app_id')):
+                self._begin_report(dict(app_id=remote['app_id'],budget=remote.get('budget'),
+                    timeout_seconds=remote.get('timeout_seconds',600),auto_launch=False,source='mcp'))
+                self.job_id=state['job_id'];self.phase='running';adopted=True
+                self.emit(dict(type='phase',phase='MCP已启动授权应用',minimize=True,bootstrapping=False))
         if self.job_id and state["job_id"]!=self.job_id:raise RuntimeError("任务编号发生变化，请停止并检查原任务。")
+        if self.mcp_active and not self.phase and not adopted:return
         if not state["busy"]:
             if self.phase=="initializing" and state["state"]=="ready":
                 extra = {"route_debug": self.parameters["route_debug"]} if self.parameters.get("route_debug") is not None else {}
@@ -200,13 +219,20 @@ class RuntimeSession:
                         if command=="stop" and not client.alive:continue
                         self._handle(client,command,params)
                     except Exception as exc:
+                        if command=='rpc':
+                            # Existing management windows consume the original error event.
+                            # Only MCP requests have a tagged Future requiring a separate response.
+                            tag=params.get('tag')
+                            self.emit(dict(type='rpc_error' if str(tag).startswith('mcp-') else 'error',
+                                tag=tag,message=str(exc),busy=bool(self.phase)))
+                            continue
                         if command=="start" and self.stop_requested.is_set() and not self.phase:
                             self._finish_report(dict(state="stopped",error=str(exc),application_started=False))
                             self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))
                         else:
                             self.emit(dict(type="error",message=str(exc),busy=bool(self.phase)))
                             if not self.phase:self._finish_report(dict(state="failed",error=str(exc)))
-                if self.phase:
+                if self.phase or self.mcp_active:
                     try:self._status(client)
                     except Exception as exc:
                         self.emit(dict(type="error",message="状态查询未完成："+str(exc),busy=True))
@@ -219,6 +245,11 @@ class RuntimeSession:
             exited=False
             try:
                 if client.alive:
+                    if self.mcp_active:
+                        try:self._call(client,'mcp_stop')
+                        except Exception as exc:self.emit(dict(type='log',message='MCP关闭未完成：'+str(exc)))
+                        try:self._status(client)
+                        except Exception as exc:self.emit(dict(type='log',message='MCP最终状态未完成：'+str(exc)))
                     try:self._call(client,"stop_execution")
                     except Exception as exc:self.emit(dict(type="log",message=str(exc)))
                 while True:

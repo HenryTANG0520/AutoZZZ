@@ -9,13 +9,13 @@ from .run_lock import RunLock
 from .trace_capture import capture_directory,atomic_bytes
 
 
-def capture(root,game_path):
+def capture(root,game_path,*,lock=None):
     import cv2
     from .windows import find_game,user32,kernel32,W,C
     from .onedragon_host import BoundGameWindow,WindowCapture
     game=Path(game_path)
     if not game.is_file() or game.name.casefold()!='zenlesszonezero.exe':raise ValueError('请选择有效的绝区零程序。')
-    with RunLock():
+    with (RunLock() if lock is None else lock):
         bound=find_game(str(game.resolve()));window=BoundGameWindow(1920,1080);window.bound=bound
         pid=W.DWORD();user32.GetWindowThreadProcessId(bound.hwnd,C.byref(pid));window.process_id=pid.value
         window.process_handle=kernel32.OpenProcess(0x101000,False,pid.value);source=None

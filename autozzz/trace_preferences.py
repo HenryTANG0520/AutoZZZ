@@ -10,6 +10,8 @@ from pathlib import Path
 import tempfile
 
 PANELS = ('state', 'decision', 'timeline', 'perf')
+ALL_PANELS = (*PANELS, 'log')
+PANEL_LABELS = ('条件', '决策', '时间线', '性能', '日志')
 METRICS = ('ocr_ms', 'yolo_ms', 'cv_pipeline_ms', 'operation_round_ms', 'overlay_refresh_ms')
 DEFAULTS = {
     'version': 2, 'offset_x': 0, 'offset_y': 0, 'scale_x': 1., 'scale_y': 1.,
@@ -17,6 +19,8 @@ DEFAULTS = {
     'layers': {key:True for key in ('vision','state','decision','timeline','perf')},
     'sources': {key:True for key in ('ocr','yolo','cv','template')}, 'text_color': '#f2f2f2',
     'follow_interval_ms': 80, 'input_poll_interval_ms': 50,
+    'state_poll_interval_ms': 200, 'log_panel_enabled': True,
+    'log_max_lines': 40, 'log_fade_seconds': 0, 'patched_capture_enabled': False,
     'capture_suffix': '_overlay', 'base_font_size': 11, 'base_opacity': 85,
     'hotkeys': {'toggle': 'Ctrl+Shift+F7', 'capture': 'Ctrl+Shift+F8'},
     'metrics': {key: True for key in METRICS},
@@ -24,9 +28,14 @@ DEFAULTS = {
                      'font_size': 11, 'opacity': 85, 'mode': 'game', 'desktop_x': 100+index*35,
                      'desktop_y': 100+index*45, 'collapsed': False, 'visible': True} for index, key in enumerate(PANELS)},
 }
+DEFAULTS['panels']['log'] = dict(x=20,y=788,w=576,h=227,font_size=11,opacity=100,
+    mode='game',desktop_x=100,desktop_y=100,collapsed=False,visible=True)
 
 
 def validate(value):
+    added={'state_poll_interval_ms','log_panel_enabled','log_max_lines','log_fade_seconds','patched_capture_enabled'}
+    if isinstance(value,dict) and value.get('version')==2 and set(value)==set(DEFAULTS)-added:
+        value={**deepcopy(DEFAULTS),**value}
     if isinstance(value,dict) and type(value.get('version'))is int and value['version']==1:
         legacy={'version','offset_x','offset_y','scale_x','scale_y','separate_panels','hotkeys','metrics','panels'}
         if set(value) not in (legacy,legacy-{'hotkeys'}):raise ValueError('旧覆盖设置字段无效。')
@@ -53,13 +62,22 @@ def validate(value):
     if type(value['capture_suffix'])is not str or not re.fullmatch(r'_[A-Za-z0-9_-]{1,39}',value['capture_suffix']):raise ValueError('截图后缀须以下划线开头，只含英文字母、数字、下划线和短横线。')
     number(value['base_font_size'],8,28,True);number(value['base_opacity'],5,100,True)
     number(value['follow_interval_ms'],30,1000,True);number(value['input_poll_interval_ms'],20,200,True)
+    number(value['state_poll_interval_ms'],50,2000,True)
+    number(value['log_max_lines'],1,500,True);number(value['log_fade_seconds'],0,3600)
+    if any(type(value[key])is not bool for key in ('log_panel_enabled','patched_capture_enabled')):raise ValueError('日志或自动截图开关无效。')
     if type(value['default_cover'])is not bool:raise ValueError('覆盖显隐默认值无效。')
     for key,expected in (('layers',DEFAULTS['layers']),('sources',DEFAULTS['sources'])):
         if not isinstance(value[key],dict) or set(value[key])!=set(expected) or any(type(item)is not bool for item in value[key].values()):raise ValueError('覆盖来源/图层配置无效。')
     if type(value['separate_panels']) is not bool: raise ValueError('独立面板开关无效。')
-    if not isinstance(value['metrics'], dict) or set(value['metrics']) != set(METRICS) or any(type(item) is not bool for item in value['metrics'].values()):
+    if (not isinstance(value['metrics'], dict) or not set(METRICS).issubset(value['metrics']) or len(value['metrics'])>100
+            or any(type(key)is not str or not key or len(key)>128 or any(ord(c)<32 for c in key) for key in value['metrics'])
+            or any(type(item) is not bool for item in value['metrics'].values())):
         raise ValueError('性能指标设置无效。')
-    if not isinstance(value['panels'], dict) or set(value['panels']) != set(PANELS): raise ValueError('面板设置无效。')
+    if isinstance(value['panels'],dict) and set(value['panels'])==set(PANELS):
+        # The fifth panel is filled only in memory; loading old preferences never rewrites them.
+        result['panels']['log']=deepcopy(DEFAULTS['panels']['log'])
+        value=result
+    if not isinstance(value['panels'], dict) or set(value['panels']) != set(ALL_PANELS): raise ValueError('面板设置无效。')
     limits = {'x': (0, 1919), 'y': (0, 1079), 'w': (120, 1920), 'h': (60, 1080), 'font_size': (8, 28), 'opacity': (5, 100), 'desktop_x': (-32768,32767), 'desktop_y': (-32768,32767)}
     for panel in value['panels'].values():
         if not isinstance(panel, dict) or set(panel) != set(limits)|{'mode','collapsed','visible'}: raise ValueError('面板布局字段无效。')
