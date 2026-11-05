@@ -1,6 +1,7 @@
 """一条龙初始化和运行状态；后台任务结束前始终保留运行句柄和互斥量。"""
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict
 import hashlib
 from pathlib import Path
@@ -30,6 +31,7 @@ class OneDragonExecution:
         self._f9_down=False
         self.single_battle_state = None
         self._run_key_events = None
+        self._fixed_stop_watched = False
         self._run_key_listener_failed = False
         from .onedragon_environment import load_run_hotkeys
         bindings, self.run_hotkeys = load_run_hotkeys(self.data)
@@ -95,8 +97,13 @@ class OneDragonExecution:
     def busy(self) -> bool:
         return self.worker is not None and self.worker.is_alive()
 
+    @contextmanager
     def _run_scope(self):
-        return RunLock() if self.run_lease is None else self.run_lease.scope()
+        lease = RunLock() if self.run_lease is None else self.run_lease.scope()
+        with lease:
+            # The rotation parent owns F10 for a leased rotation child.
+            with self._run_keys_scope() if self.rotation_guard is None else nullcontext():
+                yield
 
     def _validate_task_input(self):
         guard=getattr(self.ctx,'autozzz_runtime_guard',None)
@@ -134,6 +141,65 @@ class OneDragonExecution:
                 self.ctx.run_context.stop_running()
             raise
 
+    @contextmanager
+    def _run_keys_scope(self):
+        from .run_hotkeys import F10, RunKeyEvents
+        from .windows import user32
+
+        wake, finished = threading.Event(), threading.Event()
+        was_down = bool(user32.GetAsyncKeyState(F10) & 0x8000)
+        events = None
+        try:
+            bindings = {'f10': (F10,), **getattr(self, '_run_aliases', {})}
+            events = RunKeyEvents(bindings, fixed_stop_event=wake)
+        except (OSError, RuntimeError):
+            self._run_key_listener_failed = True
+        self._run_key_events = events
+        self._fixed_stop_watched = True
+
+        def close_events():
+            if events is not None:
+                status = events.status()
+                self._run_key_listener_failed |= 'polling' in (status['mode'], status.get('mouse_mode'))
+                events.close()
+                events.join()
+            self._run_key_events = None
+
+        def watch_stop():
+            held = was_down
+            try:
+                while not finished.is_set() and not self.cancelled.is_set():
+                    edge = wake.wait(.01)
+                    if finished.is_set() or self.cancelled.is_set():
+                        return
+                    down = not edge and bool(user32.GetAsyncKeyState(F10) & 0x8000)
+                    if edge or (down and not held):
+                        self._request_stop()
+                        return
+                    held = down
+            except Exception as exc:
+                self.error = f"停止快捷键处理失败：{exc}"
+                self._run_key_listener_failed = True
+                self._fixed_stop_watched = False
+            finally:
+                close_events()
+
+        # The hook only wakes this thread. Native focus and F9 stay on the job's existing paths.
+        monitor = threading.Thread(target=watch_stop, name="AutoZZZ-OneDragon-StopKey", daemon=False)
+        try:
+            monitor.start()
+            if events is not None:
+                events.wait_ready(.5)
+            yield
+        finally:
+            finished.set()
+            wake.set()
+            if monitor.ident is None:
+                close_events()
+            else:
+                monitor.join()
+            self._fixed_stop_watched = False
+
     def _submit(self, state: str, operation) -> dict:
         guard=getattr(self.ctx,'autozzz_runtime_guard',None)
         if guard is not None:guard()
@@ -156,7 +222,6 @@ class OneDragonExecution:
             self.ctx.download_cancel.clear()
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
-                key_events = None
                 try:
                     with profile_lock(self.data):
                         from .onedragon_plugins import verify_context_plugins
@@ -172,14 +237,6 @@ class OneDragonExecution:
                             bindings, self.run_hotkeys = load_run_hotkeys(self.data)
                             self._run_aliases = {key: bindings[key] for key in ('start', 'stop') if key in bindings}
                             self._run_key_listener_failed = False
-                        if state == 'running' and self.rotation_guard is None and getattr(self, '_run_aliases', None):
-                            # During rotation, the parent owns the aliases for the whole plan.
-                            from .run_hotkeys import RunKeyEvents
-                            try:
-                                key_events = RunKeyEvents(self._run_aliases)
-                            except (OSError, RuntimeError):
-                                self._run_key_listener_failed = True
-                            self._run_key_events = key_events
                         operation()
                         if self.rotation_guard is not None:self.rotation_guard.check()
                         with self.lock:
@@ -192,13 +249,6 @@ class OneDragonExecution:
                     with self.lock:
                         self.error = f"{type(exc).__name__}: {exc}"
                         self.state = "stopped" if self.cancelled.is_set() else "failed"
-                finally:
-                    if key_events is not None:
-                        key_status = key_events.status()
-                        self._run_key_listener_failed = 'polling' in (key_status['mode'], key_status.get('mouse_mode'))
-                        key_events.close()
-                        key_events.join()
-                        self._run_key_events = None
             self.worker = threading.Thread(target=work, name="AutoZZZ-OneDragon-"+state, daemon=False)
             self.worker.start()
             return self.status()
@@ -380,6 +430,7 @@ class OneDragonExecution:
         def run():
             try:
                 with self._run_scope():
+                    if self.cancelled.is_set():return
                     if self.prepared_hash!=self.configuration_digest():raise ValueError("登录配置已变化，请重新准备。")
                     from zzz_od.operation.enter_game.enter_game import EnterGame
                     from zzz_od.operation.enter_game.switch_account import SwitchAccount
@@ -446,6 +497,7 @@ class OneDragonExecution:
         def run():
             try:
                 with self._run_scope():
+                    if self.cancelled.is_set():return
                     if self.prepared_hash!=self.configuration_digest():raise ValueError("客户端配置已变化，请重新准备。")
                     window=self.ctx.controller.game_win
                     if window.bound is None:self.ctx.controller.bind(self.ctx.game_account_config.game_path)
@@ -513,7 +565,8 @@ class OneDragonExecution:
         self.resource_confirmation.verify(resource_confirmation, self.prepared_hash)
         def run():
             if finish_after_battle:self.single_battle_state='waiting'
-            with self._run_scope():
+            with self._run_scope(), ExitStack() as adapters:
+                if self.cancelled.is_set():return
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
                 self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
                 self.script_control.reset()
@@ -534,6 +587,9 @@ class OneDragonExecution:
                         from .onedragon_group import GroupRunControl
                         self.group_control=GroupRunControl(self.ctx,self.control,self.prepared_applications)
                         self.group_control.install()
+                    if app_id == "lost_void" or (app_id == "one_dragon" and "lost_void" in self.prepared_applications):
+                        from .onedragon_lost_void import preserve_failed_exit
+                        adapters.enter_context(preserve_failed_exit(self.ctx))
                     if self.uses_charge:
                         from .battle_budget import BattleBudget,budget_directory
                         from .onedragon_charge import ChargeBudgetControl
@@ -665,7 +721,9 @@ class OneDragonExecution:
     def _poll_task_keys(self):
         from .windows import user32
         if self.run_lease is not None:self.run_lease.check()
-        hard_stop = bool(user32.GetAsyncKeyState(0x79) & 0x8000)
+        # The rotation parent or the direct job monitor owns the fixed stop key.
+        local_stop = getattr(self, 'rotation_guard', None) is None and not getattr(self, '_fixed_stop_watched', False)
+        hard_stop = local_stop and bool(user32.GetAsyncKeyState(0x79) & 0x8000)
         source = getattr(self, '_run_key_events', None)
         aliases = []
         if not hard_stop and source is not None:
@@ -780,7 +838,7 @@ class OneDragonExecution:
         self.assistant_control.set_mode(mode)
         return self.status()
 
-    def stop(self) -> dict:
+    def _request_stop(self) -> None:
         with self.lock:
             active=self.busy and self.state in ("initializing","preparing","running","stopping")
             if active:
@@ -788,6 +846,9 @@ class OneDragonExecution:
                 self.ctx.download_cancel.set()
                 self.state = "stopping"
         if active and self.ctx.controller is not None:self.control.stop()
+
+    def stop(self) -> dict:
+        self._request_stop()
         return self.status()
 
     def close(self) -> None:

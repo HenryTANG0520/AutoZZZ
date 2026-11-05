@@ -7,7 +7,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from autozzz.onedragon_control import ExecutionControl, WindowState
 from autozzz.onedragon_execution import OneDragonExecution
@@ -38,6 +38,9 @@ class KeyEvents:
 
     def status(self):
         return {'mode': 'hook'}
+
+    def wait_ready(self, _timeout):
+        return True
 
     def close(self):
         self.closed = True
@@ -98,7 +101,7 @@ class NativeShortcutTests(unittest.TestCase):
 
     def test_native_job_discards_previous_held_f9_and_closes_its_listener(self):
         engine = self.engine
-        engine.ctx = SimpleNamespace(download_cancel=threading.Event())
+        engine.ctx = SimpleNamespace(download_cancel=threading.Event(), controller=object())
         engine.closed = False
         engine.worker = None
         engine.rotation_guard = None
@@ -110,29 +113,40 @@ class NativeShortcutTests(unittest.TestCase):
         pauses = []
 
         def operation():
-            engine._poll_task_keys()
-            pauses.append(engine.manual_pause.is_set())
-            self.keys[0x78] = 0
-            engine._poll_task_keys()
-            self.keys[0x78] = 0x8000
-            engine._poll_task_keys()
-            pauses.append(engine.manual_pause.is_set())
-            self.keys[0x79] = 0x8000
-            engine._poll_task_keys()
+            with engine._run_scope():
+                engine._poll_task_keys()
+                pauses.append(engine.manual_pause.is_set())
+                self.keys[0x78] = 0
+                engine._poll_task_keys()
+                self.keys[0x78] = 0x8000
+                engine._poll_task_keys()
+                pauses.append(engine.manual_pause.is_set())
+                self.keys[0x79] = 0x8000
+                self.assertTrue(engine.cancelled.wait(1))
 
         with tempfile.TemporaryDirectory() as folder:
             engine.data = Path(folder)
             with (patch('autozzz.run_hotkeys.RunKeyEvents', return_value=self.source) as listener,
+                  patch('autozzz.onedragon_execution.RunLock', return_value=nullcontext()),
                   patch('autozzz.onedragon_plugins.verify_context_plugins')):
                 engine._submit('running', operation)
                 engine.worker.join(3)
             self.assertFalse(engine.worker.is_alive())
             self.assertEqual(engine.error, '')
-            listener.assert_called_once_with({'start': (17, 123)})
+            listener.assert_called_once_with({'f10': (121,), 'start': (17, 123)}, fixed_stop_event=ANY)
         self.assertEqual(pauses, [False, True])
         self.assertEqual(engine.state, 'stopped')
         self.assertIsNone(engine._run_key_events)
         self.assertTrue(self.source.joined)
+
+    def test_unacquired_native_lease_never_arms_f10(self):
+        self.engine.rotation_guard = None
+        with (patch('autozzz.onedragon_execution.RunLock', side_effect=RuntimeError('fixture lease busy')),
+              patch('autozzz.run_hotkeys.RunKeyEvents') as listener):
+            with self.assertRaisesRegex(RuntimeError, 'lease busy'):
+                with self.engine._run_scope():
+                    self.fail('competing run acquired the fixture lease')
+        listener.assert_not_called()
 
 
 class RotationShortcutTests(unittest.TestCase):
@@ -161,10 +175,67 @@ class RotationShortcutTests(unittest.TestCase):
             self.wait(lambda event: event['type'] == 'state' and event['state']['control']['manual_paused'])
             source.press('stop')
             self.assertEqual(self.terminal()['state'], 'stopped')
-            listener.assert_called_once_with({'start': (17, 123), 'stop': (17, 119)})
+            listener.assert_called_once_with({'f10': (121,), 'start': (17, 123), 'stop': (17, 119)}, read_key=self.session.read_key)
         pause_calls = [call for call in self.broker.calls if call[1] == 'pause_execution']
         self.assertEqual([params for _, _, _, params in pause_calls], [{'paused': True}])
         self.assertEqual(self.broker.app_starts, [1])
+        self.assertTrue(source.joined)
+
+    def test_unacquired_rotation_lease_never_arms_f10(self):
+        def unavailable():
+            raise RuntimeError('fixture lease busy')
+
+        self.session.lease_factory = unavailable
+        with patch('autozzz.run_hotkeys.RunKeyEvents') as listener:
+            self.preview()
+            self.start()
+            result = self.terminal()
+        self.assertEqual(result['state'], 'failed')
+        self.assertIn('lease busy', result['error'])
+        listener.assert_not_called()
+
+    def test_short_f10_stops_only_the_current_startup_and_waits_for_child(self):
+        source = KeyEvents()
+        original_submit = rotation_fixture.Client.submit
+        entered, stop_ack, release_native = threading.Event(), threading.Event(), threading.Event()
+        self.broker.hold.clear()
+
+        def submit(client, method, **params):
+            if method == 'execution_status' and stop_ack.is_set() and release_native.is_set():
+                client.state.update(state='stopped', busy=False)
+            request = original_submit(client, method, **params)
+            if method == 'start_login':
+                client.state.update(state='running', busy=True)
+                client.answers[request] = (method, dict(client.state))
+                entered.set()
+            elif method == 'stop_execution':
+                client.state.update(state='stopping', busy=True)
+                client.answers[request] = (method, dict(client.state))
+                stop_ack.set()
+            return request
+
+        with (patch.object(rotation_fixture.Client, 'submit', submit),
+              patch('autozzz.run_hotkeys.RunKeyEvents', return_value=source) as listener):
+            try:
+                self.preview()
+                self.start()
+                self.assertTrue(entered.wait(2))
+                source.press('f10', injected=True)
+                self.assertFalse(stop_ack.wait(.15))
+                source.press('f10')
+                source.press('f10', down=False)
+                source.press('f10')
+                self.assertTrue(stop_ack.wait(2))
+                self.assertTrue(self.session.busy)
+                self.assertEqual(self.broker.app_starts, [])
+            finally:
+                release_native.set()
+            self.assertEqual(self.terminal()['state'], 'stopped')
+        listener.assert_called_once_with({'f10': (121,)}, read_key=self.session.read_key)
+        starts = [call[0] for call in self.broker.calls if call[1] == 'start_login']
+        stops = [call[0] for call in self.broker.calls if call[1] == 'stop_execution']
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(stops, starts)
         self.assertTrue(source.joined)
 
     def test_rotation_preserves_alias_pause_when_child_finishes_before_accepting_it(self):

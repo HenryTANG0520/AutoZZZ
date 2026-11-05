@@ -140,12 +140,13 @@ class RunKeyEdge:
 
 class RunKeyQueue:
     """Track selected keys only. Releases identify the press that qualified."""
-    def __init__(self, limit=32, *, allow_injected=False, clock=time.monotonic):
+    def __init__(self, limit=32, *, allow_injected=False, clock=time.monotonic, fixed_stop_event=None):
         if type(limit) is not int or limit < 1:
             raise ValueError('运行快捷键事件队列容量无效。')
         self._lock = threading.RLock()
         self._limit = limit
         self._allow_injected = allow_injected
+        self._fixed_stop_event = fixed_stop_event
         self._clock = clock
         self._events = deque()
         self._fixed = {}
@@ -254,6 +255,10 @@ class RunKeyQueue:
                 if press is None:
                     return
                 action, press_id, code = press
+            if action == 'f10' and self._fixed_stop_event is not None:
+                if down and source == 'hook' and not injected:
+                    self._fixed_stop_event.set()
+                return
             self._append(RunKeyEdge(action, down, created, int(foreground or 0), code, self._generation,
                                     press_id, source, injected, bool(flags & 2), os_time))
 
@@ -312,7 +317,7 @@ class RunKeyEvents:
     can be missed. Consumers may choose to act on hook edges only.
     """
     def __init__(self, bindings=None, *, read_key=None, foreground=None, source_factory=None,
-                 allow_injected=False):
+                 allow_injected=False, fixed_stop_event=None):
         if read_key is None or foreground is None:
             from .windows import user32
             if read_key is None:
@@ -323,12 +328,15 @@ class RunKeyEvents:
         self._foreground = foreground
         self._lock = threading.Lock()
         self._closed = False
-        self._queue = RunKeyQueue(allow_injected=allow_injected)
+        self._queue = RunKeyQueue(allow_injected=allow_injected, fixed_stop_event=fixed_stop_event)
         self._queue.configure(run_bindings() if bindings is None else bindings, self._read_key)
         if source_factory is None:
             self._source = ReadOnlyKeyboardEvents(self._queue, mouse_enabled=self._queue.watches_mouse)
         else:
             self._source = source_factory(self._queue)
+
+    def wait_ready(self, timeout):
+        return self._source.ready.wait(timeout)
 
     def configure(self, bindings):
         with self._lock:

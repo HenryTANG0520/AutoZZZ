@@ -107,6 +107,22 @@ class RunKeyQueueTests(unittest.TestCase):
         self.assertTrue(down.down)
         self.assertFalse(up.down)
 
+    def test_fixed_stop_signal_is_job_scoped_and_suppresses_repeat_and_injection(self):
+        signal = Mock()
+        queue = RunKeyQueue(fixed_stop_event=signal)
+        queue.configure({'f10': (F10,)}, lambda code: 0x8000 if code == F10 else 0)
+        queue.feed(F10, True, foreground=40)  # held across job startup
+        queue.feed(F10, False, foreground=40)
+        queue.feed(F10, True, foreground=40, flags=0x10)
+        signal.set.assert_not_called()
+        queue.feed(F10, True, foreground=40)
+        queue.feed(F10, True, foreground=40)  # auto-repeat
+        queue.feed(F10, False, foreground=40)
+        queue.close()
+        queue.feed(F10, True, foreground=40)  # late callback from the old job
+        signal.set.assert_called_once_with()
+        self.assertEqual(queue.drain(), [])
+
     def test_queue_overflow_retains_pending_stop(self):
         queue = RunKeyQueue(limit=2)
         queue.configure(run_bindings('P'))

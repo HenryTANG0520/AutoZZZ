@@ -1,6 +1,7 @@
 """多账号轮换协调；每个账号重新建立 SDK 进程，整轮共用预算与任务锁。"""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import copy
 from datetime import datetime
 import json
@@ -31,6 +32,7 @@ class RotationSession:
             read_key=user32.GetAsyncKeyState
         self.read_key=read_key;self.commands=queue.Queue();self.lock=threading.RLock()
         self.closing=threading.Event();self.stop_requested=threading.Event();self.manual=False;self.version=0;self.f9_down=False
+        self._f10_down = False
         self.run_hotkeys = dict(start='F9', stop='F10', warning='')
         self._run_aliases = {}
         self._run_key_events = None
@@ -64,13 +66,17 @@ class RotationSession:
         self.stop();self.closing.set();self.commands.put(('close',{}))
 
     def _keys(self):
-        hard_stop = bool(self.read_key(0x79) & 0x8000)
+        if self.stop_requested.is_set():
+            return
+        down = bool(self.read_key(0x79) & 0x8000)
+        hard_stop = down and not self._f10_down
+        self._f10_down = down
         source = self._run_key_events
         aliases = []
         if not hard_stop and source is not None:
             aliases = [edge.action for edge in source.drain()
                        if edge.source == 'hook' and edge.down and not edge.injected]
-        if hard_stop or 'stop' in aliases:
+        if hard_stop or 'f10' in aliases or 'stop' in aliases:
             self.stop()
             return
         toggle = False
@@ -232,6 +238,7 @@ class RotationSession:
         return state
 
     def _preview(self,params):
+        self._f10_down = False
         self.run_hotkeys = dict(start='F9', stop='F10', warning='')
         self._run_aliases = {}
         self._run_key_listener_failed = False
@@ -279,6 +286,27 @@ class RotationSession:
     def _actions(row):
         return [{key:(value.split(':',1)[1] if key=='id' else value) for key,value in item.items() if key not in ('instance_idx','instance_name')} for item in row['resources']]
 
+    @contextmanager
+    def _run_keys_scope(self):
+        from .run_hotkeys import F10, RunKeyEvents
+
+        self._f10_down = bool(self.read_key(F10) & 0x8000)
+        try:
+            try:
+                bindings = {'f10': (F10,), **self._run_aliases}
+                self._run_key_events = RunKeyEvents(bindings, read_key=self.read_key)
+                self._run_key_events.wait_ready(.5)
+            except (OSError, RuntimeError):
+                self._run_key_listener_failed = True
+            yield
+        finally:
+            if self._run_key_events is not None:
+                status = self._run_key_events.status()
+                self._run_key_listener_failed |= 'polling' in (status['mode'], status.get('mouse_mode'))
+                self._run_key_events.close()
+                self._run_key_events.join()
+                self._run_key_events = None
+
     def _run(self,params):
         self._gate()
         if not self.prepared or self.manifest is None:raise ValueError('请先完成轮换预检。')
@@ -309,7 +337,7 @@ class RotationSession:
         if finish_action is not None:self.report['finish_action']=finish_action
         self.report['authorized_resources']=[dict(item) for row in self.plan['instances'] for item in row['resources'] if item['requires_confirmation']]
         self._save();server=self.plan['server'];current=self.plan['original_current'];previous=self.plan['origin'];rows=self.plan['instances']
-        with self.lease_factory() as owner:
+        with self.lease_factory() as owner, self._run_keys_scope():
             self.owner=owner
             try:
                 self._connect(True)
@@ -381,12 +409,6 @@ class RotationSession:
                     if command=='prepare':self._preview(params)
                     else:
                         self._run_key_listener_failed = False
-                        if self.prepared and self._run_aliases:
-                            from .run_hotkeys import RunKeyEvents
-                            try:
-                                self._run_key_events = RunKeyEvents(self._run_aliases)
-                            except (OSError, RuntimeError):
-                                self._run_key_listener_failed = True
                         self._run(params)
                 except RotationStopped as exc:self.state='stopped';self.error=str(exc)
                 except Exception as exc:self.state='failed';self.error=str(exc)
@@ -394,12 +416,6 @@ class RotationSession:
                     if self.client is not None:
                         try:self._disconnect(transfer=False)
                         except Exception as exc:self.error+='；退出：'+str(exc)
-                    if self._run_key_events is not None:
-                        key_status = self._run_key_events.status()
-                        self._run_key_listener_failed = 'polling' in (key_status['mode'], key_status.get('mouse_mode'))
-                        self._run_key_events.close()
-                        self._run_key_events.join()
-                        self._run_key_events = None
                     self.busy=False;self.prepared=self.state=='prepared';self.phase=''
                     for row in self.accounts:
                         if row['state']=='running':row['state']=self.state
