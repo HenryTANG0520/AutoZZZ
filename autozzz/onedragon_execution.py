@@ -51,6 +51,9 @@ class OneDragonExecution:
         self.redemption_control=RedemptionControl(self.control)
         from .onedragon_login import LoginControl
         self.login_control=LoginControl(ctx,self.control)
+        from .onedragon_startup_control import StartupOperationControl
+        self.startup_control=StartupOperationControl(ctx,self)
+        self.startup_control.install()
         for adapter in (self.script_control,self.assistant_control,self.redemption_control,self.login_control):adapter.install()
         from .onedragon_push import NotificationControl
         self.notification_control = NotificationControl(ctx)
@@ -358,10 +361,14 @@ class OneDragonExecution:
                             with self.lock:
                                 if self.cancelled.is_set() or self.manual_pause.is_set():return False
                                 if self.run_lease is not None:self.run_lease.check()
+                                self._validate_task_input()
                                 action();return True
+                        from .game_launch import LaunchOptions
                         self.startup=GameStartup(self.ctx.game_account_config.game_path,cancelled=self.cancelled,
                                                 paused=self.manual_pause,poll_keys=self._poll_task_keys,elapsed=elapsed,
-                                                phase=lambda text:setattr(self,"preparation_step",text),attempt=attempt)
+                                                phase=lambda text:setattr(self,"preparation_step",text),attempt=attempt,
+                                                options=LaunchOptions.from_config(self.ctx.game_config),guard=self._validate_task_input,
+                                                hdr_lease=self.startup_control.hdr_lease(self.ctx.game_account_config.game_path))
                         try:identity=self.startup.run(auto_launch=True)
                         finally:self.startup=None;self.preparation_step=""
                         if identity is None:self.state="stopped";return
@@ -660,6 +667,7 @@ class OneDragonExecution:
         if self.worker is not None:
             self.worker.join()  # 初始化下载或运行仍在退出时，保留同一线程与进程。
         for adapter in (self.login_control,self.redemption_control,self.assistant_control,self.script_control):adapter.close()
+        if getattr(self,'startup_control',None)is not None:self.startup_control.close()
         self.notification_control.close()
         self.patrol_control.close()
         self.coffee_control.close()

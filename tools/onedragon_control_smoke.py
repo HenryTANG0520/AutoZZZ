@@ -185,7 +185,8 @@ def main():
         control.reset()
         with control.scope():controller.screenshot()
         before=len(clicks)
-        with control.scope():assert not OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
+        # True retires the rejected worker slot; it does not complete a battle.
+        with control.scope():assert OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
         assert len(clicks)==before
         battle_control.allowed=True
         battle_control.allowed_epoch=control.epoch
@@ -195,7 +196,7 @@ def main():
         control.set_manual_pause(True)
         control.set_manual_pause(False)
         with control.scope():controller.screenshot()
-        with control.scope():assert not OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
+        with control.scope():assert OperationExecutor([RecordedAttack()],time.time()).run_async().result(3)
         assert len(clicks)==before+1, "普通新截图不能代替恢复后的战斗识别"
         battle_control.allowed_epoch=control.epoch
         events.clear()

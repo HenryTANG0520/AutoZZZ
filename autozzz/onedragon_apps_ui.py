@@ -404,6 +404,15 @@ class ApplicationsPanel:
                 from .gamepad_install_ui import open_gamepad_install
                 ttk.Button(self.content,text="虚拟手柄安装 / 修复…",command=lambda:open_gamepad_install(self.ui,"global" if self.profile.get()=="国际服" else "cn")).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1
+            if self.current_id=='_game_input':
+                def hdr_settings():
+                    if self.busy or self.closing:return
+                    existing=getattr(self,'hdr_window',None)
+                    if existing is not None and existing.window.winfo_exists():existing.window.deiconify();existing.window.lift();return
+                    from .game_hdr_ui import HdrWindow
+                    self.hdr_window=HdrWindow(self)
+                ttk.Button(self.content,text='Auto HDR 状态与恢复…',command=hdr_settings).grid(row=row,column=0,sticky='w',pady=(0,round(18*self.scale)))
+                row+=1
             if self.current_id in ("lost_void", "withered_domain", "world_patrol") or self.current_id.startswith(("lost_void_challenge:", "hollow_zero_challenge:")):
                 ttk.Button(self.content, text="管理方案与路线…", command=self.library).grid(row=row, column=0, sticky="w", pady=(0, round(18*self.scale)))
                 row += 1

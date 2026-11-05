@@ -10,7 +10,13 @@
 - 原生多账号轮换使用当前账号的原 SDK 客户端；切换连接/尚未绑定时等待当前任务，不另建执行器。原会话暂时使用旧登录 Runner 时也经同一只读租约路径截图。
 - 初始化、换号、绑定其他区服、窗口失效、最小化或不在前台时不截图。捕获凭据绑定 SDK 连接随机身份、窗口/进程及创建时间、客户区几何、观察代次和控制器实例。截图前后及发布前重新核实；F10 按下时拒绝发布，失效结果丢弃。
 
-全局热键只读轮询，不注册会吞键的系统钩子，也不向游戏注入输入。按住不连续截图；状态请求期间的有效按键等待新身份结果后只执行一次，失败不会重发原截图。
+当前源码的全局热键使用独立消息线程的只读 `WH_KEYBOARD_LL` 事件监听，不注册 `RegisterHotKey`，不保留或吞掉按键，也不向游戏注入输入。所有 hook 分支（包含负编号、不认识的键和回调错误）都返回 `CallNextHookEx` 的结果。回调只维护配置主键、修饰键和 F10 的状态，把有界事件交给原主窗/SDK路由，不在回调内截图、联网、写文件或调用 Tk。
+
+完整的短按/松开事件即使发生在两次 Tk 更新之间也会排队；按住和自动重复只触发一次。按键携带配置代次、前台 HWND、时间和 F10 撤销代次，超过 1.5 秒、切换配置、目标失焦或停止后拒绝执行。回到游戏后的首次按键以当前操作系统前台事实为准，不再被上一秒缓存的 `foreground=False` 消耗。尚未拿到有效窗口身份时只排队一次刷新状态，刷新后仍不匹配则拒绝，不重试原截图。输入的 injected 标志仅作为诊断记录，不直接丢弃合法的自动化测试按键。
+
+事件监听安装/消息循环失败会在日志明确报告并降级为原来的高位轮询；轮询可能遗漏短按，不冒充同等可靠。不会依赖微软明确表示不可靠的 `GetAsyncKeyState` 低位。监听关闭发送退出消息，消息泵也有停止检查，随后卸载 hook；原只读 SDK worker 的 `finally` 等待该监听线程真实退出，主窗口继续等待同一个 worker。F9/F10 原任务控制和截图 SDK 的发布前检查保留；事件侧 F10 短按另会撤销尚未提交的截图。已经发给 SDK 的捕获继续受原 SDK 身份、焦点、观察代次与 F10 当前状态检查约束。
+
+**版本边界：以上事件监听为 2026-11-05 的源码新增实现，尚未包含在此前安装并验收的 `dev-6e19c4c` 包中。** 该旧包仍使用轮询；不能用旧包的热键结果证明新监听的实机效果。新代码已通过模拟事件及真实只读 hook 安装/退出，真实游戏 F11 接收仍须在后续新版包验证，不把接口截图成功视作键盘监听已经通过验收。
 
 原始 PNG 使用固定 SDK `debug_utils.save_debug_image` 保存。复制行为也调用固定 SDK `copy_image_to_clipboard`：上游实际使用 **CF_DIB**，即去掉 14 字节 BMP 文件头的 DIB，并非注册名为 PNG 的剪贴板格式。复制失败单独报告，已有 PNG 仍可查看。
 
@@ -31,3 +37,7 @@
 主窗常驻、原生会话标签转发、旧 Runner 和空闲只读三条路由已经接线；组件关闭取消未完成回调并等待自己持有的 SDK 进程退出，不关闭借用的原运行会话。主窗同时等待该只读工作线程，不能因截图窗不可见而提前退出。新增路由检查还覆盖轮换借用和原会话错误不会清除执行忙碌状态。
 
 `tools/capture_lease_smoke.py` 通过真实 Windows 句柄及实际后代进程验证撤销、父进程直接退出、总锁保留至读取者结束。`tools/global_capture_sdk_smoke.py` 额外用真实 `Runner.capture_lease()` 和实际 SDK 后代进程读取自有原生窗口，核实旧 Runner 路径不是仅返回“不可用”。相关证据在 `runs/capture-lease-20261105/`、`runs/global-capture-routing-20261105.log`、`runs/global-capture-integration-20261105.log`。
+
+事件监听的离线回归为 `tests/test_global_key_events.py`，覆盖 10 ms 短按、Tk 300 ms 阻塞、恢复前台首次按键、刷新排队、按住去重、左右修饰键、配置代次/F10/超时/外窗拒绝、失败明确回退、回调始终传递，以及主 worker 等待监听 join。`tools/global_capture_listener_smoke.py --output <文件>` 只安装与关闭只读监听，不创建窗口或注入任何键；可通过 `--observe-seconds 30 --key F11` 由验收者另行触发所选键，工具只记录该键的有限事件和 F10，不记录任意文字。真实安装/卸载证据为 `runs/global-capture-listener-20261105.json`；其 events 为空是刻意未注入按键，不能宣称已验证实际 F11 送达。
+
+平台依据：[GetAsyncKeyState 的高位与不可靠低位](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getasynckeystate)、[LowLevelKeyboardProc 的消息线程、传递与超时要求](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc)。

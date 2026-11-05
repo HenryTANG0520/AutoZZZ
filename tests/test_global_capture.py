@@ -116,7 +116,9 @@ class GlobalCaptureTests(unittest.TestCase):
         controller=GlobalCaptureHotkeys(root,lambda code:0x8000 if code in keys else 0,lambda:7,request,messages.append)
         self.assertEqual(requests[-1][0],'global_capture_status')
         requests[-1][2](dict(settings=dict(key_screenshot='F11'),ready=True,foreground=True,window_identity=dict(hwnd=7),token='a'*64))
-        keys.add(0x7A);controller.tick();self.assertEqual(requests[-1][0],'global_capture_capture')
+        keys.add(0x7A);controller.tick();self.assertEqual(requests[-1][0],'global_capture_status')
+        requests[-1][2](dict(settings=dict(key_screenshot='F11'),ready=True,foreground=True,window_identity=dict(hwnd=7),token='b'*64))
+        self.assertEqual(requests[-1][0],'global_capture_capture')
         count=len(requests);controller.tick();self.assertEqual(len(requests),count)
         requests[-1][2](dict(path='frame.png',copied=True,copy_requested=True));self.assertTrue(messages)
         controller.close();controller.tick();self.assertEqual(len(requests),count)
@@ -131,7 +133,9 @@ class GlobalCaptureTests(unittest.TestCase):
         controller.next_status=0;controller.tick();keys.add(0x7A);controller.tick()
         self.assertTrue(controller.queued_capture);self.assertEqual(requests[-1][0],'global_capture_status')
         requests[-1][2](dict(state,token='b'*64))
-        self.assertEqual(requests[-1][0],'global_capture_capture');self.assertEqual(requests[-1][1]['token'],'b'*64)
+        self.assertEqual(requests[-1][0],'global_capture_status')
+        requests[-1][2](dict(state,token='c'*64))
+        self.assertEqual(requests[-1][0],'global_capture_capture');self.assertEqual(requests[-1][1]['token'],'c'*64)
         controller.close()
 
 

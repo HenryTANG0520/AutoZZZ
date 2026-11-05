@@ -23,15 +23,18 @@ def game_processes():
 
 def launch_client(path):
     executable=Path(path)
-    try:subprocess.Popen([str(executable)],cwd=str(executable.parent))
+    from .game_launch import LaunchSession
+    session=LaunchSession(executable)
+    try:session.spawn()
     except OSError as exc:
         if getattr(exc,'winerror',None)==740:
             raise AutomationError('游戏需要管理员权限，请以管理员身份启动 AutoZZZ 后重试。') from None
         raise AutomationError('启动游戏失败，请检查游戏路径和助手权限。') from None
+    finally:session.close()
 
 
 class GameStartup:
-    def __init__(self,path,*,cancelled,paused,poll_keys,elapsed,phase,inventory=None,find_window=None,launch=None,clock=None,attempt=None):
+    def __init__(self,path,*,cancelled,paused,poll_keys,elapsed,phase,inventory=None,find_window=None,launch=None,clock=None,attempt=None,options=None,guard=None,hdr_lease=None):
         self.path=Path(path).resolve()
         self.cancelled,self.paused,self.poll_keys=cancelled,paused,poll_keys
         self.elapsed,self.phase=elapsed,phase
@@ -40,7 +43,9 @@ class GameStartup:
             find_window=find_game
         self.inventory=inventory or game_processes
         self.find_window=find_window
-        self.launch=launch or launch_client
+        from .game_launch import LaunchSession
+        self.launch_session=LaunchSession(self.path,options,guard=guard,hdr_lease=hdr_lease)
+        self.launch=launch or (lambda path:self.launch_session.spawn())
         self.clock=clock or time.monotonic
         self.attempt=attempt or self._attempt
         self.launched=False
@@ -51,6 +56,10 @@ class GameStartup:
         action();return True
 
     def run(self,auto_launch):
+        try:return self._run(auto_launch)
+        finally:self.launch_session.close()
+
+    def _run(self,auto_launch):
         if self.path.name.casefold()!='zenlesszonezero.exe' or not self.path.is_file():
             raise ValueError('请选择有效的 ZenlessZoneZero.exe。')
         previous=self.clock()

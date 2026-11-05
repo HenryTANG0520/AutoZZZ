@@ -3,6 +3,7 @@ import json
 import threading
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from autozzz.onedragon_session import RuntimeSession
 class Client:
     instances=[]
     def __init__(self,paths,log=None):
+        self.paths=paths
         self.instances.append(self)
         self.alive=True
         self.requests={}
@@ -258,7 +260,7 @@ class SessionTests(unittest.TestCase):
         entered=threading.Event()
         release=threading.Event()
         class Runner:
-            def __init__(self,settings,emit):self.emit=emit
+            def __init__(self,settings,emit,**_):self.emit=emit
             def stop(self):release.set()
             def enter_game(self):
                 entered.set()
@@ -267,7 +269,8 @@ class SessionTests(unittest.TestCase):
                 return type('Report',(),{'to_dict':lambda _:dict(status='stopped',error='已停止')})()
         events=queue.Queue()
         with tempfile.TemporaryDirectory() as folder,patch("autozzz.onedragon_session.OneDragonClient",Client),patch("autozzz.app.Runner",Runner):
-            session=RuntimeSession(None,events.put,report_root=Path(folder))
+            paths=SimpleNamespace(data=Path(folder),stable_data=None,generation='-',management_only=False)
+            session=RuntimeSession(paths,events.put,report_root=Path(folder))
             try:
                 session.send('prepare',app_id='email',server='cn',game_path='game.exe',region='cn')
                 self.wait_event(events,lambda e:e['type']=='state' and e['state']['state']=='prepared')

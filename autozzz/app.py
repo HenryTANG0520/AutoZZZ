@@ -15,7 +15,7 @@ from .vision import Vision, save_scene
 from .windows import find_game, is_admin, is_elevated, launch
 
 
-def launch_game(settings: Settings) -> str:
+def launch_game(settings: Settings, *, launch_session=None) -> str:
     settings.validate("launch")
     try:
         find_game(settings.game_path)
@@ -30,7 +30,7 @@ def launch_game(settings: Settings) -> str:
                 continue
             name = "国服" if server == "cn" else "国际服"
             raise AutomationError(f"{name}绝区零仍在运行，请先退出再启动另一客户端，避免 multi game detected。")
-    return launch(settings.game_path)
+    return launch(settings.game_path) if launch_session is None else launch(settings.game_path,launch_session=launch_session)
 
 
 def inspect_game(settings: Settings) -> dict:
@@ -71,6 +71,7 @@ class Context:
     def input_checkpoint(self):
         # Never block while Windows is holding a key/button down.
         self.runner.guard_reset_day()
+        self.runner.check_runtime_generation()
         if self.runner._stop.is_set():
             raise Stopped("任务已停止。")
         if self.runner._pause.is_set() or self.scene_epoch != self.runner.input_epoch:
@@ -140,6 +141,7 @@ class Context:
         label = target.text if isinstance(target, Token) else f"{coordinates[0]:.3f},{coordinates[1]:.3f}"
         self.log(f"点击：{label}")
         try:
+            self.runner.check_runtime_generation()
             self.window.click(*coordinates, scene.geometry)
         except FocusLost:
             # GameWindow.click checks focus before sending move/down; no click was sent.
@@ -158,6 +160,7 @@ class Context:
         if name not in ("esc", "f1", "f2", "f3", "f4", "m", "f", "w") or not 0.05 <= duration <= 1.0:
             raise AutomationError("该按键或持续时间不属于非战斗每日流程。")
         try:
+            self.runner.check_runtime_generation()
             self.window.key(name, duration, self.input_checkpoint)
         except FocusLost:
             self._focus_interrupted()
@@ -214,6 +217,7 @@ class Context:
         if not scene.has("每日可刮取一次"):
             raise AutomationError("仅允许在已识别的每日刮刮卡上拖动。")
         try:
+            self.runner.check_runtime_generation()
             self.window.drag(start, end, scene.geometry, self.input_checkpoint)
         except FocusLost:
             self._focus_interrupted()
@@ -241,7 +245,9 @@ class Context:
         from .policy import guard_scene
         guard_scene(self.last_scene)
         try:
+            self.runner.check_runtime_generation()
             self.window.move(*point, geometry)
+            self.runner.check_runtime_generation()
             self.window.scroll(amount)
         except FocusLost:
             self._focus_interrupted()
@@ -252,6 +258,7 @@ class Context:
         self.checkpoint()
         self._input_scene(scene, "移动前识别画面已经过期。")
         try:
+            self.runner.check_runtime_generation()
             self.window.move(*point, scene.geometry)
         except FocusLost:
             self._focus_interrupted()
@@ -265,8 +272,10 @@ class Context:
 
 
 class Runner:
-    def __init__(self, settings: Settings, emit=None):
+    def __init__(self, settings: Settings, emit=None, *, launch_options=None, runtime_guard=None):
         self.settings = settings
+        self.launch_options = launch_options
+        self.runtime_guard = runtime_guard
         self.report = RunReport()
         self._event_sink = emit or (lambda event: None)
         self._stop = threading.Event()
@@ -438,6 +447,7 @@ class Runner:
                 raise Stopped("运行跨过国服每日重置时间，请重新运行以读取当天任务。")
 
     def _control_checkpoint(self):
+        self.check_runtime_generation()
         self.guard_reset_day()
         if self._stop.is_set():
             raise Stopped("任务已停止。")
@@ -445,6 +455,7 @@ class Runner:
             started = time.monotonic()
             try:
                 while self._pause.is_set():
+                    self.check_runtime_generation()
                     self.guard_reset_day()
                     if self._stop.wait(0.1):
                         raise Stopped("任务已停止。")
@@ -453,6 +464,12 @@ class Runner:
         if self._stop.is_set():
             raise Stopped("任务已停止。")
         self.guard_reset_day()
+        self.check_runtime_generation()
+
+    def check_runtime_generation(self):
+        guard = getattr(self, 'runtime_guard', None)
+        if guard is not None:
+            guard()
 
     def wait_for_focus(self, window=None):
         window = window or self._window
@@ -516,6 +533,7 @@ class Runner:
 
     def _prepare_window(self):
         # Focus is requested once when starting; subsequent losses wait for the user.
+        self.check_runtime_generation()
         try:
             self._window.focus()
         except FocusLost:
@@ -601,6 +619,8 @@ class Runner:
         mutex = kernel32.CreateMutexW(None, False, "Local\\AutoZZZ.DailyRunner")
         already_running = C.get_last_error() == 183
         context = None
+        launch_session = None
+        legacy_sdk_degraded = False
         try:
             if not mutex or already_running:
                 raise AutomationError("另一个 AutoZZZ 任务正在运行，请先停止后重试。")
@@ -619,7 +639,12 @@ class Runner:
             self.checkpoint()
             threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True).start()
             if self.settings.auto_launch:
-                self.log(launch_game(self.settings))
+                from .game_launch import LaunchSession,legacy_launch_configuration
+                if self.runtime_guard is None:
+                    self.launch_options,self.runtime_guard,legacy_sdk_degraded=legacy_launch_configuration(ROOT,self.settings.server)
+                    if legacy_sdk_degraded:self.log('SDK 选择不可用，本次使用独立启动和默认参数。','warning')
+                launch_session=LaunchSession(self.settings.game_path,self.launch_options,guard=self.checkpoint)
+                self.log(launch_game(self.settings,launch_session=launch_session))
                 self.log("等待游戏窗口；自动校对和资源下载将持续等待，首次登录验证请手动完成。")
                 for _ in range(120):
                     self.checkpoint()
@@ -630,13 +655,14 @@ class Runner:
                         if self._stop.wait(1):
                             raise Stopped("任务已停止。")
             self._window = self._window or find_game(self.settings.game_path)
+            if launch_session is not None:launch_session.close()
             if is_elevated(self._window.hwnd) and not is_admin():
                 raise AutomationError("绝区零以管理员权限运行；请使用 Start-AutoZZZ-Admin.cmd 或以管理员身份运行 AutoZZZ.exe。")
             self._prepare_window()
             self.log("正在加载中文 OCR 模型。F9 暂停/继续，F10 紧急停止。")
             vision = Vision(self.settings.ocr_confidence)
             context = Context(self, self._window, vision)
-            if self.settings.coffee and not entry_only and battle_plan is None:
+            if self.settings.coffee and not entry_only and battle_plan is None and not legacy_sdk_degraded:
                 from .coffee_choice import saved_coffee
                 context.coffee_name_resolver = lambda: saved_coffee(ROOT, self.settings.server)
             workflow = DailyWorkflow(context)
@@ -734,6 +760,11 @@ class Runner:
                     detail = f"{label}失败：{error}"
                     self.report.results.append(TaskResult("run", "failed", detail))
                     self.log(detail, "error")
+
+            try:
+                if launch_session is not None:launch_session.close()
+            except Exception as error:
+                record_finalization_error('HDR 原值恢复',error)
 
             try:
                 with self._capture_lock:self._capture_mutex=None

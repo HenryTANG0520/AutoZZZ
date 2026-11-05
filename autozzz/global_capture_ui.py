@@ -13,11 +13,16 @@ class GlobalCaptureController:
     def __init__(self,ui,*,hotkeys=True):
         self.ui=ui;self.closed=self.closing=False;self.events=queue.Queue();self.commands=queue.Queue()
         self.requests={};self.client=None;self.last_error=''
-        self.worker=threading.Thread(target=self.work,name='AutoZZZ-GlobalCapture',daemon=False);self.worker.start()
         self.hotkeys=None
+        self.worker=threading.Thread(target=self.work,name='AutoZZZ-GlobalCapture',daemon=False)
         if hotkeys:
             from .windows import user32
-            self.hotkeys=GlobalCaptureHotkeys(ui.root,user32.GetAsyncKeyState,user32.GetForegroundWindow,self.request,self.report)
+            from .global_key_events import ReadOnlyKeyboardEvents
+            self.hotkeys=GlobalCaptureHotkeys(ui.root,user32.GetAsyncKeyState,user32.GetForegroundWindow,self.request,self.report,
+                event_source=ReadOnlyKeyboardEvents())
+        # Hotkey startup may queue a metadata request; starting after assignment
+        # ensures every worker exit path can stop and join its event listener.
+        self.worker.start()
 
     def report(self,message):
         if not self.closing:self.ui._log(message)
@@ -125,6 +130,7 @@ class GlobalCaptureController:
                     except Exception as exc:
                         # An unconfirmed exit must retain this one worker, never spawn a replacement.
                         self.events.put(dict(type='close_error',message=str(exc)));time.sleep(.2)
+            if self.hotkeys is not None:self.hotkeys.join_listener()
             self.events.put(dict(type='closed'))
 
     def poll(self):

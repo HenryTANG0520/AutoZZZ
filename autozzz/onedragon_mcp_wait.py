@@ -24,6 +24,9 @@ class PendingTool:
             if self.kind=='open_game':
                 return ('成功打开并进入绝区零游戏'if self.enter else'成功打开游戏(未登录)')if success else'打开游戏失败: '+str(status)
             label={'run_one_dragon':'一条龙','run_standalone_app':'独立应用','run_operation':'operation'}[self.kind]
+            if self.kind=='run_operation' and success:
+                message=(self.record.get('output') or {}).get('message')
+                if message:return label+'运行成功。'+message
             return label+'运行成功'if success else label+'运行失败: '+str(status)
         self.worker.join()
         # Capture the original RunSlot result, never a later task's state.

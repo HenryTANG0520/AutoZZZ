@@ -49,7 +49,7 @@ class RuntimeGeneration:
                           'program_restore', 'program_status', 'program_cancel',
                           'environment_tools_catalog', 'environment_tools_start', 'environment_tools_status',
                           'environment_tools_cancel', 'environment_tools_apply',
-                          'global_capture_status', 'global_capture_capture'}:
+                          'global_capture_status', 'global_capture_capture','game_hdr_status','game_hdr_recover','game_launch_options'}:
                 return
             raise RuntimeError('此连接仅用于 SDK 管理，请从对应功能页重新连接。')
         self.check_current()

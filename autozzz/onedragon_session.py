@@ -107,11 +107,19 @@ class RuntimeSession:
                 try:self._save_report()
                 except OSError as exc:self.emit(dict(type="error",message="报告写入失败："+str(exc),busy=bool(self.phase)))
 
-    def _enter_game(self,params):
+    def _enter_game(self,params,client=None):
         from .app import Runner
         from .config import Settings
         self.emit(dict(type="phase",phase="正在进入游戏",minimize=True,bootstrapping=True))
-        runner=Runner(Settings(server=params["server"],game_path=params["game_path"],auto_launch=True),self._legacy_event)
+        options=guard=None
+        if client is not None:
+            from .runtime_generation import RuntimeGeneration
+            paths=client.paths
+            if paths.generation is None:raise RuntimeError('原 SDK 连接未绑定选择代次，请重新准备。')
+            guard=RuntimeGeneration(paths.stable_data or paths.data,paths.generation,paths.management_only).check_execution
+            options=self._call(client,'game_launch_options')
+        runner=Runner(Settings(server=params["server"],game_path=params["game_path"],auto_launch=True),self._legacy_event,
+                      launch_options=options,runtime_guard=guard)
         self.runner=runner
         try:
             if self.closing.is_set() or self.stop_requested.is_set():runner.stop()
@@ -149,7 +157,7 @@ class RuntimeSession:
                 return
             auto_launch=params.pop("auto_launch",False)
             login=params.get("app_id")=="_login"
-            if auto_launch and not login:self._enter_game(self.parameters)
+            if auto_launch and not login:self._enter_game(self.parameters,client)
             if self.stop_requested.is_set() or self.closing.is_set():
                 self._finish_report(dict(state="stopped",application_started=False))
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))

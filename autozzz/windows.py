@@ -167,10 +167,12 @@ def find_game(expected_path: str | None = None) -> GameWindow:
     return GameWindow(max(matches)[1])
 
 
-def launch(path: str) -> str:
+def launch(path: str, *, launch_session=None) -> str:
     executable = Path(path)
     if not executable.is_file() or executable.name.casefold() != "zenlesszonezero.exe":
         raise AutomationError("游戏路径无效，请选择实际的 ZenlessZoneZero.exe。")
+    if launch_session is not None:
+        launch_session.guard()
     try:
         existing = find_game(path)
         existing.focus()
@@ -179,12 +181,22 @@ def launch(path: str) -> str:
         return "游戏已运行，等待游戏窗口回到前台。"
     except AutomationError:
         pass
+    from .onedragon_startup import game_processes
+    rows=game_processes()
+    if any(str(Path(row['path']).resolve()).casefold()!=str(executable.resolve()).casefold()for row in rows):
+        raise AutomationError('另一绝区零客户端仍在运行，请先退出，避免 multi game detected。')
+    if len(rows)>1:raise AutomationError('检测到多个绝区零进程，请先核对客户端。')
+    if rows:return '游戏进程已运行，正在等待游戏窗口。'
+    from .game_launch import LaunchSession
+    session=launch_session or LaunchSession(executable)
     try:
-        subprocess.Popen([str(executable)], cwd=str(executable.parent))
+        session.spawn()
     except OSError as error:
         if error.winerror == 740:
             raise AutomationError("游戏需要管理员权限，请以管理员身份启动 AutoZZZ 后重试。") from error
-        raise AutomationError(f"启动游戏失败：{error}") from error
+        raise AutomationError('启动游戏失败，请检查游戏路径和助手权限。') from None
+    finally:
+        if launch_session is None:session.close()
     return "已启动游戏程序，正在等待游戏窗口。"
 
 

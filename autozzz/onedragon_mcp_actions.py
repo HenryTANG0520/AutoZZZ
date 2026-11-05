@@ -266,13 +266,28 @@ class McpActions:
             factory=lambda ctx:EnterGame(ctx)
         else:factory=None
         def bound(app_id,*unused,**kwargs):
-            if name=='open_game':
+            if name=='run_operation' and cls.__module__=='zzz_od.operation.enter_game.auto_hdr':
+                control=execution.startup_control
+                if cls.__name__=='DisableAutoHDR':output['message']=control.disable_hdr()
+                elif cls.__name__=='EnableAutoHDR':output['message']=control.restore_hdr()
+                else:raise ValueError('未知 HDR 操作。')
+                execution.state='success'
+                return
+            raw_launch=name=='run_operation'and cls.__module__ in ('zzz_od.operation.enter_game.open_game','zzz_od.operation.enter_game.open_and_enter_game')
+            if name=='open_game'or raw_launch:
                 identity=self.startup(execution)
                 if identity is None:execution.state='stopped';return
-                if not values['enter']:
+                enter=values['enter']if name=='open_game'else cls.__name__=='OpenAndEnterGame'
+                if not enter:
                     execution.ctx.controller.bind(execution.ctx.game_account_config.game_path)
                     execution.state='success';return
                 execution.login_control.reset('enter');kwargs['expected_window']=identity
+                if raw_launch:
+                    from zzz_od.operation.enter_game.enter_game import EnterGame
+                    original(app_id,lambda ctx:EnterGame(ctx),display_name=name,**kwargs)
+                    if execution.state not in ('failed','stopped')and not execution.login_control.status()['world_verified']:
+                        execution.state='failed';execution.error='登录流程未核实进入大世界。'
+                    return
             if name=='close_game':
                 self.close_client(execution)
                 return
@@ -353,6 +368,7 @@ class McpActions:
 
     def startup(self,execution):
         from .onedragon_startup import GameStartup
+        from .game_launch import LaunchOptions
         def elapsed(seconds):
             execution.active_seconds+=seconds
             if execution.active_seconds>=execution.time_limit:execution.cancelled.set()
@@ -363,9 +379,12 @@ class McpActions:
                 guard=getattr(execution.ctx,'autozzz_runtime_guard',None)
                 if guard is not None:guard()
                 action();return True
-        execution.startup=GameStartup(execution.ctx.game_account_config.game_path,cancelled=execution.cancelled,
+        path=execution.ctx.game_account_config.game_path
+        execution.startup=GameStartup(path,cancelled=execution.cancelled,
             paused=execution.manual_pause,poll_keys=execution._poll_task_keys,elapsed=elapsed,
-            phase=lambda text:setattr(execution,'preparation_step',text),attempt=attempt)
+            phase=lambda text:setattr(execution,'preparation_step',text),attempt=attempt,
+            options=LaunchOptions.from_config(execution.ctx.game_config),guard=execution._validate_task_input,
+            hdr_lease=execution.startup_control.hdr_lease(path))
         try:return execution.startup.run(auto_launch=True)
         finally:execution.startup=None;execution.preparation_step=''
 

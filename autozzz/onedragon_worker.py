@@ -52,7 +52,7 @@ def validate_worker_request(service,method):
     allowed={'hello','rotation_select','rotation_checkpoint','rotation_release','rotation_control','rotation_window',
              'initialize_execution','prepare_application','start_application','prepare_login','start_login',
              'prepare_client_close','start_client_close','execution_status','pause_execution','stop_execution',
-             'trace_configure','trace_snapshot','global_capture_status','global_capture_capture'}
+             'trace_configure','trace_snapshot','global_capture_status','global_capture_capture','game_launch_options'}
     if method not in allowed:raise RuntimeError('轮换期间不能编辑或重载其他配置。')
     if method not in {'hello','execution_status','pause_execution','stop_execution','rotation_release','trace_configure','trace_snapshot'}:
         service._rotation_guard.check()

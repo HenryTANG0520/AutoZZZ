@@ -19,7 +19,7 @@ class GameInputStore:
     def _fields(self,config):
         from .onedragon_config import _options
         from .onedragon_environment import field_value
-        from one_dragon.base.config.basic_game_config import TypeInputWay
+        from one_dragon.base.config.basic_game_config import TypeInputWay,ScreenSizeEnum,FullScreenEnum,MonitorEnum
         from zzz_od.config.game_config import GameKeyAction,GamepadActionEnum,GamepadTypeEnum
         from one_dragon.base.controller.pc_button.xbox_button_controller import XboxButtonEnum
         from one_dragon.base.controller.pc_button.ds4_button_controller import Ds4ButtonEnum
@@ -28,8 +28,16 @@ class GameInputStore:
         fields=[]
         def add(name,label,group,kind='str',options=None,**metadata):
             from .onedragon_background import background_mouse_policy
-            value=background_mouse_policy(config) if name=='autozzz_background_mouse' else getattr(config,name)
+            value=(background_mouse_policy(config) if name=='autozzz_background_mouse' else
+                   config.get(name,False)if name=='autozzz_temporary_hdr'else getattr(config,name))
             fields.append(field_value(name,label,value,kind,options,group=group,**metadata))
+        add('launch_argument','使用启动参数','游戏启动',kind='bool')
+        add('screen_size','窗口尺寸','游戏启动',kind='enum',options=_options(ScreenSizeEnum))
+        add('full_screen','全屏','游戏启动',kind='enum',options=_options(FullScreenEnum))
+        add('popup_window','无边框窗口','游戏启动',kind='bool')
+        add('monitor','显示器序号','游戏启动',kind='enum',options=_options(MonitorEnum))
+        add('launch_argument_advance','高级启动参数','游戏启动',hint='Windows 参数格式；有空格的值请用双引号包围。仅对新启动生效。')
+        add('autozzz_temporary_hdr','启动时临时禁用 Auto HDR','游戏启动',kind='bool',hint='仅对新启动的客户端生效；窗口就绪或启动中止后恢复该游戏原有 GPU 偏好。')
         add('background_mode','应用流程使用后台','输入',kind='bool',hint='独立战斗、闪避助手使用“战斗设置”的后台开关。')
         add('autozzz_background_mouse','后台鼠标与文本','输入',kind='enum',options=[dict(label='等待游戏回到前台',value='wait'),dict(label='短暂切到游戏后恢复',value='flash')],hint='短暂切换会改变前台窗口和鼠标位置。')
         add('type_input_way','文本输入方式','输入',kind='enum',options=_options(TypeInputWay))
@@ -63,6 +71,9 @@ class GameInputStore:
             for name,value in values.items():
                 field=fields[name];kind=field['kind'];options=[option['value'] for option in field['options']]
                 if kind=='bool' and type(value)is not bool:raise ValueError(field['label']+'须为开关值。')
+                if name=='launch_argument_advance':
+                    from .game_launch import windows_arguments
+                    windows_arguments(value)
                 if kind=='enum' and (type(value)is not str or value not in options):raise ValueError(field['label']+'：请选择有效按键或类型。')
                 if kind=='float' and (type(value)not in (int,float) or not math.isfinite(value) or not field['minimum']<=value<=field['maximum']):
                     raise ValueError(field['label']+'：数值超出范围。')
@@ -74,9 +85,36 @@ class GameInputStore:
                     if not valid:raise ValueError(field['label']+'：请输入单键、特殊键名或 mouse_ 按钮名。')
             def apply():
                 for key,value in values.items():
-                    if key=='autozzz_background_mouse':config.update(key,value)
+                    if key in ('autozzz_background_mouse','autozzz_temporary_hdr'):config.update(key,value)
                     else:setattr(config,key,value)
             atomic_apply(config,revision,apply,self.root)
             from one_dragon.base.config.yaml_operator import invalidate_cache
             invalidate_cache(str(config.file_path));self.ctx.__dict__['game_config']=config
             return self._describe(config)
+
+    def launch_options(self):
+        from .game_launch import LaunchOptions
+        self.service._assert_idle()
+        with profile_lock(self.root):return LaunchOptions.from_config(self.config()).to_dict()
+
+    def _hdr(self):
+        from .game_launch import HdrStore
+        return HdrStore(self.ctx.game_account_config.game_path,guard=self.service.runtime_guard.check_current)
+
+    def hdr_status(self):
+        self.service._assert_idle()
+        with profile_lock(self.root):return self._hdr().status()
+
+    def _hdr_action(self,action):
+        from .run_lock import RunLock
+        self.service._assert_idle()
+        lease=getattr(self.service,'_run_lease',None)
+        with (RunLock()if lease is None else lease.scope()),profile_lock(self.root):
+            self.service._assert_idle();self.service.runtime_guard.check_current()
+            return action(self._hdr())
+
+    def hdr_set(self,enabled,revision,confirmed=False):
+        return self._hdr_action(lambda store:store.set(enabled,revision,confirmed))
+
+    def hdr_recover(self,journal_digest,confirmed=False):
+        return self._hdr_action(lambda store:store.recover(journal_digest,confirmed))

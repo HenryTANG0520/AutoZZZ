@@ -32,7 +32,7 @@
 低层输入可改变游戏状态，**消费取决于操作，刷本预算不限制低层输入**。未知operation按插件同等级在本地列出op-id/参数与可能资源行为，不伪称全部自动记账。已识别的刷本、补电和合成operation继续加载原策略/依赖、沿用已有预算及资源确认；不创建或扩充预算。独立合成operation的参数可区别于保存的计划列表，但精确绑定本地已核对plan，原配置文件/列表指纹、每次1个/60电量确认、预留及结算节点保持生效。
 
 - `click_game`、`key_tap`、`drag`、`input_text`各成为原执行器的任务，在同一RunSlot中执行原工具正文，继承焦点等待、观察代次、按键释放、暂停停止和运行时选择generation guard。文本输入使用受控ClipboardPaste或原键盘输入；剪贴板恢复仅在仍属于本次输入时执行，报告不保存原输入文本。
-- `open_game(enter=False)`通过既有GameStartup启动并等待已核实窗口，停在客户端就绪；`enter=True`随后运行原EnterGame节点及登录适配。不会重复启动已存在的客户端。这里复用AutoZZZ已有启动逻辑，不执行原裸OpenGame的shell启动及HDR切换副作用。
+- `open_game(enter=False)`通过共用GameStartup启动并等待已核实窗口，停在客户端就绪。`enter=True`随后运行原EnterGame节点及登录适配。启动器使用 Windows 参数列表，并可在新启动时临时禁用 Auto HDR。原 `DisableAutoHDR` 暂存原值，`EnableAutoHDR` 恢复当前执行会话的暂存值。配置与中断恢复见[游戏启动与 Auto HDR](GAME_STARTUP.md)。
 - `close_game`沿用ClientExit，向当前核实的游戏窗口发一次正常关闭请求，并观察原进程退出；返回原“已发送关闭信号”语义，同时报告保留是否真正退出的独立证据。
 - `run_operation`只从固定上游实际扫描清单解析类，保留原validate_args和dataclass参数反序列化，不创建第二个RunSlot。远端op-id/参数必须与本地核对项完全一致。
 - `run_one_dragon`、`run_standalone_app`、`run_operation`、`open_game`支持原`block`参数。`block=true`在调度锁外等待原任务的独立Future，返回原成功/失败摘要；其他HTTP请求仍可查询、暂停及停止。相同session/request ID在等待期间也只对应一次执行，不能靠重试重复输入。非阻塞调用保持原started/source/hint返回方式。

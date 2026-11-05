@@ -238,6 +238,22 @@ class OneDragonService:
         from .onedragon_config import ConfigurationStore
         return ConfigurationStore(self).save(app_id, values, revision)
 
+    def game_launch_options(self):
+        from .onedragon_game_input import GameInputStore
+        return GameInputStore(self).launch_options()
+
+    def game_hdr_status(self):
+        from .onedragon_game_input import GameInputStore
+        return GameInputStore(self).hdr_status()
+
+    def game_hdr_set(self,enabled,revision,confirmed=False):
+        from .onedragon_game_input import GameInputStore
+        return GameInputStore(self).hdr_set(enabled,revision,confirmed)
+
+    def game_hdr_recover(self,journal_digest,confirmed=False):
+        from .onedragon_game_input import GameInputStore
+        return GameInputStore(self).hdr_recover(journal_digest,confirmed)
+
     def notification_channels(self):
         from .onedragon_notify import NotificationStore
         return NotificationStore(self).channels()
@@ -932,6 +948,7 @@ METHODS.update({"rotation_preview", "rotation_validate"})
 METHODS.update({"rotation_snapshot", "rotation_bind", "rotation_select", "rotation_checkpoint", "rotation_release"})
 METHODS.update({"rotation_control", "rotation_window"})
 METHODS.update({"prepare_login", "start_login"})
+METHODS.update({'game_launch_options','game_hdr_status','game_hdr_set','game_hdr_recover'})
 METHODS.update({"prepare_client_close", "start_client_close"})
 METHODS.update({'mcp_action_prepare','mcp_action_enable','mcp_action_disable','mcp_events_ack'})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
