@@ -80,22 +80,21 @@ def execute(plan,review,stop,emit,report_root):
     from .onedragon_rotation_session import RotationSession
     from .onedragon_runtime import RuntimePaths
     from .onedragon_cli import combat_budget
-    events=queue.Queue();session=RotationSession(RuntimePaths.discover(ROOT,plan.server),events.put,report_root=report_root)
-    stopping=False;started=False
+    events=queue.Queue();session=RotationSession(RuntimePaths.discover(ROOT,plan.server),events.put,report_root=report_root,stop_event=stop)
+    started=False
     try:
         while True:
-            if stop.is_set() and not stopping:stopping=True;session.stop()
             try:event=events.get(timeout=.1)
             except queue.Empty:continue
             emit(event)
             if event['type']=='connected':
-                if stopping:return dict(state='stopped',report=None)
+                if stop.is_set():return dict(state='stopped',report=None)
                 selection=dict(instance_idx=plan.instance,app_id=plan.app_id) if plan.mode=='native' else {}
                 session.send('prepare',server=plan.server,expected_intent=review['intent'],**selection)
             elif event['type']=='state' and not event['state']['busy']:
                 state=event['state']
                 if state['state']=='prepared' and not started:
-                    if stopping:return dict(state='stopped',report=None)
+                    if stop.is_set():return dict(state='stopped',report=None)
                     if bool(state.get('uses_charge'))!=review['uses_charge']:raise ValueError('定时计划的电量需求已变化。')
                     actual=[action for row in session.plan['instances'] for action in row['resources']]
                     expected=[action for row in review['instances'] for action in row['resources']]
@@ -130,9 +129,14 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
                 process=process_identity(),state='starting',started_at=datetime.now().astimezone().isoformat(),phase='',result=None,error='')
     path=folder/'record.json';stop=threading.Event();finished=threading.Event();previous={}
     write_record(path,record)
+
+    def check_stop():
+        if (folder/'stop').exists():stop.set()
+        return stop.is_set()
+
     def watch():
         while not finished.wait(.1):
-            if (folder/'stop').exists():stop.set();return
+            if check_stop():return
     watcher=threading.Thread(target=watch,name='AutoZZZ-Scheduled-Stop');watcher.start()
     try:
         for signum in (signal.SIGINT,getattr(signal,'SIGBREAK',None)):
@@ -171,6 +175,9 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
                     record['phase'] = phase
                     write_record(path,record)
         record['state']='running';write_record(path,record)
+        if check_stop():
+            record.update(state='stopped',result=dict(state='stopped',report=None))
+            return dict(state='stopped',record=str(path))
         result=execute_task(plan,review,stop,emit,folder/'reports')
         state=result.get('state')
         if state not in ('success','partial','failed','stopped','interrupted'):raise ValueError('原执行器返回无效状态。')

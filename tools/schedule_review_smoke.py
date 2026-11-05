@@ -67,8 +67,8 @@ def main():
         logs=[];sessions=[]
         def emit(event):
             if event['type']=='log':logs.append(event['message'])
-        def factory(_paths,callback,report_root):
-            session=RotationSession(paths,callback,report_root=report_root,client_factory=FixtureClient,read_key=lambda _:0)
+        def factory(_paths,callback,report_root,**options):
+            session=RotationSession(paths,callback,report_root=report_root,client_factory=FixtureClient,read_key=lambda _:0,**options)
             sessions.append(session);return session
         try:
             with patch('autozzz.onedragon_rotation_session.RotationSession',side_effect=factory):

@@ -1,4 +1,4 @@
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import tempfile
 from threading import Lock, get_native_id
@@ -125,6 +125,41 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(self.launches,[str(self.path)])
         self.assertEqual(api.requests,[200])
         self.assertEqual(api.attachments,[])
+
+    def test_foreground_request_crossing_deadline_stops_before_fallback_or_window_handoff(self):
+        for accepted in (False,True):
+            with self.subTest(accepted=accepted):
+                self.launches.clear();self.cancel.clear();self.active=0.
+                startup,api=self.new_client()
+                def request(hwnd):
+                    self.advance(.5)
+                    return api.activate(hwnd) if accepted else False
+                api.on_request=request
+                api.on_attach=lambda *_:True
+                self.assertIsNone(startup.run(True))
+                self.assertTrue(self.cancel.is_set())
+                self.assertEqual(api.requests,[200])
+                self.assertEqual(api.attachments,[])
+
+    def test_inventory_crossing_deadline_never_launches(self):
+        def inventory():
+            self.advance(.5)
+            return []
+        self.assertIsNone(self.start(inventory=inventory).run(True))
+        self.assertTrue(self.cancel.is_set())
+        self.assertEqual(self.launches,[])
+
+    def test_launch_guard_crossing_deadline_never_submits_popen(self):
+        @contextmanager
+        def lock():
+            self.advance(.5)
+            yield
+
+        startup,_=self.new_client(launch=None)
+        startup.launch_session.store=SimpleNamespace(lock=lock,active=self.path.parent/'hdr.json')
+        startup.launch_session.popen=lambda *args,**kwargs:self.fail('late Popen')
+        self.assertIsNone(startup.run(True))
+        self.assertTrue(self.cancel.is_set())
 
     def test_refused_foreground_request_is_not_repeated_after_pause(self):
         def poll():

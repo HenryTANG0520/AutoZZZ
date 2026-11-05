@@ -41,7 +41,7 @@ class GameStartup:
         self.find_window=find_window
         from .game_launch import LaunchSession
         self.launch_session=LaunchSession(self.path,options,guard=guard,hdr_lease=hdr_lease)
-        self.launch=launch or (lambda path:self.launch_session.spawn())
+        self.launch=launch
         self.clock=clock or time.monotonic
         self.attempt=attempt or self._attempt
         self.launched=False
@@ -73,6 +73,7 @@ class GameStartup:
             return
 
         def interrupted():
+            self._account_elapsed()
             return self.cancelled.is_set() or self.paused.is_set()
 
         def verified_process():
@@ -81,7 +82,7 @@ class GameStartup:
                 return False
             self.launch_session.guard()
             rows=self.inventory()
-            if len(rows)!=1:
+            if interrupted() or len(rows)!=1:
                 return False
             row=rows[0]
             return row['pid']==pid and row['created']==created and self._matches_path(row)
@@ -141,23 +142,38 @@ class GameStartup:
         focus()
 
     def run(self,auto_launch):
-        try:return self._run(auto_launch)
-        finally:self.launch_session.close()
+        self._previous_tick=self.clock()
+        try:
+            result=self._run(auto_launch)
+        finally:
+            self.launch_session.close()
+        self._account_elapsed()
+        return None if self.cancelled.is_set() else result
+
+    def _account_elapsed(self):
+        now=self.clock()
+        if not self.cancelled.is_set() and not self.paused.is_set():
+            self.elapsed(now-self._previous_tick)
+        self._previous_tick=now
+
+    def _before_spawn(self):
+        self._account_elapsed()
+        if self.cancelled.is_set() or self.paused.is_set():
+            return False
+        self.launched=True  # An unverified result must not retry a submitted launch.
+        return True
 
     def _run(self,auto_launch):
         if self.path.name.casefold()!='zenlesszonezero.exe' or not self.path.is_file():
             raise ValueError('请选择有效的 ZenlessZoneZero.exe。')
-        previous=self.clock()
         while not self.cancelled.is_set():
             self.poll_keys()
-            if self.cancelled.is_set():return None
-            now=self.clock()
-            if not self.paused.is_set():self.elapsed(now-previous)
-            previous=now
+            self._account_elapsed()
             if self.cancelled.is_set():return None
             if self.paused.is_set():
-                self.phase('已暂停');self.cancelled.wait(.05);previous=self.clock();continue
+                self.phase('已暂停');self.cancelled.wait(.05);self._previous_tick=self.clock();continue
             processes=self.inventory()
+            self._account_elapsed()
             if self.cancelled.is_set():return None
             if any(not self._matches_path(row) for row in processes):
                 raise AutomationError('另一绝区零客户端仍在运行，请先退出，避免 multi game detected。')
@@ -170,16 +186,23 @@ class GameStartup:
                 if not auto_launch:raise AutomationError('游戏尚未启动；请打开游戏或勾选“未运行时启动游戏”。')
                 if self.paused.is_set():continue
                 def launch():
-                    self.launched=True  # 启动结果未知也不自动再次启动。
-                    self._launched_process=self.launch(str(self.path))
+                    if self.launch is None:
+                        self._launched_process=self.launch_session.spawn(before_spawn=self._before_spawn)
+                    elif self._before_spawn():
+                        self._launched_process=self.launch(str(self.path))
                 if not self.attempt(launch):continue
+                self._account_elapsed()
+                if self.cancelled.is_set():return None
+                if not self.launched:continue
                 self.phase('已启动客户端，等待游戏窗口')
             try:window=self.find_window(str(self.path))
             except AutomationError:window=None
+            self._account_elapsed()
             if self.cancelled.is_set():return None
             if self.paused.is_set():continue
             if window is not None and identity is not None:
                 if auto_launch:self._focus_new_client(window,identity)
+                self._account_elapsed()
                 if self.cancelled.is_set():return None
                 if self.paused.is_set():continue
                 return dict(window_handle=window.hwnd,process_id=identity[0])

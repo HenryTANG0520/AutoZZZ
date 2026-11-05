@@ -446,9 +446,9 @@ class OneDragonExecution:
                         def attempt(action):
                             with self.lock:
                                 if self.cancelled.is_set() or self.manual_pause.is_set():return False
-                                if self.run_lease is not None:self.run_lease.check()
-                                self._validate_task_input()
-                                action();return True
+                            if self.run_lease is not None:self.run_lease.check()
+                            self._validate_task_input()
+                            action();return True
                         from .game_launch import LaunchOptions
                         self.startup=GameStartup(self.ctx.game_account_config.game_path,cancelled=self.cancelled,
                                                 paused=self.manual_pause,poll_keys=self._poll_task_keys,elapsed=elapsed,

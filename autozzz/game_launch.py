@@ -254,7 +254,7 @@ class LaunchSession:
             self.close()
             raise
 
-    def spawn(self):
+    def spawn(self, *, before_spawn=None):
         if self.started:raise AutomationError('同一启动请求不能重复发送。')
         self.guard()
         if self.hdr_lease is None:
@@ -265,18 +265,20 @@ class LaunchSession:
                 with self.store.lock():
                     if self.store.active.exists() or self.store.active.is_symlink():
                         raise ValueError('有尚未恢复的 HDR 修改，请先核对恢复。')
-                    return self._spawn_process()
+                    return self._spawn_process(before_spawn)
         try:
-            return self._spawn_process()
+            return self._spawn_process(before_spawn)
         except BaseException:
             self.close();raise
 
-    def _spawn_process(self):
+    def _spawn_process(self, before_spawn):
         self.guard()
         if self.hdr_lease is not None:
             self.hdr_lease.check_hdr_lease(self.path)
         elif self.journal is not None:
             self.check_hdr_lease(self.path)
+        if before_spawn is not None and not before_spawn():
+            return None
         self.started=True
         return self.popen(self.options.argv(self.path),cwd=str(self.path.parent),shell=False)
 

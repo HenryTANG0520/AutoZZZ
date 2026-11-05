@@ -14,7 +14,7 @@ import io
 
 from autozzz.config import Settings
 from autozzz.schedule_authorization import authorize,daily_review
-from autozzz.schedule_runtime import desktop_available,run_scheduled
+from autozzz.schedule_runtime import desktop_available,execute,run_scheduled
 from autozzz.schedules import Schedule,ScheduleStore,revision
 
 
@@ -90,19 +90,56 @@ class ScheduledRuntimeTests(unittest.TestCase):
         self.assertEqual(result['state'],'skipped');self.assertIn('未启动游戏',json.loads(Path(result['record']).read_text(encoding='utf-8'))['error'])
 
     def test_stop_file_waits_for_original_executor_cleanup_before_terminal_record(self):
-        released=threading.Event();observed=threading.Event()
+        started=threading.Event();released=threading.Event();observed=threading.Event()
         folder=self.store.path.parent/'runs'/self.plan.id/uuid.UUID(self.instance).hex
         def stop_later():
-            while not (folder/'record.json').exists():time.sleep(.01)
+            if not started.wait(2):return
             (folder/'stop').touch();observed.set()
             while json.loads((folder/'record.json').read_text())['state']!='running':time.sleep(.01)
             time.sleep(.15);self.assertNotIn('finished_at',json.loads((folder/'record.json').read_text()));released.set()
         helper=threading.Thread(target=stop_later);helper.start()
         def execute(plan,review,stop,emit,report_root):
+            started.set()
             self.assertTrue(stop.wait(2));self.assertTrue(released.wait(2));return dict(state='stopped',report='original')
         try:self.assertEqual(self.run_job(execute)['state'],'stopped')
         finally:helper.join(3)
         self.assertTrue(observed.is_set());self.assertFalse(helper.is_alive())
+
+    def test_stop_file_written_during_admission_prevents_executor_start(self):
+        def desktop_check():
+            path=next((self.store.path.parent/'runs').glob('*/*/record.json'))
+            path.with_name('stop').touch()
+            return True
+        executor=Mock()
+        result=run_scheduled(self.plan.id,self.store.path,self.plan.fingerprint,root=self.root,
+            manager_factory=lambda _:self.manager,execute_task=executor,check_desktop=desktop_check)
+        self.assertEqual(result['state'],'stopped')
+        executor.assert_not_called()
+
+    def test_stop_seen_while_delivering_prepared_event_is_not_dispatched_as_start(self):
+        stop=threading.Event()
+        commands=[]
+        class Session:
+            def __init__(self,_paths,emit,*,report_root,stop_event):
+                self.worker=NS(join=lambda:None)
+                self.plan=dict(instances=[])
+                self.emit=emit
+                emit(dict(type='connected'))
+            def send(self,command,**params):
+                commands.append(command)
+                state='prepared' if command=='prepare' else 'success'
+                self.emit(dict(type='state',state=dict(state=state,busy=False,uses_charge=False,
+                                                     resources=dict(confirmation_required=False))))
+            def close(self):pass
+        def on_event(event):
+            if event.get('state',{}).get('state')=='prepared':
+                stop.set()
+        with (patch('autozzz.onedragon_rotation_session.RotationSession',Session),
+              patch('autozzz.onedragon_runtime.RuntimePaths.discover')):
+            result=execute(Schedule(mode='native',instance=1),dict(intent='fixture',uses_charge=False,instances=[]),
+                           stop,on_event,self.root)
+        self.assertEqual(result['state'],'stopped')
+        self.assertEqual(commands,['prepare'])
 
     def test_executor_error_is_recorded_without_restart(self):
         execute=Mock(side_effect=RuntimeError('original failure'))

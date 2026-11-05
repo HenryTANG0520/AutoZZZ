@@ -200,6 +200,19 @@ class RotationSessionTests(unittest.TestCase):
         self.session.send('prepare',server='cn');self.assertEqual(self.terminal()['state'],'stopped')
         self.assertFalse(self.session.prepared);self.assertFalse(self.broker.app_starts)
 
+    def test_scheduled_stop_between_prepare_and_start_survives_dispatch(self):
+        self.close()
+        stopped=threading.Event()
+        self.session=RotationSession(SimpleNamespace(data=self.root),self.events.put,
+                                     report_root=self.root/'reports',client_factory=self.broker.factory,
+                                     lease_factory=lambda:nullcontext(object()),read_key=lambda _:0,stop_event=stopped)
+        self.preview()
+        stopped.set()
+        self.start()
+        self.assertEqual(self.terminal()['state'],'stopped')
+        self.assertEqual(len(self.broker.clients),1)
+        self.assertFalse(self.broker.app_starts)
+
     def test_invalid_budget_is_rejected_before_any_login(self):
         self.preview();self.start(budget=dict(id='bad',allowance=True,battle_limit=1,max_per_battle=20))
         self.assertEqual(self.terminal()['state'],'failed');self.assertEqual(len(self.broker.clients),1)

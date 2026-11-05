@@ -22,7 +22,7 @@ class RotationControlChanged(RuntimeError):pass
 
 
 class RotationSession:
-    def __init__(self,paths,emit,report_root=None,*,client_factory=None,lease_factory=None,read_key=None):
+    def __init__(self,paths,emit,report_root=None,*,client_factory=None,lease_factory=None,read_key=None,stop_event=None):
         self.paths,self.emit=paths,emit
         from .onedragon_trace_session import TraceSubscription
         self.trace_subscription=TraceSubscription(emit)
@@ -31,7 +31,9 @@ class RotationSession:
             from .windows import user32
             read_key=user32.GetAsyncKeyState
         self.read_key=read_key;self.commands=queue.Queue();self.lock=threading.RLock()
-        self.closing=threading.Event();self.stop_requested=threading.Event();self.manual=False;self.version=0;self.f9_down=False
+        self.closing=threading.Event();self.manual=False;self.version=0;self.f9_down=False
+        self._owns_stop_event=stop_event is None
+        self.stop_requested=threading.Event() if self._owns_stop_event else stop_event
         self._f10_down = False
         self.run_hotkeys = dict(start='F9', stop='F10', warning='')
         self._run_aliases = {}
@@ -51,7 +53,8 @@ class RotationSession:
         with self.lock:
             if self.closing.is_set() or self.busy:return
             if command=='prepare':self.manual=False;self.version+=1
-            self.busy=True;self.stop_requested.clear();self.commands.put((command,params))
+            if self._owns_stop_event:self.stop_requested.clear()
+            self.busy=True;self.commands.put((command,params))
 
     def pause(self,paused):
         with self.lock:self.manual=bool(paused);self.version+=1
