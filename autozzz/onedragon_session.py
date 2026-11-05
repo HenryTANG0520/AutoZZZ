@@ -150,7 +150,14 @@ class RuntimeSession:
             self.emit(dict(type="phase",phase="正在初始化"))
         elif command=="start":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
+            finish_action=params.get('finish_action')
+            if finish_action is not None:
+                from .onedragon_finish_action import POWER_ACTIONS
+                if (params.get('app_id')!='one_dragon' or finish_action not in POWER_ACTIONS
+                    or params.get('source') is not None or params.get('close_game_on_success')):
+                    raise ValueError('完成后的系统操作仅限本地一条龙运行。')
             self._begin_report(params)
+            params.pop('finish_action',None)  # System actions belong to the interactive host, never the SDK or MCP.
             if self.stop_requested.is_set() or self.closing.is_set():
                 self._finish_report(dict(state="stopped",application_started=False))
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))

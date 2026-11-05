@@ -36,6 +36,10 @@ def public_status(value):
     return copy.deepcopy(value)
 
 
+class ExpiredMcpSession(ValueError):
+    """A supplied session ID no longer identifies a connection."""
+
+
 class McpService:
     def __init__(self, service):
         self.service = service
@@ -303,16 +307,24 @@ class McpService:
                 if not owner.token or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+owner.token):
                     self.respond(401);return False
                 return True
+            def request_session(self):
+                session=self.headers.get('Mcp-Session-Id')
+                with owner.lock:owner.session_state(session)
+                return session
             def do_GET(self):
-                if self.authorized():self.respond(405)
+                if not self.authorized():return
+                try:self.request_session()
+                except ExpiredMcpSession:self.respond(404);return
+                self.respond(405)
             def do_DELETE(self):
                 if not self.authorized():return
                 session=self.headers.get('Mcp-Session-Id')
-                with owner.lock:owner.sessions.pop(session,None)
-                self.respond(200)
+                with owner.lock:state=owner.sessions.pop(session,None)
+                self.respond(404 if session is not None and state is None else 200)
             def do_POST(self):
                 if not self.authorized():return
                 try:
+                    session=self.request_session()
                     protocol=self.headers.get('MCP-Protocol-Version')
                     if protocol is not None and protocol!='2025-03-26':self.respond(400);return
                     size=int(self.headers.get('Content-Length','0'))
@@ -321,7 +333,6 @@ class McpService:
                     accept=self.headers.get('Accept','')
                     if 'application/json' not in accept or 'text/event-stream' not in accept:self.respond(406);return
                     request=json.loads(self.rfile.read(size),parse_constant=lambda value:(_ for _ in ()).throw(ValueError('非法JSON数值：'+value)))
-                    session=self.headers.get('Mcp-Session-Id')
                     if isinstance(request,list):
                         if not request or len(request)>16 or any(not isinstance(row,dict) or row.get('method')=='initialize' for row in request):
                             raise ValueError('批次请求无效')
@@ -330,6 +341,8 @@ class McpService:
                         response=replies or None;headers={}
                     else:response,headers=owner.rpc(request,session)
                     self.respond(202 if response is None else 200,response,headers)
+                except ExpiredMcpSession:
+                    self.respond(404)
                 except (ValueError,TypeError,UnicodeError,json.JSONDecodeError) as exc:
                     self.respond(400,dict(jsonrpc='2.0',id=None,error=dict(code=-32600,message=str(exc))))
                 except Exception:
@@ -339,6 +352,13 @@ class McpService:
     def run_description(self):
         return copy.deepcopy(self.owned_run)
 
+    def session_state(self,session):
+        """Resolve the session under the dispatch lock, even after parsing the request."""
+        state=self.sessions.get(session)
+        if session is not None and state is None:
+            raise ExpiredMcpSession('MCP会话已失效，请重新初始化')
+        return state
+
     def rpc(self,request,session):
         if isinstance(request,dict)and request.get('method')=='tools/call':return tool_rpc(self,request,session)
         with self.lock:
@@ -347,6 +367,7 @@ class McpService:
             method=request.get('method');params=request.get('params',{});key=request.get('id')
             if not isinstance(method,str) or not isinstance(params,dict):raise ValueError('请求格式无效')
             headers={}
+            state=self.session_state(session)
             if method=='initialize':
                 if type(key) not in (str,int) or not isinstance(params.get('protocolVersion'),str):raise ValueError('初始化请求无效')
                 if len(self.sessions)>=16:raise ValueError('会话数已达到上限，请关闭旧连接')
@@ -357,8 +378,7 @@ class McpService:
                     serverInfo=dict(name='AutoZZZ',version='1'),
                     instructions='AutoZZZ兼容层：原28工具和3提示词保留。应用使用本地单次授权；输入/登录/关闭/已核对operation使用本地操作会话；编辑使用本地编辑会话。block=true等待同一原任务且不锁住暂停/停止。刷本预算不限制低层输入，未知operation消费依操作而定；已识别刷本/补电/合成仍核对原预算和资源授权。以下为固定上游原说明，不能据此绕过上述授权边界。\n\n'+self.compatibility.catalog['instructions'])
             else:
-                state=self.sessions.get(session)
-                if state is None:raise ValueError('MCP会话已失效，请重新初始化')
+                if state is None:raise ValueError('缺少MCP会话编号，请先初始化')
                 if method=='notifications/initialized':state['initialized']=True;return None,headers
                 if 'id' not in request:return None,headers
                 if type(key)not in (str,int):raise ValueError('请求编号无效')

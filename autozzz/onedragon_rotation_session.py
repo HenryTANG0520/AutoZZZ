@@ -86,7 +86,8 @@ class RotationSession:
                                      confirmation_required=any(item['requires_confirmation'] for item in resources),
                                      confirmed=[item['id'] for item in resources if item['requires_confirmation']] if self.accepted else []),
                       control=dict(manual_paused=self.manual,focus_waiting=source.get('control',{}).get('focus_waiting',False)),
-                      rotation=dict(accounts=copy.deepcopy(self.accounts),current=self.current,returning=self.returning))
+                      rotation=dict(accounts=copy.deepcopy(self.accounts),current=self.current,returning=self.returning,
+                                    job_id=self.report.get('job_id') if self.report is not None else None))
         self.emit(dict(type='state',state=source))
 
     def _log(self,message):
@@ -237,6 +238,12 @@ class RotationSession:
         if required and params.get('resource_confirmation')!=self.confirmation:raise ValueError('请确认本轮逐账号消费或拆解清单。')
         timeout=params.get('timeout_seconds',600)
         validate_runtime_timeout(timeout)
+        close_after=params.get('close_game_on_success',False)
+        if type(close_after)is not bool:raise ValueError('完成后关闭游戏选项无效。')
+        finish_action=params.get('finish_action')
+        if finish_action is not None:
+            from .onedragon_finish_action import POWER_ACTIONS
+            if finish_action not in POWER_ACTIONS or close_after:raise ValueError('完成后的系统操作无效。')
         budget=params.get('budget')
         if self.plan['uses_charge']:
             from .battle_budget import BattleBudget,budget_directory,validate_runtime_budget
@@ -247,7 +254,10 @@ class RotationSession:
         self.accepted=required;self.budget_state={}
         self.report_dir=self.report_root/(datetime.now().strftime('%Y%m%d_%H%M%S_')+uuid.uuid4().hex[:8]);self.report_dir.mkdir(parents=True)
         self.report=dict(operation='account_rotation',status='running',server=self.plan['server'],started_at=datetime.now().astimezone().isoformat(),
-                         stages=[],accounts=self.accounts,budget=copy.deepcopy(budget),returned_to_start=False,game_input_verified=False)
+                         job_id=uuid.uuid4().hex,stages=[],accounts=self.accounts,budget=copy.deepcopy(budget),
+                         returned_to_start=False,game_input_verified=False)
+        if close_after:self.report['close_game_on_success']=True
+        if finish_action is not None:self.report['finish_action']=finish_action
         self.report['authorized_resources']=[dict(item) for row in self.plan['instances'] for item in row['resources'] if item['requires_confirmation']]
         self._save();server=self.plan['server'];current=self.plan['original_current'];previous=self.plan['origin'];rows=self.plan['instances']
         with self.lease_factory() as owner:
@@ -289,9 +299,14 @@ class RotationSession:
                     if result.get('budget',{}).get('pending'):raise RuntimeError('存在未核实的战斗消耗，停止后续账号。')
                     previous=row;self._save()
                 if len(rows)==1:self.report['returned_to_start']=True
+                failed=[item['name'] for item in self.accounts if item['state']=='failed']
+                if close_after and not failed:
+                    self._gate()
+                    if self.last_identity is None:raise RuntimeError('全部应用已完成，但缺少当前客户端身份，未发送关闭请求。')
+                    self._close_game(self.last_identity,60)
                 self._disconnect()
-                self.state='failed' if any(item['state']=='failed' for item in self.accounts) else 'success'
-                if self.state=='failed':self.error='未完成账号：'+'、'.join(item['name'] for item in self.accounts if item['state']=='failed')
+                self.state='failed' if failed else 'success'
+                if failed:self.error='未完成账号：'+'、'.join(failed)
             finally:
                 if self.client is not None:
                     self.stop_requested.set()

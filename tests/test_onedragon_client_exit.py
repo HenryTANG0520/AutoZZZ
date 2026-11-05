@@ -59,6 +59,16 @@ class ClientExitTests(unittest.TestCase):
         self.assertFalse(self.run_exit());self.assertEqual(self.posts,0)
         self.assertFalse(self.exit.status()['requested'])
 
+    def test_cancellation_at_physical_boundary_prevents_close(self):
+        self.window.request_close=lambda checkpoint,submit:(checkpoint(),self.cancelled.set(),submit(self.post))
+        with self.assertRaisesRegex(RuntimeError,'未发送关闭请求'):self.run_exit()
+        self.assertEqual(self.posts,0)
+
+    def test_replacement_binding_cannot_receive_original_close(self):
+        replacement=SimpleNamespace(hwnd=self.window.hwnd,request_close=self.request)
+        self.controller.game_win.bound=replacement
+        self.assertFalse(self.run_exit());self.assertEqual(self.posts,0);self.assertEqual(self.attempts,0)
+
     def test_stop_after_submission_preserves_unverified_process_exit(self):
         self.exits_after=100;self.on_wait=self.cancelled.set
         self.assertFalse(self.run_exit());self.assertEqual(self.posts,1);self.assertTrue(self.closed)

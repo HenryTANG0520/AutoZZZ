@@ -409,42 +409,53 @@ class OneDragonExecution:
         if type(timeout_seconds)is not int or not 5<=timeout_seconds<=300:raise ValueError("退出等待时限须为 5—300 秒。")
         target=dict(self.close_target)
         def run():
-            watch_stop=threading.Event();watcher=None;transition=None
             try:
                 with self._run_scope():
-                    try:
-                        if self.prepared_hash!=self.configuration_digest():raise ValueError("客户端配置已变化，请重新准备。")
-                        self.ctx.controller.bind(self.ctx.game_account_config.game_path)
-                        window=self.ctx.controller.game_win
-                        if window.bound is None or window.bound.hwnd!=target['window_handle'] or window.process_id!=target['process_id']:
-                            raise RuntimeError("待关闭窗口身份已变化，未发送关闭请求。")
-                        from .onedragon_client_exit import ClientExit
-                        transition=ClientExit(self.ctx.controller,self.control)
-                        with self.lock:
-                            self.client_exit=transition;self.control.reset();self._input_ready=True
-                            self.control.set_manual_pause(self.manual_pause.is_set())
-                        self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
-                        watcher=threading.Thread(target=self._watch,args=(watch_stop,),name="AutoZZZ-Client-Exit",daemon=True)
-                        watcher.start();self.preparation_step="等待原游戏进程退出"
-                        exited=transition.run(self.cancelled,watch_stop.wait)
-                        if self.control.error:self.state="failed";self.error=self.control.error
-                        elif self.cancelled.is_set() or self.control.stopped:self.state="stopped"
-                        elif exited:self.state="success"
-                        else:self.state="failed";self.error="尚未核实原游戏进程退出。"
-                    finally:
-                        watch_stop.set()
-                        if watcher is not None:watcher.join()
-                        if transition is not None:
-                            self.client_exit_result=transition.status()
-                            self.control.stop()
-                            if self.client_exit_result['process_exited']:self.ctx.controller.game_win.clear_binding()
-                        with self.lock:self.client_exit=None;self._input_ready=False
-                        self.preparation_step=""
+                    if self.prepared_hash!=self.configuration_digest():raise ValueError("客户端配置已变化，请重新准备。")
+                    window=self.ctx.controller.game_win
+                    if window.bound is None:self.ctx.controller.bind(self.ctx.game_account_config.game_path)
+                    if (window.bound is None or window.bound.hwnd!=target['window_handle'] or window.process_id!=target['process_id']
+                        or not window.identity_valid()):
+                        raise RuntimeError("待关闭窗口身份已变化，未发送关闭请求。")
+                    self._finish_bound_client(timeout_seconds)
             finally:self.prepared_app=self.prepared_hash="";self.close_target=None
         return self._submit("running",run)
 
+    def _finish_bound_client(self,timeout_seconds):
+        """Use the existing binding and task lease. Never bind a replacement here."""
+        from .onedragon_client_exit import ClientExit
+        watch_stop=threading.Event();watcher=transition=None
+        try:
+            with self.lock:
+                if self.cancelled.is_set():self.state='stopped';return
+                transition=ClientExit(self.ctx.controller,self.control)
+                previous_active,previous_limit=self.active_seconds,self.time_limit
+                self.active_seconds,self.time_limit,self.time_limited=0.,timeout_seconds,False
+                self.state='running';self.preparation_step='等待原游戏进程退出'
+                self.client_exit=transition;self.control.reset();self._input_ready=True
+                self.control.set_manual_pause(self.manual_pause.is_set())
+            watcher=threading.Thread(target=self._watch,args=(watch_stop,),name='AutoZZZ-Client-Exit',daemon=True)
+            watcher.start()
+            exited=transition.run(self.cancelled,watch_stop.wait)
+            if self.control.error:self.state='failed';self.error=self.control.error
+            elif self.cancelled.is_set():self.state='stopped'
+            elif exited:self.state='success'
+            else:self.state='failed';self.error='尚未核实原游戏进程退出。'
+        finally:
+            watch_stop.set()
+            if watcher is not None and watcher.ident is not None:watcher.join()
+            if transition is not None:
+                self.client_exit_result=transition.status()
+                try:
+                    self.control.stop()
+                    if self.client_exit_result['process_exited'] and transition.binding_matches():transition.window.clear_binding()
+                finally:
+                    self.active_seconds+=previous_active;self.time_limit=previous_limit
+                    with self.lock:self.client_exit=None;self._input_ready=False
+                    self.preparation_step=''
+
     def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
-                          resource_confirmation: str | None = None) -> dict:
+                          resource_confirmation: str | None = None,close_game_on_success:bool=False) -> dict:
         """通过已准备的配置启动实际上游应用，保留同一进程与任务锁。"""
         if not self.ctx.ready_for_application:
             raise RuntimeError("请先初始化一条龙运行环境。")
@@ -453,6 +464,8 @@ class OneDragonExecution:
         if self.ctx.run_context.is_app_internal(app_id) and not fixed_entry:
             raise ValueError("该应用必须通过其固定入口启动。")
         if app_id!=self.prepared_app:raise ValueError("请先准备所选应用。")
+        if type(close_game_on_success)is not bool or (close_game_on_success and app_id!='one_dragon'):
+            raise ValueError('仅一条龙应用组支持完成后关闭游戏。')
         validate_runtime_timeout(timeout_seconds)
         if self.uses_charge:
             from .battle_budget import validate_runtime_budget
@@ -470,6 +483,7 @@ class OneDragonExecution:
                 self.charge_control=None
                 self.group_control=None
                 self.hunt_control=None
+                close_ready=False
                 try:
                     fingerprints = self.prepared_requirements.get("resource_settings", {})
                     if fingerprints:
@@ -508,16 +522,20 @@ class OneDragonExecution:
                             config = ctx.run_context.get_config("world_patrol", ctx.current_instance_idx, "one_dragon")
                             ctx.auto_battle_context.init_auto_op(config.auto_battle)
                             return WorldPatrolRunRoute(ctx, route, start_idx=descriptor["start_index"])
-                    if factory is None: self._run_bound_app(app_id)
+                    if factory is None:
+                        extra={'keep_running_on_success':True} if close_game_on_success else {}
+                        close_ready=self._run_bound_app(app_id,**extra)
                     else: self._run_bound_app(app_id, factory)
                 finally:
                     if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
                     if self.group_control is not None:self.group_control.close()
                     if self.resource_control is not None:self.resource_control.close()
+                if close_ready:self._finish_bound_client(60)
         return self._submit("running", run)
 
-    def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试",expected_window=None) -> None:
+    def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试",expected_window=None,
+                       *,keep_running_on_success=False):
         self.ctx.push_service.reset_results()
         self.ctx.controller.bind(self.ctx.game_account_config.game_path)
         if expected_window is not None:
@@ -533,6 +551,7 @@ class OneDragonExecution:
         watch_stop = threading.Event()
         watcher = threading.Thread(target=self._watch,args=(watch_stop,),name="AutoZZZ-OneDragon-Hotkeys",daemon=True)
         watcher.start()
+        close_ready=False
         try:
             while (not self.cancelled.is_set() and not self.control.stopped
                    and self.control.status()["state"]!="running"):
@@ -546,21 +565,30 @@ class OneDragonExecution:
             if not ok or future is None:raise RuntimeError("一条龙拒绝并发运行。")
             future.result()
             status=self.backend.query_status()
-            self.state="stopped" if self.cancelled.is_set() or self.control.stopped else status.state
-            if self.state=="failed":self.error=status.last_status or "一条龙应用执行失败。"
+            result_state="stopped" if self.cancelled.is_set() or self.control.stopped else status.state
+            if result_state=="failed":self.error=status.last_status or "一条龙应用执行失败。"
             if self.control.error:
                 self.error=self.control.error
-                self.state="failed"
+                result_state="failed"
+            close_ready=keep_running_on_success and result_state=='success'
+            if not close_ready:self.state=result_state
         finally:
-            watch_stop.set()
-            watcher.join(timeout=2)
-            try:self.control.stop()
-            finally:
-                if hasattr(self.ctx.controller,'end_input_policy'):self.ctx.controller.end_input_policy()
+            if not close_ready:
+                watch_stop.set()
+                watcher.join(timeout=2)
+            try:
                 with self.lock:self._input_ready=False
-            self.preparation_step = "等待通知发送" if self.ctx.push_service.pending else ""
-            try: self.ctx.push_service.flush()
-            finally: self.preparation_step = ""
+                try:self.control.stop()
+                finally:
+                    if hasattr(self.ctx.controller,'end_input_policy'):self.ctx.controller.end_input_policy()
+                self.preparation_step = "等待通知发送" if self.ctx.push_service.pending else ""
+                self.ctx.push_service.flush()
+            finally:
+                self.preparation_step = ""
+                if close_ready:
+                    watch_stop.set()
+                    watcher.join()
+        return close_ready
 
     def _poll_task_keys(self):
         from .windows import user32
@@ -584,6 +612,8 @@ class OneDragonExecution:
         while not watch_stop.is_set():
             try:
                 self._poll_task_keys()
+                if not self._input_ready:
+                    previous=time.monotonic();watch_stop.wait(.01);continue
                 self.control.poll()
                 self.assistant_control.poll_keys(user32.GetAsyncKeyState)
                 now=time.monotonic()

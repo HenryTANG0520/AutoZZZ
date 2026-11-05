@@ -254,6 +254,14 @@ class OneDragonService:
         from .onedragon_game_input import GameInputStore
         return GameInputStore(self).hdr_recover(journal_digest,confirmed)
 
+    def run_record_status(self,app_id):
+        from .onedragon_run_records import RunRecordStore
+        return RunRecordStore(self).describe(app_id)
+
+    def run_record_reset(self,app_id,revision,instance_idx):
+        from .onedragon_run_records import RunRecordStore
+        return RunRecordStore(self).reset(app_id,revision,instance_idx)
+
     def notification_channels(self):
         from .onedragon_notify import NotificationStore
         return NotificationStore(self).channels()
@@ -782,11 +790,13 @@ class OneDragonService:
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         return self._execution.start_client_close(timeout_seconds)
 
-    def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None) -> dict:
+    def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None,
+                          close_game_on_success:bool=False) -> dict:
         self._assert_idle()
         if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
-        return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation)
+        extra={'close_game_on_success':close_game_on_success} if close_game_on_success is not False else {}
+        return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation,**extra)
 
     @property
     def gamepad_dependencies(self):
@@ -949,6 +959,7 @@ METHODS.update({"rotation_snapshot", "rotation_bind", "rotation_select", "rotati
 METHODS.update({"rotation_control", "rotation_window"})
 METHODS.update({"prepare_login", "start_login"})
 METHODS.update({'game_launch_options','game_hdr_status','game_hdr_set','game_hdr_recover'})
+METHODS.update({'run_record_status','run_record_reset'})
 METHODS.update({"prepare_client_close", "start_client_close"})
 METHODS.update({'mcp_action_prepare','mcp_action_enable','mcp_action_disable','mcp_events_ack'})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})

@@ -57,6 +57,17 @@ _WORDS='''快捷手册|Handbook
 重命名|Rename
 刷新|Refresh
 刷新状态|Refresh status
+运行进度|Run progress
+查看进度|View progress
+重置进度|Reset progress
+重置运行进度|Reset run progress
+今日巡逻：{done:g} / {goal} 轮|Patrols today: {done:g} / {goal} rounds
+今日：{daily} / {daily_goal} 次 · 本周：{weekly} / {weekly_goal} 次|Today: {daily} / {daily_goal} runs · This week: {weekly} / {weekly_goal} runs
+重置「{account}」的今日巡逻进度？之后会重新计算本地执行进度。|Reset today's patrol progress for “{account}”? Local run progress will be recalculated.
+重置「{account}」的今日及本周挑战进度？之后会重新计算本地执行进度。|Reset daily and weekly challenge progress for “{account}”? Local run progress will be recalculated.
+已读取运行进度|Run progress loaded
+进度已重置。原记录已备份。|Progress reset. The previous record was backed up.
+运行记录备份：{path}|Run record backup: {path}
 重新读取|Reload
 重新检查|Check again
 读取|Load
@@ -637,6 +648,20 @@ Bearer令牌|Bearer token
 低层输入|Low-level input
 启动/登录|Launch / login
 关闭游戏|Close game
+完成后|On completion
+保持游戏打开|Keep game open
+关机|Shut down
+休眠|Hibernate
+睡眠|Sleep
+确认系统操作|Confirm system action
+仅在本轮成功时执行「{action}」。届时有 {seconds} 秒可取消。请先保存其他工作。|“{action}” runs only if this run succeeds. You will have {seconds} seconds to cancel. Save other work first.
+取消系统操作|Cancel system action
+本轮成功后：{action}|On successful completion: {action}
+{seconds} 秒后{action}|{action} in {seconds}s
+正在提交系统操作…|Sending system action…
+已提交系统操作|System action submitted
+已取消系统操作|System action cancelled
+未执行系统操作|System action skipped
 上述operation|Reviewed operation
 已核对以上操作与资源行为|I reviewed these actions and resource usage
 启用本次会话|Enable session

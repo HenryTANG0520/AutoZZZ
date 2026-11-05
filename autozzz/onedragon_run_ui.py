@@ -5,17 +5,18 @@ import queue
 import threading
 from concurrent.futures import Future
 import tkinter as tk
-from tkinter import ttk,filedialog
+from tkinter import ttk,filedialog,messagebox
 import uuid
 
 from .localization_tk import PresentationVar
-from .localization import application_name
+from .localization import application_name,tr
 from . import theme
 from .config import GAME_PATHS,ROOT,Settings
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
 
 LOGIN_MODES=(("进入当前登录","enter"),("登录页：重新登录","forced_enter"),("游戏内：登出换号","switch"))
+FINISH_CHOICES=(('保持游戏打开','none'),('关闭游戏','close_game'),('关机','shutdown'),('休眠','hibernate'),('睡眠','sleep'))
 
 
 class ExecutionWindow:
@@ -32,6 +33,8 @@ class ExecutionWindow:
         self.application_states={}
         self.last_state={}
         self.last_report=None
+        self.finish_selector=self.finish_action=self.finish_previous_report=None
+        self.finish_display=None
         self.battle_monitor=None
         self.trace_window=None
         self.mcp_window=None
@@ -176,6 +179,18 @@ class ExecutionWindow:
         self.resource_check=ttk.Checkbutton(self.resource_frame,text="允许本轮按以上配置消费或拆解",variable=self.resource_accepted,
                                            style="Config.TCheckbutton",command=self.update_buttons)
         self.resource_check.grid(row=1,column=0,columnspan=2,sticky="w",pady=(d(9),0))
+        if app_id in ('one_dragon','_rotation'):
+            finish=ttk.Frame(self.options,padding=(d(18),0,d(18),d(12)))
+            finish.grid(row=3,column=0,sticky='ew');finish.columnconfigure(2,weight=1)
+            ttk.Label(finish,text='完成后').grid(row=0,column=0,sticky='w',padx=(0,d(10)))
+            self.finish_selector=ttk.Combobox(finish,values=[tr(label) for label,_ in FINISH_CHOICES],width=22,state='readonly')
+            self.finish_selector.current(0);self.finish_selector.grid(row=0,column=1,sticky='w')
+            self.settings_controls.append(self.finish_selector)
+            self.finish_hint=PresentationVar(self.window)
+            self.finish_label=theme.wrapped_label(finish,textvariable=self.finish_hint,style='Hint.TLabel')
+            self.finish_label.grid(row=1,column=0,columnspan=3,sticky='ew',pady=(d(8),0));self.finish_label.grid_remove()
+            self.finish_cancel=ttk.Button(finish,text='取消系统操作',command=self.cancel_finish)
+            self.finish_cancel.grid(row=0,column=2,sticky='e');self.finish_cancel.grid_remove()
         area=ttk.Frame(content,padding=(d(18),0))
         area.grid(row=2 if self.rotation_canvas is not None else 3,column=0,sticky="nsew")
         area.columnconfigure(0,weight=1)
@@ -284,6 +299,7 @@ class ExecutionWindow:
 
     def disposed(self,event):
         if event.widget is self.window:
+            if self.finish_action is not None:self.finish_action.cancel()
             self.cancel_mcp_requests()
             if self.mcp_window is not None:self.mcp_window.destroy()
             if self.trace_window is not None:self.trace_window.close()
@@ -301,18 +317,20 @@ class ExecutionWindow:
         self.log.configure(state="disabled")
 
     def update_buttons(self):
+        finish_busy=self.finish_display is not None and self.finish_display.state in ('pending','dispatching')
         self.prepare_button.configure(text="重新准备" if self.last_state else "准备运行", style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
         self.start_button.configure(text="开始轮换" if self.app_id=='_rotation' else "开始登录" if self.login_mode is not None else "开始运行")
         if self.app_id=='_rotation':self.prepare_button.configure(text='重新预检' if self.last_state else '轮换预检')
-        self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing else ["disabled"])
+        self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing and not finish_busy else ["disabled"])
         confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))
-        self.start_button.state(["!disabled"] if self.connected and self.prepared and confirmed and not self.busy and not self.closing else ["disabled"])
+        self.start_button.state(["!disabled"] if self.connected and self.prepared and confirmed and not self.busy and not self.closing and not finish_busy else ["disabled"])
         self.pause_button.state(["!disabled"] if self.busy and (self.app_id=='_rotation' or self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
         self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
         self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
         self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
         for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing or self.loading_account else ["!disabled"])
+        if self.finish_selector is not None and finish_busy:self.finish_selector.state(['disabled'])
         if self.uses_charge:self.budget_frame.grid()
         else:self.budget_frame.grid_remove()
         assistant=self.last_state.get("assistant",{})
@@ -331,7 +349,7 @@ class ExecutionWindow:
                           params=dict(mode=self.mode_labels.index(self.mode.get()),job_id=self.last_state.get("job_id","")))
 
     def prepare(self):
-        if self.busy or self.closing:return
+        if self.busy or self.closing or (self.finish_display is not None and self.finish_display.state in ('pending','dispatching')):return
         if self.app_id=='_rotation':
             self.busy=True;self.prepared=False;self.resource_accepted.set(False)
             self.status.set('正在读取轮换配置');self.session.send('prepare',server=self.profile);self.update_buttons();return
@@ -350,6 +368,7 @@ class ExecutionWindow:
 
     def start(self):
         if not self.prepared or self.busy or self.closing:return
+        if self.finish_display is not None and self.finish_display.state in ('pending','dispatching'):return
         if self.resource_required and (not self.resource_accepted.get() or not self.resource_confirmation_id):
             self.status.set("请先确认本轮资源操作。")
             return
@@ -366,19 +385,73 @@ class ExecutionWindow:
         except ValueError as exc:
             self.status.set(str(exc))
             return
+        extra={}
+        self.finish_action=None;self.finish_display=None
+        if self.finish_selector is not None:
+            index=max(0,self.finish_selector.current());label,mode=FINISH_CHOICES[index]
+            self.finish_label.grid_remove();self.finish_cancel.grid_remove()
+            if mode=='close_game':extra['close_game_on_success']=True
+            elif mode!='none':
+                from .onedragon_finish_action import FINISH_DELAY_SECONDS,FinishAction
+                if not messagebox.askokcancel(tr('确认系统操作'),tr('仅在本轮成功时执行「{action}」。届时有 {seconds} 秒可取消。请先保存其他工作。',
+                    action=tr(label),seconds=FINISH_DELAY_SECONDS),parent=self.window,default='cancel'):return
+                if not self.prepared or self.busy or self.closing or self.ui.closing:return
+                from .runtime_generation import RuntimeGeneration
+                paths=self.session.paths
+                guard=RuntimeGeneration(paths.stable_data or paths.data,paths.generation,paths.management_only).check_execution
+                self.finish_action=FinishAction(mode,guard=guard)
+                self.finish_previous_report=self.last_report
+                self.finish_label_text=tr(label)
+                extra['finish_action']=mode
         self.busy=True
         self.status.set("正在开始运行")
         confirmation=self.resource_confirmation_id if self.resource_required else None
-        if self.app_id=='_rotation':self.session.send('start',budget=budget,timeout_seconds=timeout,resource_confirmation=confirmation)
-        else:self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation)
+        if self.app_id=='_rotation':self.session.send('start',budget=budget,timeout_seconds=timeout,resource_confirmation=confirmation,**extra)
+        else:self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation,**extra)
+        self._update_finish_display()
         self.update_buttons()
 
     def pause(self):
         if self.busy:self.session.pause(not self.paused)
 
     def stop(self):
+        if self.cancel_finish() and not self.busy:return
         self.session.stop()
         self.status.set("正在停止…")
+
+    def cancel_finish(self):
+        if self.finish_action is None:return False
+        cancelled=self.finish_action.cancel()
+        if cancelled:
+            self.finish_selector.current(0)
+            self._update_finish_display()
+        return cancelled
+
+    def _finish_terminal(self,state):
+        if self.finish_action is None or self.finish_action.poll().state!='idle':return
+        if (state['state']!='success' or self.closing or self.ui.closing or self.session.stop_requested.is_set()):
+            self.cancel_finish();return
+        job=(state.get('rotation',{}).get('job_id') if self.app_id=='_rotation' else state.get('job_id'))
+        report=self.last_report if self.last_report!=self.finish_previous_report else None
+        self.finish_action.arm(report,job,self.app_id,succeeded=True)
+        self._update_finish_display()
+
+    def _update_finish_display(self):
+        if self.finish_action is None:return
+        result=self.finish_action.poll()
+        if result==self.finish_display:return
+        self.finish_display=result
+        if result.state=='idle':
+            self.finish_hint.set(tr('本轮成功后：{action}',action=self.finish_label_text))
+            self.finish_cancel.grid()
+        elif result.state=='pending':
+            self.finish_hint.set(tr('{seconds} 秒后{action}',seconds=result.remaining_seconds,action=self.finish_label_text))
+            self.finish_cancel.grid()
+        else:
+            label={'dispatching':'正在提交系统操作…','dispatched':'已提交系统操作','cancelled':'已取消系统操作'}.get(result.state,'未执行系统操作')
+            self.finish_hint.set_status(label,result.detail)
+            self.finish_cancel.grid_remove()
+        self.finish_label.grid();self.update_buttons()
 
     def poll(self):
         self.poll_token=None
@@ -537,6 +610,9 @@ class ExecutionWindow:
                     self.status.set_status(name,detail[:100] if detail else "")
                     if not self.busy and state["state"] not in ("ready","prepared"):
                         self.prepared=False
+                        if state['state'] in ('success','failed','stopped','interrupted'):
+                            if getattr(self,'finish_selector',None) is not None:self.finish_selector.current(0)
+                            if getattr(self,'finish_action',None) is not None:self._finish_terminal(state)
                         if not self.ui.closing:self.ui.overlay.finish(name)
                         if not self.closing:
                             self.ui.root.deiconify()
@@ -546,12 +622,16 @@ class ExecutionWindow:
                     self.busy=event.get("busy",False)
                     if self.loading_account:self.connected=False
                     if not self.busy:self.bootstrapping=False
+                    if not self.busy:
+                        if getattr(self,'finish_selector',None) is not None:self.finish_selector.current(0)
+                        if getattr(self,'finish_action',None) is not None:self.cancel_finish()
                     self.status.set(event["message"][:160])
                     self.write(event["message"])
                     if not self.busy and not self.closing:
                         self.ui.root.deiconify()
                         self.window.deiconify()
                 elif kind=="closed":
+                    if getattr(self,'finish_action',None) is not None:self.cancel_finish()
                     self.cancel_mcp_requests()
                     self.connected=self.prepared=self.busy=self.bootstrapping=False
                     if self.closing:
@@ -560,11 +640,13 @@ class ExecutionWindow:
                         return
                 self.update_buttons()
         except queue.Empty:pass
+        if getattr(self,'finish_action',None) is not None:self._update_finish_display()
         self.poll_token=self.window.after(80,self.poll)
 
     def close(self):
         if not self.closing:
             self.closing=True
+            self.cancel_finish()
             self.cancel_mcp_requests()
             if self.mcp_window is not None:self.mcp_window.destroy()
             if self.trace_window is not None:self.trace_window.close()

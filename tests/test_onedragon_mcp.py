@@ -127,11 +127,24 @@ class McpTests(unittest.TestCase):
         self.assertEqual(len(self.service.calls),1);self.assertTrue(self.service._execution.busy)
 
     def test_session_termination_and_notification_batch(self):
-        self.initialize()
+        old_id=self.initialize()
         rows=[dict(jsonrpc='2.0',method='notifications/progress',params={})]*2
         self.assertEqual(self.http(rows,headers=self.session)[0],202)
+        self.assertEqual(self.http(method='GET',headers=self.session)[0],405)
         self.assertEqual(self.http(method='DELETE',headers=self.session)[0],200)
-        self.assertEqual(self.http(dict(jsonrpc='2.0',id=3,method='ping'),headers=self.session)[0],400)
+        ping=dict(jsonrpc='2.0',id=3,method='ping')
+        tool=dict(jsonrpc='2.0',id=4,method='tools/call',params=dict(name='run_prepared_application'))
+        self.assertEqual(self.http(ping,headers=self.session)[0],404)
+        self.assertEqual(self.http(tool,headers=self.session)[0],404)
+        self.assertEqual(self.http(rows,headers=self.session)[0],404)
+        self.assertEqual(self.http(method='GET',headers=self.session)[0],404)
+        self.assertEqual(self.http(method='DELETE',headers=self.session)[0],404)
+        self.assertEqual(self.http(ping,headers={**self.session,'Authorization':'Bearer wrong'})[0],401)
+        self.assertEqual(self.http(ping,headers={**self.session,'Origin':'https://example.com'})[0],403)
+        self.assertEqual(self.http(ping)[0],400)
+        self.assertNotEqual(self.initialize(),old_id)
+        self.assertEqual(self.http(ping,headers=self.session)[0],200)
+        self.assertFalse(self.service.calls)
 
     def test_status_does_not_expose_local_consent_or_bearer(self):
         self.grant()

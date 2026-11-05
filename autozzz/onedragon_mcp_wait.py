@@ -49,7 +49,7 @@ def tool_rpc(owner,request,session):
         if request.get('jsonrpc')!='2.0':raise ValueError('需要JSON-RPC对象')
         params=request.get('params',{});key=request.get('id')
         if type(key)not in(str,int)or not isinstance(params,dict):raise ValueError('工具请求格式无效')
-        state=owner.sessions.get(session)
+        state=owner.session_state(session)
         if state is None or not state['initialized']:raise ValueError('MCP会话未初始化或已失效')
         cache_key=json.dumps(key)
         cached=state['cache'].get(cache_key)

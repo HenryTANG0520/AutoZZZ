@@ -13,21 +13,31 @@ class ClientExit:
         self.lock=threading.RLock()
         window=controller.game_win
         if window.bound is None:raise ValueError('尚未绑定待关闭的游戏窗口。')
+        self.window,self.bound=window,window.bound
         self.progress=dict(requested=False,process_exited=False,window_handle=window.bound.hwnd,process_id=window.process_id)
+
+    def binding_matches(self):
+        return (self.controller.game_win is self.window and self.window.bound is self.bound
+                and self.window.process_id==self.progress['process_id'])
 
     def probe(self):
         with self.lock:
             if self.progress['requested']:
                 return WindowState(True,True,self.control.geometry)
+            if not self.binding_matches():return WindowState(False,False,reason='原游戏窗口绑定已变化，未发送关闭请求。')
             return self.controller.probe()
 
     def input_guard(self):
         if self.progress['requested']:raise ExecutionStopped('游戏关闭请求已发送，禁止后续游戏输入。')
 
-    def submit(self,action):
+    def submit(self,action,cancelled=None):
         def send():
             # 窗口可能在 PostMessage 返回前关闭；探测须等本次提交状态写入。
             with self.lock:
+                if cancelled is not None and cancelled.is_set():raise ExecutionStopped('任务已停止，未发送关闭请求。')
+                check=getattr(self.window,'identity_valid',None)
+                if not self.binding_matches() or (check is not None and not check()):
+                    raise ExecutionStopped('原游戏进程身份已变化，未发送关闭请求。')
                 result=action()
                 if result:self.progress['requested']=True
                 return result
@@ -47,8 +57,8 @@ class ClientExit:
                     try:
                         self.control.observe(lambda:None)
                         with self.control.scope():
-                            watch=self.controller.game_win.bound.request_close(
-                                lambda:self.control.checkpoint(require_frame=True),submit=self.submit)
+                            watch=self.bound.request_close(
+                                lambda:self.control.checkpoint(require_frame=True),submit=lambda action:self.submit(action,cancelled))
                     except (FocusLost,InputInterrupted,ObservationExpired):
                         if self.progress['requested']:raise RuntimeError('关闭请求已尝试，但未取得原进程退出监测句柄。') from None
                         continue

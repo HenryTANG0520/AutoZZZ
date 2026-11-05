@@ -16,7 +16,7 @@
 
 下表以固定版本源码为基准。内部应用使用它们自己的入口，不能绕过上游限制当作普通应用直接启动。功能验收需要配置界面、运行控制和实际结果三方面的证据。
 
-分发版本以 `dist/AutoZZZ/autozzz-package.json` 为准。2026-11-05 已安装并核实 `dev-57b5302` 的20734个受管文件，包内开发工具与独立维护接口通过，国服日常及收尾另行实测通过；具体范围见 DEVELOPMENT_STATUS.md。下文早期阶段中的“源码入口”“EXE 未更新”是当时记录；其他实机待验收项不会因打包完成而自动变为已完成。
+分发版本以 `dist/AutoZZZ/autozzz-package.json` 为准。2026-11-05 已安装 `dev-7eedd85` 并验证独立 SDK；同日 `dev-6e19c4c` 已实测国服进入游戏、截图接口、机师与叛甲和收尾奖励。后续改动的包内与游戏证据见 DEVELOPMENT_STATUS.md。下文早期阶段中的“源码入口”“EXE 未更新”是当时记录。
 
 | 功能 | 上游应用 ID | 接入与验收状态 |
 | --- | --- | --- |
@@ -52,10 +52,14 @@
 | 全局截图、剪贴板及热键 | 基础上下文 / debug_utils | 空闲、原生运行、旧 Runner 及轮换路由已接入，原 PNG/CF_DIB、只读租约、真实原生窗口捕获与关闭通过；真实游戏及实体热键待验收，见 GLOBAL_CAPTURE.md |
 | 语言、主题与背景 | custom_config / banner | 中文/英文/系统、明暗/系统与主题色、官方/自定义图片及真实循环视频已接入；实际 Tk/Qt 布局、媒体生命周期及官方海报下载通过，见 APPEARANCE.md、UI_LANGUAGE.md |
 | 游戏启动参数、Auto HDR | OpenGame / OpenAndEnterGame / AutoHDR | 六项参数、单次启动、配置代次、成对恢复及中断记录已接入；真实 SDK 字段与原节点、假注册表及启动器回归通过；新参数与 HDR 显示效果待实机，见 GAME_STARTUP.md |
+| 探索应用运行进度 | world_patrol / lost_void / withered_domain run record | 当前账号读取、日周周期、上游重置、账号与版本校验、原件备份已接入；真实 SDK 文件回放通过，游戏验收待做 |
+| 完成后动作 | one_dragon_finalizer | 应用组及轮换成功后正常关闭绑定客户端；本地单次确认的 60 秒可取消关机、睡眠和休眠；分别验证原进程退出监测和替身电源命令，未实际改变系统电源状态 |
 
 ## 验证方式
 
 2026-11-05 后续开发补齐了此前列出的四类缺口：MCP 操作与阻塞等待、独立运行 SDK 升级与回退、全局截图，以及语言/主题/背景。继续核对时发现的启动参数、原启动节点及 Auto HDR 也已接入。源码回归与各自真实 SDK/GUI 证据保留；最终安装包和逐组实机验收继续进行。MCP 的本地权限与传输框架边界仍在其文档列出，不以已有入口或离线结果关闭完整目标。
+
+收尾动作只在交互窗口对本轮授权，不从旧配置、定时任务或 MCP 继承系统电源操作。关闭游戏复用原运行锁和进程身份，通知发送、失焦等待和停止仍受原控制。电源动作只在成功报告落盘后开始倒计时，提交前重新核对任务和运行锁，结果存于 `after-done.json`。应用内计时使关机可以使用[不强制关闭其他应用的 Windows 请求](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/shutdown)，睡眠/休眠用系统的 [`SetSuspendState`](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/nf-powrprof-setsuspendstate)。
 
 1. 使用真实子模块和独立解释器验证协议、应用注册、配置、队伍和策略加载，不访问游戏。
 2. 使用实际上游条件操作器，以替身原子操作验证状态选择、优先级打断和停止，确保没有使用定时循环冒充状态战斗。

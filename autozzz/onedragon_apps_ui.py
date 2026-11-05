@@ -54,6 +54,7 @@ class ApplicationsPanel:
         self.description = None
         self.form = None
         self.collections = {}
+        self.run_record = None
         self.profile = tk.StringVar(self.root,ui.server.get())
         self.loaded_profile = self.profile.get()
         self.status = PresentationVar(self.root,"尚未读取配置")
@@ -194,6 +195,7 @@ class ApplicationsPanel:
             self.native_button.grid()
             self.native_button.state(['!disabled'] if self.settings_target and not self.busy and not self.dirty and not self.closing else ['disabled'])
         else:self.native_button.grid_remove()
+        if self.run_record is not None:self.run_record.update_controls()
 
     def runnable(self,target):return target in EXECUTABLE_APPLICATIONS or self.apps.get(target,{}).get('executable')is True
 
@@ -352,6 +354,7 @@ class ApplicationsPanel:
         self.render(self.cache.get(key))
 
     def _clear(self):
+        self.run_record=None
         for child in self.content.winfo_children():child.destroy()
         self.description,self.form,self.collections = None,None,{}
         self.dirty = False
@@ -416,6 +419,11 @@ class ApplicationsPanel:
             if self.current_id in ("lost_void", "withered_domain", "world_patrol") or self.current_id.startswith(("lost_void_challenge:", "hollow_zero_challenge:")):
                 ttk.Button(self.content, text="管理方案与路线…", command=self.library).grid(row=row, column=0, sticky="w", pady=(0, round(18*self.scale)))
                 row += 1
+            if self.current_id in ('lost_void','withered_domain','world_patrol'):
+                from .onedragon_run_record_ui import RunRecordControls
+                self.run_record=RunRecordControls(self,self.current_id)
+                self.run_record.frame.grid(row=row,column=0,sticky='ew',pady=(0,round(18*self.scale)))
+                row+=1
             if self.current_id=="shiyu_defense":
                 ttk.Button(self.content,text="编队与策略…",command=lambda:self.tree.selection_set("teams")).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1
