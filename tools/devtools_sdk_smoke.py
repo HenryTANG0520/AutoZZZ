@@ -9,11 +9,25 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+DEVELOPMENT_ROOT=Path(__file__).resolve().parents[1]
+def package_argument():
+    if '--package'not in sys.argv:return None
+    return Path(sys.argv[sys.argv.index('--package')+1]).resolve()
+
+PACKAGE=package_argument()
+if PACKAGE is None:sys.path.insert(0,str(DEVELOPMENT_ROOT))
+else:
+    # Test fixture lives in the checkout; all product imports must come from the staged bridge.
+    sys.path[:]=[p for p in sys.path if p and (Path(p).resolve().is_relative_to(PACKAGE/'onedragon')
+        or not Path(p).resolve().is_relative_to(DEVELOPMENT_ROOT))]
+    sys.path.insert(0,str(PACKAGE/'onedragon/bridge'))
 
 
-def child(source,data):
+def child(source,data,package=None):
     sys.path.insert(0,str(source/'src'))
+    # Source ScreenArea imports its logger immediately; bind data before any such source import.
+    from one_dragon.utils import os_utils
+    os_utils.set_work_dir(data)
     import cv2
     import numpy as np
     from PySide6.QtWidgets import QApplication
@@ -24,7 +38,19 @@ def child(source,data):
     from one_dragon.base.screen.screen_info import ScreenInfo
     from one_dragon.base.screen.screen_area import ScreenArea
     from one_dragon.base.geometry.rectangle import Rect
-    checks=[];events=[]
+    checks=[];events=[];runtime={}
+    if package is not None:
+        import shutil
+        bundle=package/'onedragon'
+        modules=('autozzz.onedragon_devtools_host','autozzz.onedragon_service','one_dragon.base.screen.screen_info','numpy','PySide6')
+        origins={name:str(Path(sys.modules[name].__file__).resolve())for name in modules}
+        assert all(Path(path).is_relative_to(bundle)for path in origins.values()),origins
+        assert all(Path(path).resolve().is_relative_to(bundle)for path in sys.path if path),sys.path
+        assert Path(sys.executable).resolve()==(bundle/'python/python.exe').resolve()
+        assert shutil.which('git')is None,'Git must be hidden for package acceptance'
+        assert 'PYTHONPATH'not in __import__('os').environ
+        runtime=dict(executable=sys.executable,origins=origins,sys_path=sys.path.copy(),git_available=False,
+            developer_pythonpath_hidden=True,package=str(package))
     class NoGameLease:
         def check(self):pass
         def scope(self):raise AssertionError('Offline acceptance must never request game capture')
@@ -109,38 +135,55 @@ def child(source,data):
             if window is not None:window.close();window.guard.__exit__(None,None,None)
             if service._ctx is not None:service._ctx.controller=None
             service.close();app.processEvents()
-    print(json.dumps(dict(actual_sdk=True,checks=checks,game_initialized=False,game_started=False,game_input_sent=False),ensure_ascii=False))
+    print(json.dumps(dict(actual_sdk=True,checks=checks,runtime=runtime,game_initialized=False,game_started=False,game_input_sent=False),ensure_ascii=False))
 
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--child',action='store_true');parser.add_argument('--source',type=Path);parser.add_argument('--data',type=Path)
+    parser.add_argument('--package',type=Path,help='Use only this full staged package runtime, source and bridge.')
     args=parser.parse_args()
-    if args.child:return child(args.source,args.data)
+    if args.child:return child(args.source,args.data,args.package.resolve()if args.package else None)
     from autozzz.config import ROOT
     from autozzz.onedragon_runtime import RuntimePaths
     from autozzz.onedragon_devtools import DevtoolsSession
     import os
+    def environment():
+        env=os.environ.copy();env.update(PYTHONUTF8='1',PYTHONDONTWRITEBYTECODE='1')
+        if args.package:
+            for key in ('PYTHONPATH','PYTHONHOME','PYTHONUSERBASE','VIRTUAL_ENV','CONDA_PREFIX','PYTHONSTARTUP','AUTOZZZ_INTERNAL_RUN_LEASE'):
+                env.pop(key,None)
+            windows=Path(env.get('SystemRoot',r'C:\Windows'))
+            env['PATH']=os.pathsep.join(map(str,(args.package.resolve()/'onedragon/python',windows/'System32',windows)))
+        return env
+    if args.package:
+        if not (args.package/'autozzz-package.json').is_file():raise ValueError('Stage package is incomplete: autozzz-package.json is absent.')
+        for module in ('autozzz.onedragon_runtime','autozzz.onedragon_devtools'):
+            assert Path(sys.modules[module].__file__).resolve().is_relative_to(args.package.resolve()/'onedragon/bridge')
     with tempfile.TemporaryDirectory(prefix='autozzz-native-devtools-')as temporary:
         base=Path(temporary);results=[]
         for factor in ('1','1.5','2'):
-            paths=replace(RuntimePaths.discover(ROOT),data=base/factor)
-            paths.prepare();env=os.environ.copy();env.update(QT_SCALE_FACTOR=factor,PYTHONUTF8='1',PYTHONDONTWRITEBYTECODE='1')
-            result=subprocess.run([str(paths.python),str(Path(__file__).resolve()),'--child','--source',str(paths.source),'--data',str(paths.data)],
-                capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=180)
+            paths=replace(RuntimePaths.discover(args.package.resolve()if args.package else ROOT),data=base/factor)
+            paths.prepare();env=environment();env['QT_SCALE_FACTOR']=factor
+            command=[str(paths.python),'-I','-s','-P','-B',str(Path(__file__).resolve()),'--child','--source',str(paths.source),'--data',str(paths.data)]
+            if args.package:command+=['--package',str(args.package.resolve())]
+            result=subprocess.run(command,cwd=base,capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=180)
             if result.returncode:raise RuntimeError(result.stdout+'\n'+result.stderr)
             rows=[row for row in result.stdout.splitlines()if row.startswith('{')]
             results.append(dict(scale=factor,result=json.loads(rows[-1])))
-        events=queue.Queue();session=DevtoolsSession(paths,events.put,'cn');ready=False;closed=False;errors=[]
-        deadline=time.monotonic()+90
-        try:
-            while time.monotonic()<deadline:
-                event=events.get(timeout=10)
-                if event['type']=='ready':ready=True;session.close()
-                elif event['type']=='error':errors.append(event['message']);session.close()
-                elif event['type']=='closed':closed=True;break
-        finally:session.close();session.worker.join(timeout=30)
+        from unittest.mock import patch
+        with patch.dict(os.environ,environment(),clear=True):
+            events=queue.Queue();session=DevtoolsSession(paths,events.put,'cn');ready=False;closed=False;errors=[]
+            deadline=time.monotonic()+90
+            try:
+                while time.monotonic()<deadline:
+                    event=events.get(timeout=10)
+                    if event['type']=='ready':ready=True;session.close()
+                    elif event['type']=='error':errors.append(event['message']);session.close()
+                    elif event['type']=='closed':closed=True;break
+            finally:session.close();session.worker.join(timeout=30)
         assert ready and closed and not session.worker.is_alive()and not errors,dict(ready=ready,closed=closed,errors=errors)
-        print(json.dumps(dict(results=results,actual_process_open_close=True,worker_exited=True,game_input_sent=False),ensure_ascii=False))
+        print(json.dumps(dict(results=results,actual_process_open_close=True,worker_exited=True,game_input_sent=False,
+            package=str(args.package.resolve())if args.package else None),ensure_ascii=False))
 
 
 if __name__=='__main__':main()
