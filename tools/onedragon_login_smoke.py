@@ -38,7 +38,11 @@ def main():
     service=OneDragonService(defaults.source,data,run_lease=run_lease);manager=None;checks=[]
     def forbidden(*_,**__):raise AssertionError('登录回放禁止真实输入、剪贴板或外部操作')
     with ExitStack() as blocks:
-        for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','autozzz.windows.find_game','autozzz.windows.user32.PostMessageW','pynput.keyboard.Controller.press','pynput.mouse.Controller.press','win32clipboard.OpenClipboard'):
+        for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex',
+                     'socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','autozzz.windows.find_game',
+                     'autozzz.windows.user32.PostMessageW','autozzz.windows.user32.SetForegroundWindow',
+                     'autozzz.windows.user32.SendInput','pynput.keyboard.Controller.press','pynput.mouse.Controller.press',
+                     'win32clipboard.OpenClipboard'):
             blocks.enter_context(patch(name,side_effect=forbidden))
         blocks.enter_context(patch('autozzz.windows.user32.GetAsyncKeyState',return_value=0))
         try:
@@ -369,7 +373,10 @@ def main():
                 if not allow_bind.wait(4):raise AssertionError('fixture bind was not released')
                 ctx.controller.game_win.bound=SimpleNamespace(hwnd=999);ctx.controller.game_win.process_id=51
             service.prepare_login('forced_enter');manager.worker.join(5)
-            with patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),patch.object(ctx.controller,'bind',delayed_bind),patch.object(EnterGame,'__init__',constructed),patch('autozzz.windows.user32.GetAsyncKeyState',side_effect=lambda key:0x8000 if key==0x78 else 0):
+            # 提交时 F9 松开，启动轮询时才出现按下沿，后续一直按住。
+            f9_samples=iter((0,))
+            def startup_key_state(key):return next(f9_samples,0x8000) if key==0x78 else 0
+            with patch('autozzz.onedragon_startup.GameStartup',side_effect=startup_factory),patch.object(ctx.controller,'bind',delayed_bind),patch.object(EnterGame,'__init__',constructed),patch('autozzz.windows.user32.GetAsyncKeyState',side_effect=startup_key_state):
                 service.start_login('forced_enter',timeout_seconds=30,auto_launch=True)
                 deadline=time.monotonic()+3
                 while not manager.manual_pause.is_set() and time.monotonic()<deadline:time.sleep(.01)
@@ -416,6 +423,10 @@ def main():
                 def exited():exit_wait.set();return allow_exit.is_set()
                 return SimpleNamespace(exited=exited,close=lambda:closed.append(True))
             game_window.request_close=request_close
+            def identity_valid():
+                window=ctx.controller.game_win
+                return window.bound is game_window and window.process_id==51
+            ctx.controller.game_win.identity_valid=identity_valid
             def bind_exit(path):ctx.controller.game_win.bound=game_window;ctx.controller.game_win.process_id=51
             original_probe=ctx.controller.probe
             target=dict(window_handle=555,process_id=51)
@@ -438,6 +449,7 @@ def main():
             state=service.execution_status();assert state['state']=='failed' and '窗口身份已变化' in state['error'] and not posts,state
             checks.append('client_close_refuses_rebound_window_identity_before_sending_close_request')
 
+            ctx.controller.game_win.bound=None  # 清掉上一场景故意替换的绑定。
             service.prepare_client_close(target);manager.worker.join(5);posts.clear();closed.clear();allow_exit.clear();exit_wait.clear()
             with patch.object(ctx.controller,'bind',bind_exit):
                 service.start_client_close(timeout_seconds=5);assert exit_wait.wait(3)
