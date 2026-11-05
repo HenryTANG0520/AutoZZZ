@@ -2,11 +2,15 @@
 
 2026-11-05：用户恢复完整功能开发，允许多智能体并行；游戏实测前与 AutoHSR 对话协调，避免同时启动两款游戏。当前在整合费用裁剪修复、失败证据报告、覆盖参数、手柄依赖管理、源码工作副本、MCP及模板工具。尚未以这些离线结果宣称全量迁移或实机验收完成；下文为历史交接。
 
-当前完整目标保持 active，未请求再次暂停。已与 AutoHSR 协商，由 AutoZZZ 使用下一段实机窗口；本轮仍在离线开发及整合。基本资源授权允许使用所有现有及储蓄电量，不使用以太电池；已有有限账本保留，不因恢复工作重置。
+当前完整目标保持 active，未请求再次暂停。本轮已与 AutoHSR 协商并完成国服验证，现已关闭游戏和助手、归还实机窗口；下次启动游戏须重新协调。基本资源授权允许使用所有现有及储蓄电量，不使用以太电池；已有有限账本保留，不因恢复工作重置。
 
-本轮新增能力与各自边界见 [MCP_SERVICE.md](MCP_SERVICE.md)、[NATIVE_DEVTOOLS.md](NATIVE_DEVTOOLS.md)、[GAMEPAD_DEPENDENCIES.md](GAMEPAD_DEPENDENCIES.md)、[SOURCE_WORKSPACE.md](SOURCE_WORKSPACE.md)、[OVERLAY_PARITY.md](OVERLAY_PARITY.md) 和 [AGENT_TEMPLATE_CAPABILITIES.md](AGENT_TEMPLATE_CAPABILITIES.md)。费用识别失败诊断、报告证据、自定义策略删除与恢复也已接入；新完整包尚待构建核实。
+本轮新增能力与各自边界见 [MCP_SERVICE.md](MCP_SERVICE.md)、[NATIVE_DEVTOOLS.md](NATIVE_DEVTOOLS.md)、[GAMEPAD_DEPENDENCIES.md](GAMEPAD_DEPENDENCIES.md)、[SOURCE_WORKSPACE.md](SOURCE_WORKSPACE.md)、[OVERLAY_PARITY.md](OVERLAY_PARITY.md) 和 [AGENT_TEMPLATE_CAPABILITIES.md](AGENT_TEMPLATE_CAPABILITIES.md)。费用识别失败诊断、报告证据、自定义策略删除与恢复也已接入。`dev-57b5302` 已发布到 `dist/AutoZZZ`；保留1641个原有用户文件，原主配置字节未变。源码后续提交只补包内验收工具及记录，安装版本以程序清单为准。
 
 源码整合验证：1170 项单元测试通过（`runs/unit-20261105-release.log`）；主界面72组、应用配置198组及18个弹窗、条件策略20项交互与布局通过。真实固定SDK已核实MCP 18项查询/编辑与3个prompts、同一RuntimeSession授权执行和报告、三个Qt开发页与资源CRUD/中断恢复、独立维护RPC；所有过程均无游戏输入。官方依赖源的实际索引解析、下载、固定摘要和提取检查通过，未运行驱动安装器。分发包和游戏验收尚不能由上述结果代替。
+
+完整包另行核实：20734个受管文件校验通过；包内独立Python/bridge/source在无开发环境、无Git PATH的条件下完成三种DPI的18组开发页检查、资源修改/恢复及真实进程退出。随后国服冷启动、咖啡、签到、录像店、400活跃度领奖、周纪和城募检查全部成功；非战斗实测不消耗电量。最后以独立每日核实再次确认400及四档全领，由AutoZZZ正常关闭所绑定游戏进程。主GUI的界面工具输入未观察到响应，实际任务通过自带CLI执行；空闲GUI随后正常退出。未把这次咖啡结果当作鲜萃红茶60电量证据，也未新增战斗验收。
+
+本机实机报告：`dist/AutoZZZ/runs/20261105_084429_618402`、`dist/AutoZZZ/runs/onedragon/20261105_084840_58fe22ed`、`20261105_085329_65d941bd`、`20261105_085407_95f954bb`、`20261105_085447_c0119582`、`20261105_085500_bcddb23f`、`20261105_085524_c82b19c5`，以及附4K核实图的收尾报告 `dist/AutoZZZ/runs/20261105_085721_977324`。完整迁移目标未完成，实际开发缺口与各组实机验收继续保留。
 
 ## 2026-11-01 暂停交接（历史，已恢复）
 

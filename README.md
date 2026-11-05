@@ -1,6 +1,6 @@
 # AutoZZZ
 
-> **当前状态：2026-11-05 已恢复功能开发与验收。** 现有条件战斗使用固定上游真实引擎；完整迁移目标尚未完成。费用识别、诊断报告及工具功能正在整合，已实现与实机通过分开记录。剩余验收分组见 [LIVE_ACCEPTANCE.md](LIVE_ACCEPTANCE.md)，开发状态见 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)。
+> **当前状态：2026-11-05 持续开发与验收。** 现有条件战斗使用固定上游真实引擎；完整迁移目标尚未完成。本轮工具、覆盖与诊断功能已发布为 `dev-57b5302`，1170项测试及包内核实通过，国服每日和收尾奖励通过实测。已实现与实机通过分开记录；剩余验收分组见 [LIVE_ACCEPTANCE.md](LIVE_ACCEPTANCE.md)，开发状态见 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)。
 
 > **本项目于 2026-10-28 恢复开发。** 后续以完善交互设计为重点，开发方向转向基于[绝区零一条龙](https://github.com/OneDragon-Anything/ZenlessZoneZero-OneDragon)的二次开发。现有代码尚未完成向上游执行框架的迁移。
 
