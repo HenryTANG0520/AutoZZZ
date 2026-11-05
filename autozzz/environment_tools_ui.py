@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
@@ -19,7 +20,7 @@ class EnvironmentToolsWindow:
         self.window.geometry(f'{d(760)}x{d(540)}');self.window.minsize(d(570),d(400))
         frame=ttk.Frame(self.window,padding=d(18));frame.pack(fill='both',expand=True)
         frame.columnconfigure(0,weight=1);frame.rowconfigure(3,weight=1)
-        self.current=tk.StringVar(self.window,'正在读取环境设置…');self.status=tk.StringVar(self.window)
+        self.current=tk.StringVar(self.window,'正在读取环境设置…');self.status=PresentationVar(self.window)
         theme.wrapped_label(frame,textvariable=self.current).grid(row=0,column=0,sticky='ew')
         bar=ttk.Frame(frame);bar.grid(row=1,column=0,sticky='ew',pady=d(12));self.actions=[]
         for text,command in (('刷新',self.reload),('依赖源测速',lambda:self.start('pip_test')),('获取 GitHub 代理',lambda:self.start('proxy_discover'))):

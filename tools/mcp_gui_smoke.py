@@ -35,6 +35,7 @@ def layout_window(widget):
 class McpSession(Session):
     def __init__(self,*args,**kwargs):
         self.mcp_running=False;self.granted=False;self.reject=False;self.editing=None;self.restored=False
+        self.action_prepared=None;self.action_session=None
         super().__init__(*args,**kwargs)
         self.state.update(prepared_app='email',uses_charge=False)
     def send(self,command,**params):
@@ -49,8 +50,11 @@ class McpSession(Session):
         if method=='mcp_edit_enable':self.editing=dict(instance_idx=1,scopes=params['params']['scopes'])
         if method=='mcp_edit_disable':self.editing=None
         if method=='mcp_edit_restore':self.restored=True
+        if method=='mcp_action_prepare':self.action_prepared=params['params']['descriptor']
+        if method=='mcp_action_enable':self.action_session=dict(scopes=params['params']['scopes'])
+        if method=='mcp_action_disable':self.action_session=None
         result=dict(running=self.mcp_running,url='http://127.0.0.1:23001/mcp' if self.mcp_running else '',
-            execution=copy.deepcopy(self.state),editing=dict(session=self.editing,
+            actions=dict(prepared=self.action_prepared,session=self.action_session),execution=copy.deepcopy(self.state),editing=dict(session=self.editing,
                 archives={'config':[dict(id='a'*32,metadata=dict(action='mcp_set_config'))]}),logs=[dict(message='离线服务反馈')])
         if method=='mcp_start':result['bearer_token']='fixture-token'
         self.emit(dict(type='rpc_result',tag=params['tag'],result=result))
@@ -85,6 +89,13 @@ def main():
                     view.archive.set(next(iter(view.archive_map)));view.restore_edit()
                     pump(root,lambda:not view.busy and window.session.restored)
                     view.call('mcp_edit_disable');pump(root,lambda:not view.busy and window.session.editing is None)
+                    view.show_actions(scale);action=view.action_window;pump(root,lambda:not action.busy)
+                    action.prepare();pump(root,lambda:not action.busy and window.session.action_prepared is not None)
+                    action.scopes['input'].set(True);action.accept.set(True);action.enable()
+                    pump(root,lambda:not action.busy and window.session.action_session is not None)
+                    layout_window(action.window)
+                    action.call('mcp_action_disable');pump(root,lambda:not action.busy and window.session.action_session is None)
+                    action.destroy()
                     window.session.reject=True;view.call('mcp_status')
                     pump(root,lambda:not view.busy and 'RPC拒绝' in view.message.get())
                     assert not window.mcp_requests

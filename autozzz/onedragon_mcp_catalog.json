@@ -1,9 +1,9 @@
 {
   "source_hashes": {
-    "prompts.py": "bdfec46e3612f2e4b0f889faf4a5844db06d2acbe3095686fa61ce51cc9bd964",
-    "config_app.py": "9308eb62c58e0c9295fd2187db2b8c92ef631f6fca277140a56f29d238de6449",
-    "service_app.py": "888d62eaa073a3785d34dc5f66de2b60c6b1b08cb97e59b536142c1559e28477",
-    "app.py": "c447c228e536d5027c43ee0672703283db8675bbb6fdc38e1c59ec9afa1498dc"
+    "prompts.py": "b8040194c610fcd4ae829e2ec3540832b60bb69e681142b695447b8949737e7e",
+    "config_app.py": "1f84f2831c6d3d57402c3667b04b4fa8e2709d10b824df217d0ebc53fa93537f",
+    "service_app.py": "8bb18bf118f6e6298c3be557e683f5354c794cacc4d1018a7e6f892c57b32f01",
+    "app.py": "6fe2bdb4fc2bfe53340e924ed806e64e673c2ab2263ce271804a8da1489d5848"
   },
   "instructions": "绝区零一条龙 MCP:操作一台 Windows 上的绝区零实机(1080p)。\n\n工具分两类(非穷尽,完整列表见各 tool 描述):\n- 观察(不改游戏状态):analyze_screen / capture_game_screen / check_game_window / get_run_status / list_*\n- 操作(改游戏状态):click_game / key_tap / drag / input_text / open_game / run_operation / run_one_dragon / run_standalone_app / close_game / stop_run\n\n操作三件套(任何改状态的动作都按这个循环):\n1. 先看:analyze_screen 截当前画面 → 看 screens 命中 + ocr_texts 判断在哪。\n2. 再动:click_game(点 UI)/ key_tap(按键)/ run_operation(跑预设流程)。\n3. 后验:操作后画面常变,等 ~1s 再 analyze_screen / 视觉验证是否到达预期,别假设点击一定成功。\n\n约束:\n- 输入注入到活跃游戏窗口,需游戏在线(先 check_game_window);大世界等锁光标画面,click_game 传 pc_alt=True。\n- 出错别猜:画面不对 / op 失败 → 先 analyze_screen 看现状 + 查 log(.debug/zzz_od_mcp/main_server.log),再决定。\n- 安全:不主动改用户配置(yml);消耗周限的玩法(防卫战/恶名狩猎等)先向用户确认再跑。\n\n开发者场景(验证 op / 画面建档 / 调试):调 get_mcp_usage_guide('zzz_dev_validate_op')。",
   "tools": [

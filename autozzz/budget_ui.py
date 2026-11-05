@@ -4,6 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .battle_budget import budget_directory
 from .budget_records import BudgetRecords
@@ -44,7 +45,7 @@ class BudgetWindow:
         footer.grid(row=2,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
         theme.wrapped_label(footer,text="实际消耗与结果未知；计入后，预留电量额度不退回。",style="Hint.TLabel").grid(row=0,column=0,sticky="ew")
-        self.status=tk.StringVar(self.window)
+        self.status=PresentationVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=1,column=0,sticky="ew",pady=(d(8),d(12)))
         actions=ttk.Frame(footer)
         actions.grid(row=2,column=0,sticky="ew")

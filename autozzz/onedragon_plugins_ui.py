@@ -10,6 +10,7 @@ from tkinter import ttk,filedialog,messagebox
 from urllib.parse import urlsplit
 import webbrowser
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import OneDragonClient,RuntimePaths,RequestPending
@@ -148,7 +149,7 @@ class PluginWindow:
         self.downgrade_check=ttk.Checkbutton(self.import_page,text='允许所选插件降级',variable=self.downgrade,command=self.buttons);self.downgrade_check.grid(row=3,column=0,sticky='w',pady=(d(8),0))
         self.install_button=ttk.Button(self.import_page,text='安装所选',command=self.install,style='Accent.TButton');self.install_button.grid(row=4,column=0,sticky='e',pady=d(10));self.previews.bind('<<TreeviewSelect>>',lambda _:self.buttons())
         footer=ttk.Frame(self.window,padding=d(16));footer.grid(row=3,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window,'正在连接…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew')
+        self.status=PresentationVar(self.window,'正在连接…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew')
         ttk.Label(footer,text='安装后默认不加载；启用后重新读取应用。',style='Hint.TLabel').grid(row=1,column=0,sticky='w',pady=(d(10),0))
         self.close_button=ttk.Button(footer,text='关闭',command=self.close);self.close_button.grid(row=1,column=1,sticky='e',pady=(d(10),0))
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.connect();self.poll()

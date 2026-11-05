@@ -12,7 +12,7 @@ from . import theme as t
 class Header(t.Surface):
     def paint(self, p):
         p.asset("zzz-logo.png", (22, 12, 61, 51))
-        p.text((77, 17), "快捷手册", 27)
+        p.text((77, 17), "快捷手册", 27,max_width=123)
         p.text((212, 26), "AUTOZZZ", 14, fill=t.MUTED, latin=True)
         p.line((20, p.height - 2, p.width - 20, p.height - 2), "#252525")
 
@@ -60,8 +60,8 @@ class Compendium(t.Surface):
     def _spine(self, p, height):
         p.box((32, 67, 110, height-36), 15, fill=t.ORANGE, outline="#202020", width=3)
         p.box((39, 69, 98, height-70), 12, fill="#191919", outline="#6c2f14", width=2)
-        p.text((45, height-60), "RANDOM", 9, fill=t.BG, latin=True)
-        p.text((45, height-49), "PLAY", 9, fill=t.BG, latin=True)
+        p.text((45, height-60), "RANDOM", 9, fill=t.DECORATION_INK, latin=True)
+        p.text((45, height-49), "PLAY", 9, fill=t.DECORATION_INK, latin=True)
         # Vertical lettering and the familiar hanging orange handheld are code
         # geometry, not a screen capture with a player's fixed progress baked in.
         size = round(32*p.factor)
@@ -257,8 +257,8 @@ class TaskBoard(t.Surface):
         p.box((x, y, x+width, bottom), 13, fill="#444444", outline="#0c0c0c", width=2)
         p.box((x+9, y+30, x+width-9, bottom-59), 9, fill="#282828")
         p.box((x+8, y-6, x+31, y+24), 3, fill=t.ORANGE)
-        p.text((x+20, y+8), "★", 16, fill=t.BG, anchor="mm")
-        p.text((x+40, y+10), "本次委托", 13, fill="#bdbdbd")
+        p.text((x+20, y+8), "★", 16, fill=t.DECORATION_INK, anchor="mm")
+        p.text((x+40, y+10), "本次委托", 13, fill="#bdbdbd",max_width=width-52)
         p.text((x+18, y+43), "每日计划", 21, stroke=1)
         labels = ("每日签到", "喝杯咖啡", "录像店营业", "活跃度奖励", "丽都周纪", "丽都城募")
         step = min(29, max(20, (bottom-y-125)/6))
@@ -268,7 +268,7 @@ class TaskBoard(t.Surface):
             p.box((x+19, top, x+29, top+10), 2, fill="#d1d1cc" if selected else "#282828", outline="#93938d")
             if selected:
                 p.line((x+21, top+5, x+24, top+8, x+28, top+2), "#333333", 1.5)
-            p.text((x+39, top+5), label, 13, anchor="lm", fill="#d2d2cc" if selected else "#737373")
+            p.text((x+39, top+5), label, 13, anchor="lm", fill="#d2d2cc" if selected else "#737373",max_width=width-50)
         p.text((x+19, bottom-78), "每日电量消耗  0", 12, fill=t.ACCENT)
         self._pill(p, (x+14, bottom-44, x+width-14, bottom-12), "修改计划", self.hover == "schedule")
         self.hitboxes["schedule"] = (x, y, x+width, bottom)
@@ -284,7 +284,7 @@ class TaskBoard(t.Surface):
         p.box((x, y, x+width, bottom), 13, fill="#434343", outline=t.ACCENT if focused else "#080808", width=2)
         p.box((x+8, y+30, x+width-8, bottom-59), 9, fill="#222222")
         p.stripes((x+16, y+38, x+width-16, bottom-70), "#252525", 6)
-        p.text((x+14, y+9), "进度："+("1 / 1" if done else "— / 1"), 13, fill="#aaaaaa")
+        p.text((x+14, y+9), "进度："+("1 / 1" if done else "— / 1"), 13, fill="#aaaaaa",max_width=width-28)
         title = p.wrap(TITLES[key], width-31, 21, 3)
         p.text((x+16, y+43), title, 21, stroke=1)
         p.text((x+17, bottom-111), status, 23, fill=color, stroke=1)

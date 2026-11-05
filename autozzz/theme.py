@@ -19,9 +19,43 @@ ORANGE = "#ff6b22"
 SUCCESS = "#83ce19"
 WARNING = "#efb84a"
 ERROR = "#ff8476"
+ACCENT_TEXT = BG
+MODE = 'dark'
+DECORATION_INK = '#0c0c0b'
+_ORIGINAL = {key: globals()[key] for key in ('BG','PANEL','FIELD','LINE','TEXT','MUTED','ACCENT','ORANGE','SUCCESS','WARNING','ERROR')}
 FONT = "Microsoft YaHei UI"
 UI_ASSETS = RESOURCE_ROOT / "assets" / "ui"
 _registered = False
+
+
+def configure_appearance(value=None):
+    """Called once before constructing widgets; does not touch game preferences."""
+    from .appearance_preferences import effective_appearance
+    appearance = effective_appearance(value)
+    globals().update(_ORIGINAL)
+    if appearance['mode'] == 'light':
+        globals().update(BG='#f0f0ed', PANEL='#dededb', FIELD='#f9f9f6', LINE='#9a9a96',
+                         TEXT='#20201e', MUTED='#555551', SUCCESS='#347000', WARNING='#825300', ERROR='#b12424')
+    globals().update(ACCENT=appearance['accent'], ACCENT_TEXT=appearance['accent_text'], MODE=appearance['mode'])
+    return appearance
+
+
+def color(value):
+    """Retain the original illustrated skin while mapping its neutral paint roles."""
+    if value is None or MODE == 'dark':
+        return value
+    if value in (BG, PANEL, FIELD, LINE, TEXT, MUTED, ACCENT, ACCENT_TEXT, DECORATION_INK, SUCCESS, WARNING, ERROR):
+        return value
+    for key, old in _ORIGINAL.items():
+        if value == old:
+            return globals()[key]
+    if isinstance(value, str) and len(value) == 7 and value.startswith('#'):
+        channels = [int(value[i:i+2],16) for i in (1,3,5)]
+        if max(channels)-min(channels)<=12:
+            level = sum(channels)/3
+            level = round(249 - level * .6) if level < 128 else round(255-level)
+            return '#%02x%02x%02x' % (level, level, level)
+    return value
 
 
 def load_fonts(root):
@@ -51,12 +85,17 @@ def asset_image(path):
 
 class Painter:
     """Logical-pixel drawing at twice the window DPI for smooth type and rims."""
-    def __init__(self, width, height, scale, background=PANEL):
+    def __init__(self, width, height, scale, background=_ORIGINAL['PANEL'], *, texture=None):
         self.factor = scale * 2
         self.width, self.height = width / scale, height / scale
+        background = color(background)
         self.image = Image.new("RGBA" if background is None else "RGB", (width * 2, height * 2),
                                (0, 0, 0, 0) if background is None else background)
         self.draw = ImageDraw.Draw(self.image)
+        self.texture = None
+        if texture is not None:
+            from PIL import ImageOps
+            self.texture = ImageOps.fit(texture.convert('RGB'), self.image.size)
 
     def coords(self, values):
         return tuple(round(v * self.factor) for v in values)
@@ -64,28 +103,52 @@ class Painter:
     def box(self, rect, radius=0, fill=FIELD, outline=None, width=1):
         if rect[2] <= rect[0] or rect[3] <= rect[1]:
             return  # Geometry can briefly collapse while Tk negotiates a resize.
-        self.draw.rounded_rectangle(self.coords(rect), radius=round(radius * self.factor),
+        coords = self.coords(rect)
+        fill, outline = color(fill), color(outline)
+        self.draw.rounded_rectangle(coords, radius=round(radius * self.factor),
                                     fill=fill, outline=outline, width=max(1, round(width * self.factor)))
+        if self.texture is not None and fill is not None and fill not in (ACCENT, ORANGE, SUCCESS, ERROR, WARNING):
+            # Texture only the neutral card surfaces. Text and status markers are
+            # drawn afterward at their full contrast, never blended with video.
+            left, top, right, bottom = coords
+            left, top = max(0,left), max(0,top)
+            right, bottom = min(right,self.image.width), min(bottom,self.image.height)
+            if right > left and bottom > top:
+                region = (left,top,right,bottom)
+                mask = Image.new('L',(right-left,bottom-top))
+                ImageDraw.Draw(mask).rounded_rectangle((0,0,right-left-1,bottom-top-1),radius=round(radius*self.factor),fill=255)
+                tiled = Image.blend(Image.new('RGB',mask.size,fill),self.texture.crop(region),.12 if MODE=='light' else .08)
+                self.image.paste(tiled,region,mask)
+                if outline:
+                    self.draw.rounded_rectangle(coords,radius=round(radius*self.factor),outline=outline,width=max(1,round(width*self.factor)))
 
     def line(self, points, fill=LINE, width=1):
-        self.draw.line(self.coords(points), fill=fill, width=max(1, round(width * self.factor)))
+        self.draw.line(self.coords(points), fill=color(fill), width=max(1, round(width * self.factor)))
 
     def poly(self, points, fill=TEXT):
-        self.draw.polygon(self.coords(points), fill=fill)
+        self.draw.polygon(self.coords(points), fill=color(fill))
 
-    def text(self, xy, text, size=16, fill=TEXT, anchor="lt", latin=False, stroke=0, stroke_fill=BG):
+    def text(self, xy, text, size=16, fill=TEXT, anchor="lt", latin=False, stroke=0, stroke_fill=BG, *, translate=True, max_width=None):
+        if translate:
+            from .localization import tr
+            text = tr(text)
         if "\n" in text:
             for index, line in enumerate(text.splitlines()):
-                self.text((xy[0], xy[1]+index*(size+6)), line, size, fill, anchor, latin, stroke, stroke_fill)
+                self.text((xy[0], xy[1]+index*(size+6)), line, size, fill, anchor, latin, stroke, stroke_fill, translate=False,max_width=max_width)
             return
         # The website's Mont file is a letter-only subset. Use the full game
         # face for numbers, punctuation and spaces instead of missing glyphs.
         latin = latin and text.isascii() and text.isalpha()
+        if max_width is not None:
+            while size > 8 and bitmap_font(round(size*self.factor),latin).getlength(text)>max_width*self.factor:
+                size-=1
         self.draw.text(self.coords(xy), text, font=bitmap_font(round(size * self.factor), latin),
-                       fill=fill, anchor=anchor, stroke_width=round(stroke * self.factor),
-                       stroke_fill=stroke_fill, spacing=round(5 * self.factor))
+                       fill=color(fill), anchor=anchor, stroke_width=round(stroke * self.factor),
+                       stroke_fill=color(stroke_fill), spacing=round(5 * self.factor))
 
     def wrap(self, text, width, size=16, max_lines=4):
+        from .localization import tr
+        text = tr(text)
         font = bitmap_font(round(size * self.factor))
         lines, current = [], ""
         for char in text:
@@ -125,8 +188,10 @@ class Painter:
 
 
 class Surface(tk.Canvas):
-    def __init__(self, parent, scale=1., *, background=PANEL, **kwargs):
+    def __init__(self, parent, scale=1., *, background=None, **kwargs):
+        background = PANEL if background is None else color(background)
         self.scale, self.background, self._paint_job = scale, background, None
+        self.texture_provider = None
         super().__init__(parent, bg=background, highlightthickness=0, borderwidth=0, **kwargs)
         self.bind("<Configure>", self.redraw)
         self.bind("<Destroy>", self._dispose, add="+")
@@ -145,7 +210,8 @@ class Surface(tk.Canvas):
         width, height = self.winfo_width(), self.winfo_height()
         if width < 2 or height < 2:
             return
-        painter = Painter(width, height, self.scale, self.background)
+        texture = self.texture_provider() if self.texture_provider is not None else None
+        painter = Painter(width, height, self.scale, self.background, texture=texture)
         self.paint(painter)
         self._photo = ImageTk.PhotoImage(painter.finish(), master=self)
         self.delete("art")
@@ -179,7 +245,7 @@ def _button_element(root, style, scale, name, *, accent=False, tab=False, option
         photos.append(ImageTk.PhotoImage(p.finish(), master=root))
     root._game_images.extend(photos)
     normal, active, pressed, disabled = photos
-    element = name + ".border"
+    element = name + f".border{root._theme_epoch}"
     style.element_create(element, "image", normal, ("disabled", disabled), ("pressed", pressed),
                          ("active", active), ("focus", active), border=round(18 * scale), padding=0, sticky="nsew")
     style.layout(name, [(element, {"sticky": "nsew", "children": [
@@ -192,10 +258,11 @@ def apply_theme(root, scale):
     style = ttk.Style(root)
     style.theme_use("clam")
     root._game_images = []
+    root._theme_epoch = getattr(root,'_theme_epoch',0)+1
     style.configure(".", font=(FONT, 10), background=PANEL, foreground=TEXT)
-    for name, color in (("TFrame", PANEL), ("Card.TFrame", FIELD), ("Panel.TFrame", FIELD),
+    for name, background_color in (("TFrame", PANEL), ("Card.TFrame", FIELD), ("Panel.TFrame", FIELD),
                         ("Sidebar.TFrame", BG), ("Footer.TFrame", BG), ("Row.TFrame", "#252525")):
-        style.configure(name, background=color)
+        style.configure(name, background=background_color)
     for name in ("TLabel", "Hint.TLabel", "Subtitle.TLabel", "Kicker.TLabel"):
         style.configure(name, background=PANEL, foreground=MUTED, font=(FONT, 10))
     for name in ("Card.TLabel", "CardHint.TLabel", "CardKicker.TLabel", "CardTitle.TLabel", "Section.TLabel"):
@@ -212,9 +279,9 @@ def apply_theme(root, scale):
                               ("Options.TButton", False, False, True), ("Selected.Options.TButton", True, False, True)):
         _button_element(root, style, scale, name, accent=accent, tab=tab, option=option)
         style.configure(name, padding=(d(16 if tab else 15), d(8)), anchor="center", width=0,
-                        font=(FONT, 12 if tab else 10), foreground=BG if accent else TEXT,
+                        font=(FONT, 12 if tab else 10), foreground=ACCENT_TEXT if accent else TEXT,
                         background=PANEL if tab else BG)
-        style.map(name, foreground=[("disabled", "#757575"), ("!disabled", BG if accent else TEXT)],
+        style.map(name, foreground=[("disabled", "#757575"), ("!disabled", ACCENT_TEXT if accent else TEXT)],
                   background=[("disabled", PANEL if tab else BG), ("active", PANEL if tab else BG)])
     style.configure("Danger.TButton", foreground=ERROR)
     style.map("Danger.TButton", foreground=[("disabled", "#757575"), ("!disabled", ERROR)])
@@ -222,14 +289,14 @@ def apply_theme(root, scale):
         style.configure(name, fieldbackground=BG, background=BG, foreground=TEXT, bordercolor="#616161",
                         font=("Microsoft YaHei UI", 10),
                         insertcolor=ACCENT, arrowcolor=TEXT, lightcolor=BG, darkcolor=BG, padding=d(6),
-                        selectbackground=ACCENT, selectforeground=BG, borderwidth=1)
+                        selectbackground=ACCENT, selectforeground=ACCENT_TEXT, borderwidth=1)
         style.map(name, fieldbackground=[("readonly", BG), ("disabled", "#282828")],
                   foreground=[("disabled", "#747474"), ("readonly", TEXT)], bordercolor=[("focus", ACCENT)],
                   arrowcolor=[("disabled", "#747474")])
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-    root.option_add("*TCombobox*Listbox.selectForeground", BG)
+    root.option_add("*TCombobox*Listbox.selectForeground", ACCENT_TEXT)
     root.option_add("*TCombobox*Listbox.font", (FONT, 11))
     _field_elements(root, style, scale)
     for name in ("Compact.TEntry", "Compact.TCombobox"):
@@ -237,18 +304,19 @@ def apply_theme(root, scale):
     _check_indicators(root, style, scale)
     style.configure("Config.TCheckbutton",background=PANEL,font=("Microsoft YaHei UI",10))
     style.map("Config.TCheckbutton",background=[("active",PANEL),("!disabled",PANEL)])
-    style.configure("Config.Treeview",background=FIELD,fieldbackground=FIELD,foreground=TEXT,
-                    font=("Microsoft YaHei UI",10),rowheight=d(30),bordercolor=LINE,
-                    lightcolor=FIELD,darkcolor=FIELD)
-    style.map("Config.Treeview",background=[("selected","#45451f")],
-              foreground=[("selected",ACCENT),("disabled",MUTED)])
-    style.configure("Config.Treeview.Heading",background="#252525",foreground=MUTED,
-                    font=("Microsoft YaHei UI",10),bordercolor=LINE,lightcolor=LINE,darkcolor=LINE,padding=d(7))
-    style.map("Config.Treeview.Heading",background=[("active","#3e3e3e")],foreground=[("active",TEXT)])
+    for name in ('Treeview','Config.Treeview'):
+        style.configure(name,background=FIELD,fieldbackground=FIELD,foreground=TEXT,
+                        font=("Microsoft YaHei UI",10),rowheight=d(30),bordercolor=LINE,
+                        lightcolor=FIELD,darkcolor=FIELD)
+        style.map(name,background=[("selected",PANEL if MODE=='light' else "#45451f")],
+                  foreground=[("selected",ACCENT),("disabled",MUTED)])
+        style.configure(name+'.Heading',background="#252525",foreground=MUTED,
+                        font=("Microsoft YaHei UI",10),bordercolor=LINE,lightcolor=LINE,darkcolor=LINE,padding=d(7))
+        style.map(name+'.Heading',background=[("active","#3e3e3e")],foreground=[("active",TEXT)])
     style.configure("TNotebook", background=PANEL, borderwidth=0, tabmargins=0)
     style.configure("TNotebook.Tab", background=FIELD, foreground=MUTED, padding=(d(22), d(9)))
     style.map("TNotebook.Tab", background=[("selected", ACCENT), ("active", "#505050")],
-              foreground=[("selected", BG), ("active", TEXT)])
+              foreground=[("selected", ACCENT_TEXT), ("active", TEXT)])
     style.configure("Vertical.TScrollbar", background=LINE, troughcolor=FIELD, bordercolor=FIELD,
                     arrowcolor=TEXT, lightcolor=FIELD, darkcolor=FIELD)
     style.map("Vertical.TScrollbar", background=[("disabled", "#303030"), ("active", "#777777"), ("!disabled", "#454545")],
@@ -258,6 +326,23 @@ def apply_theme(root, scale):
                     arrowcolor=TEXT,lightcolor=FIELD,darkcolor=FIELD)
     style.map("Horizontal.TScrollbar",background=[("disabled","#303030"),("active","#777777"),("!disabled","#454545")])
     style.configure("TSeparator", background=LINE)
+    if MODE == 'light':
+        # Existing styles intentionally share the hand-painted neutral palette.
+        # Map their remaining historical literal colors in the same way as Canvas.
+        names = ('.','TFrame','Card.TFrame','Panel.TFrame','Sidebar.TFrame','Footer.TFrame','Row.TFrame',
+                 'TLabel','Hint.TLabel','Subtitle.TLabel','Kicker.TLabel','Card.TLabel','CardHint.TLabel',
+                 'CardKicker.TLabel','CardTitle.TLabel','Section.TLabel','Config.TLabel','ConfigTitle.TLabel',
+                 'PageTitle.TLabel','Footer.TLabel','FooterStatus.TLabel','TButton','Accent.TButton','Nav.TButton',
+                 'Selected.Nav.TButton','Options.TButton','Selected.Options.TButton','Danger.TButton','TEntry',
+                 'TCombobox','TSpinbox','Compact.TEntry','Compact.TCombobox','TCheckbutton','Card.TCheckbutton',
+                 'Config.TCheckbutton','Treeview','Treeview.Heading','Config.Treeview','Config.Treeview.Heading','TNotebook','TNotebook.Tab',
+                 'Vertical.TScrollbar','Horizontal.TScrollbar','TSeparator')
+        for name in names:
+            for option, value in style.configure(name).items():
+                if isinstance(value,str) and value.startswith('#'):
+                    style.configure(name,**{option:color(value)})
+            for option, states in style.map(name).items():
+                style.map(name,**{option:[(*entry[:-1],color(entry[-1])) for entry in states]})
     _window_identity(root)
     return style
 
@@ -272,11 +357,12 @@ def _field_elements(root, style, scale):
         images.append(ImageTk.PhotoImage(p.finish(), master=root))
     root._game_images.extend(images)
     normal, focus, disabled = images
-    style.element_create("Game.Field", "image", normal, ("disabled", disabled), ("focus", focus),
+    element = f'Game.Field{root._theme_epoch}'
+    style.element_create(element, "image", normal, ("disabled", disabled), ("focus", focus),
                          border=round(16*scale), padding=(round(14*scale), round(3*scale)), sticky="nsew")
-    style.layout("TEntry", [("Game.Field", {"sticky": "nsew", "children": [
+    style.layout("TEntry", [(element, {"sticky": "nsew", "children": [
         ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
-    style.layout("TCombobox", [("Game.Field", {"sticky": "nsew", "children": [
+    style.layout("TCombobox", [(element, {"sticky": "nsew", "children": [
         ("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
         ("Combobox.padding", {"sticky": "nsew", "children": [("Combobox.textarea", {"sticky": "nsew"})]})]})])
     # Compact battle fields keep the smaller native element to fit eight rows.
@@ -294,17 +380,18 @@ def _check_indicators(root, style, scale):
         fill = ("#777331" if disabled else ACCENT) if selected else "#303030"
         p.box((1, 1, 19, 19), 5, fill=fill, outline="#757575" if disabled else "#a0a0a0")
         if selected:
-            p.line((5, 10, 9, 14, 16, 6), BG, 3)
+            p.line((5, 10, 9, 14, 16, 6), ACCENT_TEXT, 3)
         images.append(ImageTk.PhotoImage(p.finish(), master=root))
     root._game_images.extend(images)
     off, on, disabled_off, disabled_on = images
-    style.element_create("Game.Check.indicator", "image", off, ("disabled", "selected", disabled_on),
+    element = f'Game.Check.indicator{root._theme_epoch}'
+    style.element_create(element, "image", off, ("disabled", "selected", disabled_on),
                          ("disabled", disabled_off), ("selected", on))
     for name in ("TCheckbutton", "Card.TCheckbutton"):
         style.configure(name, background=FIELD, foreground=TEXT, padding=(0, round(4 * scale)))
         style.map(name, background=[("active", FIELD)], foreground=[("disabled", "#757575")])
         style.layout(name, [("Checkbutton.padding", {"sticky": "nswe", "children": [
-            ("Game.Check.indicator", {"side": "left", "sticky": ""}),
+            (element, {"side": "left", "sticky": ""}),
             ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
                 ("Checkbutton.label", {"sticky": "nswe"})]})]})])
 
@@ -331,7 +418,7 @@ def _window_identity(root):
             user32.GetParent.argtypes = [wintypes.HWND]
             user32.GetParent.restype = wintypes.HWND
             hwnd = user32.GetParent(root.winfo_id())
-            enabled = ctypes.c_int(1)
+            enabled = ctypes.c_int(MODE == 'dark')
             for attribute in (20, 19):
                 if ctypes.windll.dwmapi.DwmSetWindowAttribute(wintypes.HWND(hwnd), attribute, ctypes.byref(enabled), ctypes.sizeof(enabled)) == 0:
                     break

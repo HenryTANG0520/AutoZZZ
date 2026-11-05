@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock,patch
 
 from autozzz.onedragon_settings import NativeSettingsSession,has_settings,validate_target
+from autozzz.onedragon_runtime import RuntimePaths
 
 
 class NativeSettingsTests(unittest.TestCase):
@@ -26,7 +27,8 @@ class NativeSettingsTests(unittest.TestCase):
                 with self.subTest(changes=changes),self.assertRaises(ValueError):validate_target(ctx,**dict(target,**changes))
 
     def session(self,process,prepare=None):
-        paths=NS(prepare=prepare or Mock(),bundle=None,python=Path('sdk/python.exe'),source=Path('sdk/source'),data=Path('data'))
+        paths=RuntimePaths(Path('sdk/source'),Path('sdk/python.exe'),Path('data'))
+        self.stack.enter_context(patch.object(RuntimePaths,'prepare',Mock(side_effect=prepare) if prepare else Mock()))
         lease=NS(acquire=Mock(),export=lambda:'lease',close=Mock());events=[]
         self.stack.enter_context(patch('autozzz.task_lease.RunLeaseOwner',return_value=lease))
         spawn=self.stack.enter_context(patch('autozzz.onedragon_settings.subprocess.Popen',return_value=process))
@@ -66,7 +68,8 @@ class NativeSettingsTests(unittest.TestCase):
         self.assertEqual([event['message'] for event in events if event['type']=='error'],['account changed'])
 
     def test_packaged_launcher_uses_bundle_bridge_and_cleans_environment(self):
-        paths=NS(prepare=Mock(),bundle=Path('package/onedragon'),python=Path('package/onedragon/python/python.exe'),source=Path('package/onedragon/source'),data=Path('profile'))
+        paths=RuntimePaths(Path('package/onedragon/source'),Path('package/onedragon/python/python.exe'),Path('profile'),Path('package/onedragon'))
+        self.stack.enter_context(patch.object(RuntimePaths,'prepare',Mock()))
         process=NS(stdin=io.BytesIO(),stdout=io.BytesIO(),stderr=io.BytesIO(),wait=lambda:0,poll=lambda:0)
         lease=NS(acquire=Mock(),export=lambda:'new lease',close=Mock())
         with patch('autozzz.task_lease.RunLeaseOwner',return_value=lease),patch('autozzz.onedragon_settings.subprocess.Popen',return_value=process) as spawn,patch.dict('os.environ',{'PYTHONHOME':'bad','AUTOZZZ_INTERNAL_RUN_LEASE':'old'}):

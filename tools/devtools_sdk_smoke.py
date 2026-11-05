@@ -162,7 +162,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='autozzz-native-devtools-')as temporary:
         base=Path(temporary);results=[]
         for factor in ('1','1.5','2'):
-            paths=replace(RuntimePaths.discover(args.package.resolve()if args.package else ROOT),data=base/factor)
+            paths=replace(RuntimePaths.discover(args.package.resolve()if args.package else ROOT,use_selection=False),data=base/factor)
             paths.prepare();env=environment();env['QT_SCALE_FACTOR']=factor
             command=[str(paths.python),'-I','-s','-P','-B',str(Path(__file__).resolve()),'--child','--source',str(paths.source),'--data',str(paths.data)]
             if args.package:command+=['--package',str(args.package.resolve())]

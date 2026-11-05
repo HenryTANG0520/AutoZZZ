@@ -73,7 +73,7 @@ def write_plugin(root,name,kind):
 
 def fixture_host():
     parser=argparse.ArgumentParser();parser.add_argument('--fixture-host',action='store_true');parser.add_argument('--source',type=Path);parser.add_argument('--data',type=Path);parser.add_argument('--target');parser.add_argument('--bridge',type=Path);parser.add_argument('--output',type=Path);parser.add_argument('--catalog-views',action='store_true')
-    args=parser.parse_args();sys.path.insert(0,str(args.bridge));sys.path.insert(0,str(args.source/'src'));platform.uname()
+    args,runtime_arguments=parser.parse_known_args();sys.path.insert(0,str(args.bridge));sys.path.insert(0,str(args.source/'src'));platform.uname()
     import autozzz
     assert Path(autozzz.__file__).resolve().is_relative_to(args.bridge.resolve())
     from autozzz.run_lock import RunLock,profile_lock
@@ -127,10 +127,10 @@ def fixture_host():
                 game_accessed=False,game_input_sent=False),ensure_ascii=False,indent=2),encoding='utf-8')
             emitter[0](dict(type='ready',fixture_saved=True))
         emitter=[]
-        def fixture_run(source,data,target,emit,lease):
+        def fixture_run(source,data,target,emit,lease,**runtime):
             emitter.append(emit)
-            return run(source,data,target,emit,lease,verify)
-        sys.argv=[sys.argv[0],'--source',str(args.source),'--data',str(args.data),'--target',args.target]
+            return run(source,data,target,emit,lease,verify,**runtime)
+        sys.argv=[sys.argv[0],'--source',str(args.source),'--data',str(args.data),'--target',args.target,*runtime_arguments]
         with patch('autozzz.onedragon_settings_host.run',side_effect=fixture_run):return host_main()
 
 

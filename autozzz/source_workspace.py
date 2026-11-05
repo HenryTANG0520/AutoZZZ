@@ -29,7 +29,8 @@ class SourceWorkspace:
     protocol='https'
 
     def __init__(self,service):
-        self.service=service;self.root=Path(service.data).absolute()/'autozzz/upstream-source'
+        self.service=service;self.data=Path(getattr(service,'stable_data',service.data)).resolve()
+        self.root=self.data/'autozzz/upstream-source'
         self.worker=None;self.job=None;self.cancelled=threading.Event();self.lock=threading.RLock()
         self.git=shutil.which('git');self.process=None
         self.initializing=self.root.parent/'upstream-source-init.json'
@@ -50,7 +51,7 @@ class SourceWorkspace:
                     if path.is_symlink() or getattr(path.lstat(),'st_file_attributes',0)&0x400:
                         raise ValueError('源码工作副本包含链接，已停止操作。')
 
-    def _git(self,*args,timeout=120):
+    def _git(self,*args,timeout=120,binary=False):
         if not self.git:raise ValueError('未找到 Git，请先安装 Git for Windows。')
         if self.cancelled.is_set():raise InterruptedError('源码操作已取消')
         env={key:value for key,value in os.environ.items() if not key.startswith('GIT_')}
@@ -77,7 +78,7 @@ class SourceWorkspace:
                 if len(raw)>512*1024:raise ValueError('Git 输出过大，请在工作副本中检查详情。')
                 text=raw.decode('utf-8',errors='replace').strip()
                 if process.returncode:raise ValueError(text or 'Git 操作失败')
-                return text
+                return raw if binary else text
             finally:self.process=None
 
     def verify(self,require_origin=True):
@@ -162,7 +163,7 @@ class SourceWorkspace:
         self.service._assert_idle()
         if self.busy:raise RuntimeError('源码操作仍在进行。')
         self.cancelled.clear()
-        with profile_lock(self.service.data):return self._catalog()
+        with profile_lock(self.data):return self._catalog()
 
     def _clean(self):
         if self._git('status','--porcelain=v1','--untracked-files=normal'):
@@ -213,7 +214,7 @@ class SourceWorkspace:
             self.cancelled.clear();self.job=dict(job_id=uuid.uuid4().hex,state='working',action=action,result=None,error='')
             def run():
                 try:
-                    with profile_lock(self.service.data):result=self._operation(action,branch)
+                    with profile_lock(self.data):result=self._operation(action,branch)
                     with self.lock:self.job.update(state='success',result=result)
                 except Exception as exc:
                     with self.lock:self.job.update(state='cancelled' if isinstance(exc,InterruptedError) else 'failed',error=str(exc)[:8192])

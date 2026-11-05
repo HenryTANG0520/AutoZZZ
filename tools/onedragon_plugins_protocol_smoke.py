@@ -13,7 +13,7 @@ def fixture_worker():
     from contextlib import ExitStack,redirect_stdout
     import platform
     from unittest.mock import patch
-    parser=argparse.ArgumentParser();parser.add_argument('--fixture-worker',action='store_true');parser.add_argument('--source',type=Path);parser.add_argument('--data',type=Path);parser.add_argument('--fixture-bridge',type=Path);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--fixture-worker',action='store_true');parser.add_argument('--source',type=Path);parser.add_argument('--data',type=Path);parser.add_argument('--fixture-bridge',type=Path);args,runtime_arguments=parser.parse_known_args()
     import autozzz
     assert Path(autozzz.__file__).resolve().is_relative_to(args.fixture_bridge.resolve())
     sys.path.insert(0,str(args.source/'src'));platform.uname()
@@ -25,7 +25,7 @@ def fixture_worker():
                            'pynput.keyboard.Controller.press','pynput.mouse.Controller.press','pynput.keyboard.Controller.release','pynput.mouse.Controller.release'):
                 scope.enter_context(patch(target,side_effect=forbidden))
             from autozzz.onedragon_worker import main
-        sys.argv=[sys.argv[0],'--source',str(args.source),'--data',str(args.data)]
+        sys.argv=[sys.argv[0],'--source',str(args.source),'--data',str(args.data),*runtime_arguments]
         return main()
 
 

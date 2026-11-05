@@ -61,7 +61,7 @@ def vendor_directory(source):
 
 def source_hashes(source):
     directory = vendor_directory(source)
-    return {name: hashlib.sha256((directory/name).read_bytes()).hexdigest() for name in FILES}
+    return {name: hashlib.sha256((directory/name).read_bytes().replace(b'\r\n',b'\n')).hexdigest() for name in FILES}
 
 
 def load_registrations(source, backend):

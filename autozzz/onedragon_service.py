@@ -27,8 +27,14 @@ def plain(value: Any) -> Any:
 
 
 class OneDragonService:
-    def __init__(self, source: Path, data: Path,run_lease=None):
+    def __init__(self, source: Path, data: Path,run_lease=None,*,runtime_revision=None,stable_data=None,product_root=None,runtime_generation=None,management_only=False):
         self.source, self.data = source.resolve(), data.resolve()
+        from .onedragon_runtime import UPSTREAM_REVISION
+        self.runtime_revision=runtime_revision or UPSTREAM_REVISION
+        self.stable_data=Path(stable_data).resolve() if stable_data is not None else self.data
+        self.product_root=Path(product_root).resolve() if product_root is not None else self.source.parent.parent
+        from .runtime_generation import RuntimeGeneration
+        self.runtime_guard=RuntimeGeneration(self.stable_data,runtime_generation,management_only)
         sys.path.insert(0, str(self.source / "src"))
         from one_dragon.utils import os_utils
         os_utils.set_work_dir(self.data)
@@ -46,7 +52,9 @@ class OneDragonService:
         self._program_updates=None
         self._gamepad_dependencies=None
         self._source_workspace=None
+        self._sdk_upgrade=None
         self._environment_tools=None
+        self._global_capture=None
         self._dispatch_lock=threading.RLock()
         self._mcp_service=None
         self._run_lease=run_lease
@@ -55,6 +63,7 @@ class OneDragonService:
 
     @property
     def ctx(self) -> Any:
+        self.runtime_guard.check_current()
         if self._ctx is None:
             from .run_lock import profile_lock
             with profile_lock(self.data):
@@ -74,6 +83,8 @@ class OneDragonService:
             log.warning('虚拟手柄依赖未激活：%s',exc)
         from .onedragon_host import ManagedZContext
         ctx=ManagedZContext();ctx.plugin_run_lease=self._run_lease
+        ctx.autozzz_runtime_revision=self.runtime_revision
+        ctx.autozzz_runtime_guard=self.runtime_guard.check_execution
         ctx.register_application_factory();self._ctx=ctx
         return ctx
 
@@ -126,6 +137,16 @@ class OneDragonService:
 
     def trace_configure(self,enabled,clear=False):return self.ctx.debug_trace_runtime.configure(enabled,clear)
     def trace_snapshot(self):return self.ctx.debug_trace_runtime.snapshot()
+    @property
+    def global_capture(self):
+        if self._global_capture is None:
+            from .global_capture import GlobalCaptureRuntime
+            self._global_capture=GlobalCaptureRuntime(self)
+        return self._global_capture
+
+    def global_capture_status(self,game_path=None):return self.global_capture.status(game_path)
+    def global_capture_capture(self,token,game_path=None,include_overlay=None,legacy_lease=None):
+        return self.global_capture.capture(token,game_path,include_overlay,legacy_lease)
     def trace_capture(self,epoch,generation):
         from .trace_capture import capture_source
         if type(epoch)is not int or type(generation)is not int:raise ValueError('截图观察编号无效。')
@@ -630,6 +651,8 @@ class OneDragonService:
             temporary.unlink(missing_ok=True)
 
     def _assert_idle(self) -> None:
+        self.runtime_guard.check_current()
+        if getattr(self,'_sdk_upgrade',None) is not None and self._sdk_upgrade.busy:raise RuntimeError('SDK 操作仍在运行，请等待或取消原任务。')
         if getattr(self,'_source_workspace',None) is not None and self._source_workspace.busy:raise RuntimeError('源码操作仍在运行，请等待或取消原任务。')
         if getattr(self,'_environment_tools',None) is not None and self._environment_tools.busy:raise RuntimeError('下载源或代理检查仍在运行，请等待或取消原任务。')
         if getattr(self,'_gamepad_dependencies',None) is not None and self._gamepad_dependencies.busy:raise RuntimeError('虚拟手柄安装仍在运行，请等待原任务结束。')
@@ -671,6 +694,7 @@ class OneDragonService:
         manager=getattr(self,'_mcp_service',None)
         if manager is not None and manager.owned_job==result.get('job_id'):
             result['mcp_run']=manager.run_description()
+        if manager is not None:result['mcp_events']=manager.actions.events()
         return result
 
     @property
@@ -689,6 +713,11 @@ class OneDragonService:
     def mcp_edit_enable(self,scopes):return self.mcp_service.edit_enable(scopes)
     def mcp_edit_disable(self):return self.mcp_service.edit_disable()
     def mcp_edit_restore(self,kind,id):return self.mcp_service.edit_restore(kind,id)
+    def mcp_action_prepare(self,descriptor):return self.mcp_service.action_prepare(descriptor)
+    def mcp_action_enable(self,scopes,budget=None,resource_confirmation=None,timeout_seconds=600):
+        return self.mcp_service.action_enable(scopes,budget,resource_confirmation,timeout_seconds)
+    def mcp_action_disable(self):return self.mcp_service.action_disable()
+    def mcp_events_ack(self,sequence):return self.mcp_service.events_ack(sequence)
 
     def prepare_application(self,app_id:str,route_debug:dict|None=None) -> dict:
         self._assert_idle()
@@ -769,6 +798,25 @@ class OneDragonService:
     def source_cancel(self):return self.source_workspace.cancel()
 
     @property
+    def sdk_upgrade(self):
+        if self._sdk_upgrade is None:
+            from .sdk_upgrade import SDKUpgradeManager
+            self._sdk_upgrade=SDKUpgradeManager(self)
+        return self._sdk_upgrade
+
+    def sdk_catalog(self):return self.sdk_upgrade.catalog()
+    def sdk_review(self,groups=None,source_candidate=None):return self.sdk_upgrade.review(groups,source_candidate)
+    def sdk_build(self,review_id,review_digest,confirmed=False,offline=True):return self.sdk_upgrade.build(review_id,review_digest,confirmed,offline)
+    def sdk_refresh(self,candidate_id,confirmed=False):return self.sdk_upgrade.refresh(candidate_id,confirmed)
+    def sdk_activate(self,candidate_id,selection_revision,confirmed=False):return self.sdk_upgrade.activate(candidate_id,selection_revision,confirmed)
+    def sdk_rollback(self,selection_revision,confirmed=False):return self.sdk_upgrade.rollback(selection_revision,confirmed)
+    def sdk_activation_review(self):return self.sdk_upgrade.activation_review()
+    def sdk_recover_activation(self,journal_digest,choice='before',confirmed=False):return self.sdk_upgrade.recover_activation(journal_digest,choice,confirmed)
+    def sdk_prepare_tool(self):return self.sdk_upgrade.prepare_tool()
+    def sdk_status(self,job_id=None):return self.sdk_upgrade.status(job_id)
+    def sdk_cancel(self):return self.sdk_upgrade.cancel()
+
+    @property
     def environment_tools(self):
         if self._environment_tools is None:
             from .environment_tools import EnvironmentTools
@@ -830,9 +878,11 @@ class OneDragonService:
             if self._rotation_guard is not None:self._rotation_guard.close();self._rotation_guard=None
 
     def _close_resources(self) -> None:
+        if getattr(self,'_global_capture',None) is not None:self._global_capture.close()
         if getattr(self,'_mcp_service',None) is not None:self._mcp_service.close()
         if getattr(self,'_environment_tools',None) is not None:self._environment_tools.close()
         if getattr(self,'_source_workspace',None) is not None:self._source_workspace.close()
+        if getattr(self,'_sdk_upgrade',None) is not None:self._sdk_upgrade.close()
         if getattr(self,'_gamepad_dependencies',None) is not None:self._gamepad_dependencies.close()
         if getattr(self,'_program_updates',None) is not None:self._program_updates.close()
         if self._plugins is not None:self._plugins.close()
@@ -883,11 +933,13 @@ METHODS.update({"rotation_snapshot", "rotation_bind", "rotation_select", "rotati
 METHODS.update({"rotation_control", "rotation_window"})
 METHODS.update({"prepare_login", "start_login"})
 METHODS.update({"prepare_client_close", "start_client_close"})
+METHODS.update({'mcp_action_prepare','mcp_action_enable','mcp_action_disable','mcp_events_ack'})
 METHODS.update({"route_locate", "route_capture_start", "route_capture_status", "route_capture_cancel", "route_capture_pause"})
 METHODS.update({"map_edit", "map_archives", "map_restore", "map_recover"})
 METHODS.update({"map_capture_start", "map_capture_status", "map_capture_pause", "map_capture_cancel"})
 METHODS.update({'pip_settings','pip_save','pip_start','pip_status','pip_dismiss','pip_activate','pip_stop'})
 METHODS.update({'trace_configure','trace_snapshot','trace_capture'})
+METHODS.update({'global_capture_status','global_capture_capture'})
 METHODS.update({'plugin_catalog','plugin_preview','plugin_status','plugin_install','plugin_enabled','plugin_remove','plugin_archives','plugin_restore','plugin_directory'})
 METHODS.update({'program_catalog','program_check','program_download','program_import','program_restore','program_status','program_cancel'})
 METHODS.add('schedule_review')
@@ -895,5 +947,7 @@ METHODS.update({'agent_template_catalog','agent_template_open','agent_template_i
                 'agent_template_restore','agent_template_recover','agent_template_preferences','agent_template_preferences_save','agent_template_capture','agent_template_view'})
 METHODS.update({'gamepad_catalog','gamepad_install_start','gamepad_install_status','gamepad_install_cancel'})
 METHODS.update({'source_catalog','source_start','source_status','source_cancel'})
+METHODS.update({'sdk_catalog','sdk_review','sdk_build','sdk_refresh','sdk_activate','sdk_rollback',
+                'sdk_activation_review','sdk_recover_activation','sdk_prepare_tool','sdk_status','sdk_cancel'})
 METHODS.update({'mcp_start','mcp_status','mcp_grant','mcp_revoke','mcp_stop','policy_remove','policy_restore'})
 METHODS.update({'mcp_edit_enable','mcp_edit_disable','mcp_edit_restore','environment_tools_catalog','environment_tools_start','environment_tools_status','environment_tools_cancel','environment_tools_apply'})

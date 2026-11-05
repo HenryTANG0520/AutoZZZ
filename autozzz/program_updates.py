@@ -44,7 +44,7 @@ def release_rows(items,channel='stable'):
 
 class ProgramUpdates:
     def __init__(self,service):
-        self.service=service;self.root=service.source.parent.parent;self.worker=None;self.job=None
+        self.service=service;self.root=Path(getattr(service,'product_root',None) or service.source.parent.parent);self.worker=None;self.job=None
         self.cancelled=threading.Event();self.signal={};self.lock=threading.RLock();self.releases=[];self.revision=''
         self.channel=None;self.page=1;self.has_more=False;self.unavailable_reason=''
 
@@ -52,7 +52,7 @@ class ProgramUpdates:
     def busy(self):return self.worker is not None and self.worker.is_alive()
 
     def _installed(self):
-        if self.service.source.parent.name!='onedragon' or not (self.root/'autozzz-package.json').is_file():return None
+        if (not getattr(self.service,'product_root',None) and self.service.source.parent.name!='onedragon') or not (self.root/'autozzz-package.json').is_file():return None
         return read_manifest(self.root)
 
     def catalog(self):

@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from typing import Any, Callable
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import OneDragonClient, RequestPending, RuntimePaths
@@ -38,7 +39,7 @@ class StrategyWindow:
         self.policy_kind='auto_battle'
         self.kind=tk.StringVar(self.window,'自动战斗')
         self.name = tk.StringVar(self.window)
-        self.status = tk.StringVar(self.window, "正在读取策略…")
+        self.status = PresentationVar(self.window, "正在读取策略…")
         server = "global" if ui.server.get() == "国际服" else "cn"
         self.paths = RuntimePaths.discover(ROOT, server)
         self.poll_token: str | None = None

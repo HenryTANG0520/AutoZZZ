@@ -109,7 +109,7 @@ class TraceRuntime:
                 source=self.bus.snapshot() if self.enabled and not self.closed else None
                 enabled=self.enabled and not self.closed
         from .onedragon_runtime import UPSTREAM_REVISION
-        result=dict(format=1,revision=UPSTREAM_REVISION,enabled=enabled,generation=generation,epoch=epoch,created=now,discarded=self.discarded,
+        result=dict(format=1,revision=getattr(self.ctx,'autozzz_runtime_revision',UPSTREAM_REVISION),enabled=enabled,generation=generation,epoch=epoch,created=now,discarded=self.discarded,
                     items={kind:[] for kind in KINDS},counts={},truncated={},window_identity=None,standard_size=[1920,1080])
         result['automatic_capture']=dict(saved=self.automatic_capture.saved,error=self.automatic_capture.error)
         if source is not None:

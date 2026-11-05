@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from .localization_tk import PresentationVar
 from .config import ROOT
 from .schedules import Schedule, ScheduleStore
 from .schedule_manager import ScheduleManager
@@ -101,7 +102,7 @@ class SchedulesWindow:
         self.records=self.table('运行记录',('name','started','state'),('计划','开始时间','结果'),(270,280,170))
         self.plans.bind('<Double-1>',lambda _:self.edit_selected())
         footer=ttk.Frame(self.window,padding=d(12)); footer.grid(row=2,column=0,sticky='ew'); footer.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window,''); ttk.Label(footer,textvariable=self.status,wraplength=d(580)).grid(row=0,column=0,sticky='ew')
+        self.status=PresentationVar(self.window,''); ttk.Label(footer,textvariable=self.status,wraplength=d(580)).grid(row=0,column=0,sticky='ew')
         self.open_button=ttk.Button(footer,text='打开运行目录',command=self.open_record); self.open_button.grid(row=0,column=1,padx=d(5))
         self.stop_button=ttk.Button(footer,text='停止本次运行',command=self.stop); self.stop_button.grid(row=0,column=2)
         self.controls += [self.open_button,self.stop_button]

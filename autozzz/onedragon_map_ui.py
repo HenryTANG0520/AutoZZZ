@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog,ttk
 import uuid
 
+from .localization_tk import PresentationVar
 from . import theme
 from .onedragon_forms import ScalarForm
 
@@ -28,7 +29,7 @@ class MapDialog:
         canvas.bind('<Configure>',lambda e:canvas.itemconfigure(anchor,width=e.width))
         from .onedragon_forms import enable_scroll
         enable_scroll(canvas,self.form.frame)
-        self.status=tk.StringVar(self.window)
+        self.status=PresentationVar(self.window)
         theme.wrapped_label(body,textvariable=self.status,style='Hint.TLabel').grid(row=1,column=0,columnspan=2,sticky='ew',pady=(d(10),0))
         actions=ttk.Frame(body);actions.grid(row=2,column=0,columnspan=2,sticky='e',pady=(d(12),0))
         ttk.Button(actions,text='确定',command=self.confirm).pack(side='left',padx=(0,d(8)))

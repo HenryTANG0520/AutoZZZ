@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
+from .localization import tr, application_name
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_forms import Records, ScalarForm, enable_scroll
@@ -54,9 +56,9 @@ class ApplicationsPanel:
         self.collections = {}
         self.profile = tk.StringVar(self.root,ui.server.get())
         self.loaded_profile = self.profile.get()
-        self.status = tk.StringVar(self.root,"尚未读取配置")
-        self.title = tk.StringVar(self.root,"应用配置")
-        self.note = tk.StringVar(self.root)
+        self.status = PresentationVar(self.root,"尚未读取配置")
+        self.title = tk.StringVar(self.root,tr("应用配置"))
+        self.note = PresentationVar(self.root)
         self.controls = []
         self.frozen = []
         self.page.columnconfigure(0,weight=1)
@@ -318,15 +320,15 @@ class ApplicationsPanel:
         added = set()
         for i,(label,ids) in enumerate(GROUPS+(("挑战方案",tuple(a["id"] for a in self.options["challenges"])),)):
             parent = "group:"+str(i)
-            self.tree.insert("","end",iid=parent,text=label,open=True)
+            self.tree.insert("","end",iid=parent,text=tr(label),open=True)
             for app_id in ids:
                 if app_id in self.apps:
-                    self.tree.insert(parent,"end",iid=app_id,text=self.apps[app_id]["name"])
+                    self.tree.insert(parent,"end",iid=app_id,text=application_name(app_id,self.apps[app_id]["name"],self.apps[app_id].get("third_party",False)))
                     added.add(app_id)
         remaining = set(self.apps)-added
         if remaining:
-            self.tree.insert("","end",iid="group:other",text="其他应用",open=True)
-            for key in sorted(remaining):self.tree.insert("group:other","end",iid=key,text=self.apps[key]["name"])
+            self.tree.insert("","end",iid="group:other",text=tr("其他应用"),open=True)
+            for key in sorted(remaining):self.tree.insert("group:other","end",iid=key,text=application_name(key,self.apps[key]["name"],self.apps[key].get("third_party",False)))
         self.current_id = ""
         self.dirty = False
         self.tree.selection_set("_group")
@@ -353,14 +355,14 @@ class ApplicationsPanel:
         for child in self.content.winfo_children():child.destroy()
         self.description,self.form,self.collections = None,None,{}
         self.dirty = False
-        self.title.set("应用配置")
+        self.title.set(tr("应用配置"))
         self.note.set("")
         self.note_label.grid_remove()
         self._buttons()
 
     def render(self,description):
         self._clear()
-        self.title.set(self.apps[self.current_id]["name"])
+        self.title.set(application_name(self.current_id,self.apps[self.current_id]["name"],self.apps[self.current_id].get("third_party",False)))
         self.note.set(self.apps[self.current_id].get('configuration_error') or NOTES.get(self.current_id,""))
         if self.note.get():self.note_label.grid()
         self.description = copy.deepcopy(description)

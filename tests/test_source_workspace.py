@@ -48,6 +48,13 @@ class SourceWorkspaceTests(unittest.TestCase):
         self.assertEqual(state['result']['branch'],'feature/demo')
         self.assertTrue(state['result']['pinned_runtime_unchanged'])
 
+    def test_binary_blob_read_preserves_exact_committed_bytes_and_trailing_newline(self):
+        (self.origin/'uv.lock').write_bytes(b'version = 1\nline = "kept"\n')
+        git(self.origin,'add','uv.lock');git(self.origin,'commit','-m','lock fixture')
+        self.run_job('create');self.run_job('select','main')
+        blob=self.manager._git('rev-parse','HEAD:uv.lock')
+        self.assertEqual(self.manager._git('cat-file','blob',blob,binary=True),b'version = 1\nline = "kept"\n')
+
     def test_dirty_and_untracked_changes_preserved(self):
         self.run_job('create');self.run_job('select','main')
         tracked=self.manager.root/'file.txt';tracked.write_text('my uncommitted change')

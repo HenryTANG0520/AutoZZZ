@@ -4,6 +4,7 @@ import queue
 import tkinter as tk
 from tkinter import messagebox
 
+from .localization_tk import PresentationVar
 from .config import ROOT
 from .program_update_check import MetadataCheck
 from .program_update_preferences import UpdatePreferences, UpdatePreferencesStore
@@ -17,7 +18,7 @@ class StartupUpdates:
         except (ValueError,OSError) as exc:self.preferences=UpdatePreferences();error=str(exc)
         self.enabled=tk.BooleanVar(ui.root,self.preferences.enabled)
         self.channel=tk.StringVar(ui.root,'测试版' if self.preferences.channel=='beta' else '稳定版')
-        self.status=tk.StringVar(ui.root,error or ('将在启动后检查版本信息。' if self.preferences.enabled else '启动时不自动检查。'))
+        self.status=PresentationVar(ui.root,error or ('将在启动后检查版本信息。' if self.preferences.enabled else '启动时不自动检查。'))
         if background and self.preferences.enabled and not error:self.timer=ui.root.after(1500,self.check)
 
     @property

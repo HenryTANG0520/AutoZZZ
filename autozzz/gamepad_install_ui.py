@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
@@ -23,7 +24,7 @@ class GamepadInstallWindow:
         body=ttk.Frame(self.window,padding=d(20));body.grid(sticky='nsew');body.columnconfigure(0,weight=1)
         ttk.Label(body,text='虚拟手柄',style='PageTitle.TLabel').grid(row=0,column=0,sticky='w')
         self.package=tk.StringVar(self.window,'正在检查依赖…');self.driver=tk.StringVar(self.window)
-        self.status=tk.StringVar(self.window)
+        self.status=PresentationVar(self.window)
         theme.wrapped_label(body,textvariable=self.package).grid(row=1,column=0,sticky='ew',pady=(d(20),d(8)))
         theme.wrapped_label(body,textvariable=self.driver).grid(row=2,column=0,sticky='ew',pady=d(8))
         theme.wrapped_label(body,text='安装或修复会更改系统驱动，可能需要 Windows 管理员确认及重启。',style='Hint.TLabel').grid(row=3,column=0,sticky='ew',pady=d(8))

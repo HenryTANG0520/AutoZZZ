@@ -10,6 +10,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_forms import Choice, ScalarForm, enable_scroll
@@ -89,7 +90,7 @@ class CoordinateDialog:
         self.form = ScalarForm(body, [dict(name=key, label=key.upper() + "（地图像素）", value=values[i], kind="int", options=[], minimum=0, maximum=maximum-1)
                                       for i, (key, maximum) in enumerate((("x", width), ("y", height)))], lambda: None, scale)
         self.form.frame.grid(row=0, column=0, sticky="ew")
-        self.status = tk.StringVar(self.window)
+        self.status = PresentationVar(self.window)
         theme.wrapped_label(body, textvariable=self.status, style="Hint.TLabel").grid(row=1, column=0, sticky="ew")
         actions = ttk.Frame(body); actions.grid(row=2, column=0, sticky="e", pady=(d(10), 0))
         ttk.Button(actions, text="确定", command=self.confirm).pack(side="left", padx=(0, d(8)))
@@ -378,7 +379,7 @@ class LibraryWindow:
         self.table.grid(row=2, column=0, sticky="ns"); self.table.bind("<<TreeviewSelect>>", self.select)
         scroll = ttk.Scrollbar(nav, command=self.table.yview); scroll.grid(row=2, column=1, sticky="ns"); self.table.configure(yscrollcommand=scroll.set)
         right = ttk.Frame(body); right.grid(row=0, column=1, sticky="nsew"); right.columnconfigure(0, weight=1); right.rowconfigure(2, weight=1)
-        self.title, self.info, self.status = tk.StringVar(self.window), tk.StringVar(self.window), tk.StringVar(self.window, "正在读取资料…")
+        self.title, self.info, self.status = PresentationVar(self.window), tk.StringVar(self.window), tk.StringVar(self.window, "正在读取资料…")
         theme.wrapped_label(right, textvariable=self.title, style="ConfigTitle.TLabel").grid(row=0, column=0, sticky="ew", pady=(0, d(10)))
         self.info_label = theme.wrapped_label(right, textvariable=self.info, style="Hint.TLabel"); self.info_label.grid(row=1, column=0, sticky="ew", pady=(0, d(12)))
         self.canvas = tk.Canvas(right, background=theme.PANEL, highlightthickness=0); self.canvas.grid(row=2, column=0, sticky="nsew")

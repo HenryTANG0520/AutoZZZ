@@ -23,6 +23,8 @@ class RuntimeSession:
         self.runner=None
         self.phase,self.job_id="",""
         self.mcp_active=False
+        self.mcp_event_sequence=0
+        self.mcp_report_paths=[]
         self.parameters={}
         from .config import ROOT
         self.report_root=Path(report_root) if report_root is not None else ROOT/"runs"/"onedragon"
@@ -80,6 +82,9 @@ class RuntimeSession:
         self.report_dir.mkdir(parents=True,exist_ok=False)
         self.report=dict(operation="onedragon",app_id=params["app_id"],status="running",started_at=datetime.now().astimezone().isoformat(),
                          connection=dict(self.parameters),request=dict(params),game_input_verified=False)
+        if params.get('source')=='mcp':
+            if not hasattr(self,'mcp_report_paths'):self.mcp_report_paths=[]
+            self.mcp_report_paths.append(self.report_dir/'report.json')
         self._save_report()
 
     def _save_report(self):
@@ -116,6 +121,7 @@ class RuntimeSession:
 
     def _handle(self,client,command,params):
         if command=="rpc":
+            if params['method']=='mcp_action_prepare'and self.phase:self._status(client)
             result=self._call(client,params["method"],**params.get("params",{}))
             if params['method']=='mcp_start':self.mcp_active=True
             elif params['method']=='mcp_stop':
@@ -161,6 +167,8 @@ class RuntimeSession:
 
     def _status(self,client):
         state=self._call(client,"execution_status")
+        if self.mcp_active and state.get('mcp_events'):
+            self._mcp_events(client,state['mcp_events'])
         adopted=False
         if self.mcp_active and self.job_id and state['job_id']!=self.job_id:
             remote=state.get('mcp_run',{})
@@ -184,6 +192,45 @@ class RuntimeSession:
             if self.phase=="running":self._finish_report(state)
             self.phase=""
         self.emit(dict(type="state",state=state))
+
+    def _mcp_events(self,client,events):
+        """Consume durable ordered task events before acknowledging their removal.
+
+        A client can issue many instant MCP actions between observer polls. Each
+        start/final pair owns a separate report, independent of latest status.
+        """
+        sequence=self.mcp_event_sequence
+        for event in events:
+            current=event.get('sequence')
+            if type(current)is not int or current<=sequence:continue
+            kind=event.get('kind');job=event.get('job_id');app=event.get('app_id')
+            if kind in ('prepare','start'):
+                if event.get('parent_job')!=self.job_id:
+                    raise RuntimeError('MCP事件未接续原任务编号，请保留现场。')
+                if self.phase and self.phase not in ('mcp_preparing','preparing'):
+                    raise RuntimeError('MCP事件不能覆盖仍未完成的原任务报告。')
+                self.job_id=job;self.parameters['app_id']=app
+                if kind=='prepare':self.phase='mcp_preparing'
+                else:
+                    self._begin_report(dict(app_id=app,budget=event.get('budget'),
+                        timeout_seconds=event.get('timeout_seconds',600),auto_launch=False,source='mcp',
+                        mcp_session_id=event.get('session_id'),mcp_action=event.get('descriptor')))
+                    self.phase='running'
+                    self.emit(dict(type='phase',phase='MCP操作已启动',minimize=True,bootstrapping=False))
+            elif kind=='finish':
+                if job!=self.job_id:raise RuntimeError('MCP终态事件任务编号不匹配。')
+                if 'state'in event:final=event['state']
+                else:
+                    import base64,zlib
+                    decoder=zlib.decompressobj();raw=decoder.decompress(base64.b64decode(event['state_zlib'],validate=True),16*1024*1024+1)
+                    if len(raw)>16*1024*1024 or not decoder.eof or decoder.unused_data:raise ValueError('MCP终态事件大小或编码无效。')
+                    final=json.loads(raw)
+                if not event.get('is_prepare'):self._finish_report(final)
+                self.phase='';self.emit(dict(type='state',state=final))
+            else:raise RuntimeError('MCP事件类型无效。')
+            sequence=current
+            self.mcp_event_sequence=sequence
+        if sequence:self._call(client,'mcp_events_ack',sequence=sequence)
 
     def _work(self):
         client=OneDragonClient(self.paths,log=self._log)
@@ -250,6 +297,11 @@ class RuntimeSession:
                         except Exception as exc:self.emit(dict(type='log',message='MCP关闭未完成：'+str(exc)))
                         try:self._status(client)
                         except Exception as exc:self.emit(dict(type='log',message='MCP最终状态未完成：'+str(exc)))
+                        while self.phase and client.alive:
+                            try:self._status(client)
+                            except Exception as exc:
+                                self.emit(dict(type='log',message='MCP收尾事件未完成：'+str(exc)));break
+                            if self.phase:self.closing.wait(.02)
                     try:self._call(client,"stop_execution")
                     except Exception as exc:self.emit(dict(type="log",message=str(exc)))
                 while True:
@@ -264,4 +316,9 @@ class RuntimeSession:
                 self.report["process_exited"]=exited
                 try:self._save_report()
                 except OSError as exc:self.emit(dict(type="error",message="报告写入失败："+str(exc),busy=False))
+            for path in self.mcp_report_paths:
+                try:
+                    value=json.loads(path.read_text(encoding='utf-8'));value['process_exited']=exited
+                    temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8');temporary.replace(path)
+                except (OSError,ValueError)as exc:self.emit(dict(type='log',message='MCP历史报告退出事实未更新：'+str(exc)))
             self.emit(dict(type="closed"))

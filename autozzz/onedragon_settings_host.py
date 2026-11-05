@@ -10,17 +10,19 @@ import threading
 
 def create_window(ctx,app_id,group_id):
     from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel
-    from qfluentwidgets import PushButton,setTheme,setThemeColor,Theme
+    from qfluentwidgets import PushButton
+    from .native_preferences import apply_native_preferences
+    from .localization import tr
+    appearance=apply_native_preferences()
     from one_dragon_qt.services.app_setting.app_setting_manager import AppSettingManager
     from one_dragon_qt.widgets.pivot_navi_interface import PivotNavigatorInterface
     from one_dragon_qt.widgets.base_interface import BaseInterface
 
-    setTheme(Theme.DARK);setThemeColor('#f4df00')
     class Home(BaseInterface):
         def __init__(self):
-            super().__init__('autozzz_plugin_settings_home','设置','')
+            super().__init__('autozzz_plugin_settings_home',tr('设置'),'')
             layout=QVBoxLayout(self)
-            self.open_button=PushButton('打开专用设置',self);layout.addWidget(self.open_button);layout.addStretch()
+            self.open_button=PushButton(tr('打开专用设置'),self);layout.addWidget(self.open_button);layout.addStretch()
     class Navigator(PivotNavigatorInterface):
         def create_sub_interface(self):
             self.home=Home();self.add_sub_interface(self.home,enable_page_stack=True)
@@ -39,16 +41,16 @@ def create_window(ctx,app_id,group_id):
     available=QApplication.primaryScreen().availableGeometry()
     width,height=min(1050,available.width()-40),min(740,available.height()-60)
     window.setWindowTitle('AutoZZZ · '+info.app_name);window.resize(width,height);window.setMinimumSize(min(720,width),min(500,height))
-    window.setStyleSheet('QWidget#autozzz_settings_window { background: #343434; } QLabel { color: #eeeeeb; }')
+    window.setStyleSheet('QWidget#autozzz_settings_window { background: '+appearance['window']+'; } QLabel { color: '+appearance['text']+'; }')
     window.setObjectName('autozzz_settings_window')
     layout=QVBoxLayout(window);layout.setContentsMargins(20,16,20,16);layout.setSpacing(16)
     header=QHBoxLayout();title=QLabel(info.app_name,window);title.setWordWrap(True);header.addWidget(title);header.addStretch()
     account=ctx.one_dragon_config.current_active_instance
     account_label=QLabel(f'{account.name} · {group_id}',window);account_label.setWordWrap(True);header.addWidget(account_label);layout.addLayout(header)
-    window.navigator=Navigator('autozzz_settings','设置','',window);layout.addWidget(window.navigator)
-    footer=QHBoxLayout();window.back=PushButton('返回',window);window.back.setEnabled(False)
+    window.navigator=Navigator('autozzz_settings',tr('设置'),'',window);layout.addWidget(window.navigator)
+    footer=QHBoxLayout();window.back=PushButton(tr('返回'),window);window.back.setEnabled(False)
     window.back.clicked.connect(window.navigator.pop_setting_interface);footer.addWidget(window.back);footer.addStretch()
-    window.close_button=PushButton('关闭',window);window.close_button.clicked.connect(window.close);footer.addWidget(window.close_button);layout.addLayout(footer)
+    window.close_button=PushButton(tr('关闭'),window);window.close_button.clicked.connect(window.close);footer.addWidget(window.close_button);layout.addLayout(footer)
     window.navigator.secondary_state_changed.connect(window.back.setEnabled)
     class Manager(AppSettingManager):
         active_flyout=None
@@ -76,33 +78,18 @@ def create_window(ctx,app_id,group_id):
     return window
 
 
-def run(source,data,target,emit,lease,after_show=None):
+def run(source,data,target,emit,lease,after_show=None,*,runtime_revision=None,stable_data=None,product_root=None,runtime_generation=None,management_only=False):
     from PySide6.QtCore import QObject,Signal,QTimer
-    from PySide6.QtGui import QFont,QFontDatabase,QPalette,QColor
     from PySide6.QtWidgets import QApplication
     from .run_lock import profile_lock
     from .onedragon_service import OneDragonService
     from .onedragon_settings import validate_target
     app=QApplication.instance() or QApplication(['AutoZZZ'])
     app.setQuitOnLastWindowClosed(True)
-    # Qt 独立进程也注册主界面已有的字体；可移动包中资源位于 _internal。
-    font_roots=(Path(__file__).resolve().parents[1]/'assets/ui',Path(__file__).resolve().parents[3]/'_internal/assets/ui')
-    families=['Microsoft YaHei UI']
-    for root in font_roots:
-        if not root.is_dir():continue
-        for name in ('inpin.ttf','mont-heavy.ttf'):
-            font_id=QFontDatabase.addApplicationFont(str(root/name))
-            if font_id>=0:families.extend(QFontDatabase.applicationFontFamilies(font_id))
-        break
-    font=QFont();font.setFamilies(families);font.setPixelSize(14);app.setFont(font)
-    palette=app.palette()
-    for role,color in ((QPalette.Window,'#343434'),(QPalette.WindowText,'#eeeeeb'),(QPalette.Base,'#161616'),
-                       (QPalette.Text,'#eeeeeb'),(QPalette.Button,'#343434'),(QPalette.ButtonText,'#eeeeeb')):
-        palette.setColor(role,QColor(color))
-    app.setPalette(palette)
-    from qfluentwidgets import setFontFamilies
-    setFontFamilies(families,save=False)
-    service=OneDragonService(Path(source),Path(data),run_lease=lease)
+    from .native_preferences import apply_native_preferences
+    apply_native_preferences()
+    service=OneDragonService(Path(source),Path(data),run_lease=lease,runtime_revision=runtime_revision,
+        stable_data=stable_data,product_root=product_root,runtime_generation=runtime_generation,management_only=management_only)
     with profile_lock(data):
         try:
             ctx=service._create_context()
@@ -120,7 +107,9 @@ def run(source,data,target,emit,lease,after_show=None):
             threading.Thread(target=commands,name='AutoZZZ-Settings-Close',daemon=True).start()
             monitor=QTimer(window)
             def check_parent():
-                try:lease.check()
+                try:
+                    lease.check()
+                    service.runtime_guard.check_current()
                 except Exception as exc:emit(dict(type='error',message=str(exc)));window.close()
             monitor.timeout.connect(check_parent);monitor.start(500)
             def show_setting():
@@ -138,6 +127,8 @@ def run(source,data,target,emit,lease,after_show=None):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--data',type=Path,required=True);parser.add_argument('--target',required=True)
+    from .onedragon_worker import add_runtime_identity_arguments,verify_worker_identity
+    add_runtime_identity_arguments(parser)
     args=parser.parse_args();output=sys.stdout;sys.stdout=sys.stderr
     def emit(event):output.write(json.dumps(event,ensure_ascii=False)+'\n');output.flush()
     lease=None
@@ -148,7 +139,9 @@ def main():
         if lease is None:raise RuntimeError('专用设置缺少任务锁。')
         # 先设置来源，Qt 模块和原生设置类才可导入。
         sys.path.insert(0,str(args.source.resolve()/'src'))
-        return run(args.source,args.data,json.loads(args.target),emit,lease)
+        revision=verify_worker_identity(args)
+        return run(args.source,args.data,json.loads(args.target),emit,lease,runtime_revision=revision,
+            stable_data=args.stable_data,product_root=args.product_root,runtime_generation=args.selection_generation,management_only=args.management_only)
     except Exception as exc:
         import traceback
         traceback.print_exc();emit(dict(type='error',message=str(exc)));return 1

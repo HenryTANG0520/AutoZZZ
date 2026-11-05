@@ -7,6 +7,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_forms import Choice, ScalarForm, enable_scroll
@@ -132,7 +133,7 @@ class ChannelsWindow:
         foot = ttk.Frame(self.window, padding=d(18))
         foot.grid(row=2, column=0, sticky="ew")
         foot.columnconfigure(0, weight=1)
-        self.status = tk.StringVar(self.window, "正在读取…")
+        self.status = PresentationVar(self.window, "正在读取…")
         theme.wrapped_label(foot, textvariable=self.status, style="Hint.TLabel").grid(row=0, column=0, sticky="ew", padx=(0, d(12)))
         self.save_button = ttk.Button(foot, text="保存渠道", command=self.save)
         self.save_button.grid(row=0, column=1)

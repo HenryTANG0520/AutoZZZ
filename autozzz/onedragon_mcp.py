@@ -1,6 +1,6 @@
 """Loopback MCP transport over the existing, budgeted AutoZZZ execution service.
 
-MCP 2025-03-26 Streamable HTTP JSON responses; no arbitrary upstream input tools.
+MCP 2025-03-26 Streamable HTTP JSON responses; locally authorized game inputs.
 https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
 """
 from __future__ import annotations
@@ -18,6 +18,8 @@ from .battle_budget import validate_runtime_budget
 from .onedragon_control import validate_runtime_timeout
 from .onedragon_mcp_compat import UpstreamCompatibility, READ_TOOLS, RUN_TOOLS, to_plain
 from .onedragon_mcp_edit import McpEditing, EDIT_TOOLS
+from .onedragon_mcp_wait import PendingTool, tool_rpc
+from .onedragon_mcp_actions import McpActions, ACTION_TOOLS
 
 
 TOOLS = (
@@ -26,6 +28,12 @@ TOOLS = (
     ('pause_run', '暂停本 MCP 会话启动的任务', {'paused': {'type': 'boolean'}}),
     ('stop_run', '停止本 MCP 会话启动的任务；等待其原工作线程退出', {}),
 )
+
+
+def public_status(value):
+    if isinstance(value,dict):return {key:public_status(item)for key,item in value.items()if key not in ('confirmation_id','bearer_token','mcp_events')}
+    if isinstance(value,list):return [public_status(item)for item in value]
+    return copy.deepcopy(value)
 
 
 class McpService:
@@ -43,6 +51,24 @@ class McpService:
         self.closed = False
         self._compat = None
         self.editing = McpEditing(self)
+        self.actions = McpActions(self)
+
+    def action_prepare(self,descriptor):
+        with self.lock:
+            if self.closed or self.thread is None or not self.thread.is_alive():raise ValueError('请先启动MCP服务。')
+            self.actions.prepare(descriptor)
+            return self.status()
+
+    def action_enable(self,scopes,budget=None,resource_confirmation=None,timeout_seconds=600):
+        with self.lock:
+            self.actions.enable(scopes,budget,resource_confirmation,timeout_seconds)
+            return self.status()
+
+    def action_disable(self):
+        with self.lock:self.actions.disable();return self.status()
+
+    def events_ack(self,sequence):
+        with self.lock:return self.actions.ack(sequence)
 
     def edit_enable(self,scopes):
         with self.lock:
@@ -72,8 +98,8 @@ class McpService:
             name=entry['name']
             state='read_only' if name in READ_TOOLS or name=='get_run_status' else (
                 'owned_run_only' if name=='stop_run' else (
-                'local_single_use_grant_nonblocking' if name in ('run_one_dragon','run_standalone_app') else (
-                'local_revision_bound_edit_session' if name in EDIT_TOOLS else 'unavailable_pending_local_authorization_adapter')))
+                'local_single_use_grant' if name in ('run_one_dragon','run_standalone_app') else (
+                'local_revision_bound_edit_session' if name in EDIT_TOOLS else 'local_action_session')))
             entry['_meta']={'autozzz/availability':state}
         original_names = {item['name'] for item in upstream}
         extra = [dict(name=name,description=description,inputSchema=dict(type='object',
@@ -93,7 +119,20 @@ class McpService:
                 protocol='2025-03-26', transport='streamable-http-json', owned_job=self.owned_job,
                 granted=None if grant is None else dict(app_id=grant['app_id'], budget=copy.deepcopy(grant['budget']),
                     expires_at=grant['expires_at'], consumed=grant['consumed']),
-                execution=execution, editing=self.editing.status(), logs=list(self.logs))
+                execution=execution, editing=self.editing.status(), actions=self.actions.status(), logs=list(self.logs))
+
+    def validate_existing_budget(self,budget):
+        validate_runtime_budget(budget)
+        from .battle_budget import budget_directory
+        path=budget_directory()/(budget['id']+'.json')
+        if not path.is_file():raise ValueError('MCP只能沿用已有预算，请先在正常运行流程建立预算。')
+        ledger=json.loads(path.read_text(encoding='utf-8'))
+        execution=self.service._execution
+        server='cn'if execution.ctx.game_account_config.game_region in ('cn','cn_b')else'global'
+        if any(ledger.get(key)!=value for key,value in dict(id=budget['id'],server=server,allowance=budget['allowance'],battle_limit=budget['battle_limit']).items()):
+            raise ValueError('现有预算与授权上限不一致。')
+        if not isinstance(ledger.get('entries'),list):raise ValueError('预算记录无效。')
+        if any(row.get('status')=='pending'for row in ledger.get('entries',[])):raise ValueError('预算存在待核对出战，请先核对原记录。')
 
     def start(self, port=23001):
         if type(port) is not int or not 1024 <= port <= 65535:
@@ -152,16 +191,19 @@ class McpService:
 
     def tool(self, name, arguments):
         with self.lock:
+            self.actions.finalize()
             if self.closed:raise RuntimeError('MCP服务已关闭。')
+            if name not in ('get_run_status','stop_run','pause_run'):
+                guard=getattr(getattr(self.service,'_ctx',None),'autozzz_runtime_guard',None)
+                if guard is not None:guard()
             if not isinstance(arguments,dict):raise ValueError('工具参数须为对象。')
             if name in READ_TOOLS:return self.compatibility.call_read(name,arguments)
             if name in EDIT_TOOLS:return self.editing.call(name,arguments)
-            upstream_names = {item['name'] for item in self.compatibility.tools()}
+            if name in ACTION_TOOLS:return self.actions.call(name,self.compatibility.validate(name,arguments))
+            upstream_names = set()if name in {item[0]for item in TOOLS}else{item['name'] for item in self.compatibility.tools()}
             if name in upstream_names and name not in ('get_run_status','stop_run'):
                 values=self.compatibility.validate(name,arguments)
                 if name in RUN_TOOLS:
-                    if values.get('block'):
-                        raise ValueError('受控MCP暂不支持阻塞等待，请设block=false并用get_run_status查询原任务。')
                     execution=self.service._execution
                     app=getattr(execution,'prepared_app','')
                     if name=='run_one_dragon':target='one_dragon'
@@ -171,16 +213,22 @@ class McpService:
                     if not target or target!=app:
                         raise ValueError('指定应用与本地已准备应用不一致；请在原运行窗口重新准备并单次授权。')
                     result=self.tool('run_prepared_application',{})
+                    if values.get('block'):return PendingTool(record=self.actions.current,kind=name)
                     return dict(started=True,source='mcp',app=app,job_id=result['job_id'],hint='用get_run_status查原任务进度与结果')
                 raise ValueError('该上游写入/输入工具尚未绑定本地单次授权，当前不执行；请使用AutoZZZ本地编辑器或受控operation调试入口。')
             if name not in {tool[0] for tool in TOOLS}:raise ValueError('未开放该工具。')
             expected={'paused'} if name=='pause_run' else set()
             if set(arguments)!=expected:raise ValueError('工具参数无效；应用和预算只能在本地界面授权。')
             if name=='get_run_status':
-                result=copy.deepcopy(self.service.execution_status())
+                result=public_status(self.service.execution_status())
                 # Preparation tokens are local consent, not remote execution capabilities.
                 result.get('resources',{}).pop('confirmation_id',None)
                 backend=getattr(self.service._execution,'backend',None)
+                record=self.actions.current
+                if record is not None and record['job_id']==result.get('job_id')and record['descriptor']['tool']in ('open_game','close_game','prepare_mcp_action'):
+                    return dict(state='running'if result.get('busy')else result['state'],source='mcp',app=record['descriptor']['tool'],
+                        started_at=time.strftime('%Y-%m-%dT%H:%M:%S',time.localtime(record['started'])),duration_seconds=time.time()-record['started'],
+                        current_node=result.get('preparation_step')or None,retry_count=None,last_status=result.get('error')or None,failed_node=None,autozzz=result)
                 if backend is not None:
                     return dict(to_plain(backend.query_status()),autozzz=result)
                 return dict(state='idle',source=None,app=None,started_at=None,duration_seconds=None,
@@ -201,6 +249,7 @@ class McpService:
                     from .battle_budget import budget_directory
                     if not (budget_directory()/(grant['budget']['id']+'.json')).is_file():
                         raise ValueError('原预算记录已不存在，请先人工核对。')
+                self.actions.capacity()
                 grant['consumed']=True  # A failed/ambiguous start cannot be replayed.
                 self.editing.session=None
                 result=self.service.start_application(grant['app_id'],budget=copy.deepcopy(grant['budget']),
@@ -209,6 +258,8 @@ class McpService:
                 self.owned_run=dict(job_id=self.owned_job,prepared_job=grant['prepared_job'],app_id=grant['app_id'],
                     budget=copy.deepcopy(grant['budget']),timeout_seconds=grant['timeout_seconds'],source='mcp')
                 self.log('MCP已提交一次执行，后续仅查询原任务。')
+                if hasattr(execution,'worker'):
+                    self.actions.note(result,grant['prepared_job'],'run_prepared_application',budget=grant['budget'],timeout_seconds=grant['timeout_seconds'])
                 result=copy.deepcopy(result)
                 result.get('resources',{}).pop('confirmation_id',None)
                 return result
@@ -219,10 +270,10 @@ class McpService:
                 if type(arguments['paused'])is not bool:raise ValueError('paused须为布尔值。')
                 result=self.service.pause_execution(arguments['paused'])
                 self.log('MCP已请求暂停原任务。' if arguments['paused'] else 'MCP已请求继续原任务。')
-                result=copy.deepcopy(result);result.get('resources',{}).pop('confirmation_id',None)
+                result=public_status(result)
                 return result
             result=self.service.stop_execution();self.log('MCP已请求停止原任务，运行锁保留到退出。')
-            result=copy.deepcopy(result);result.get('resources',{}).pop('confirmation_id',None)
+            result=public_status(result)
             return result
 
     def _handler(self):
@@ -289,6 +340,7 @@ class McpService:
         return copy.deepcopy(self.owned_run)
 
     def rpc(self,request,session):
+        if isinstance(request,dict)and request.get('method')=='tools/call':return tool_rpc(self,request,session)
         with self.lock:
             if self.closed:raise ValueError('MCP服务正在关闭。')
             if not isinstance(request,dict) or request.get('jsonrpc')!='2.0':raise ValueError('需要单个JSON-RPC对象')
@@ -303,7 +355,7 @@ class McpService:
                 headers['Mcp-Session-Id']=session
                 result=dict(protocolVersion='2025-03-26',capabilities=dict(tools=dict(listChanged=False),prompts=dict(listChanged=False)),
                     serverInfo=dict(name='AutoZZZ',version='1'),
-                    instructions='AutoZZZ兼容层：只读工具及指南保留。运行需本地单次授权，仅支持非阻塞且沿用原任务和预算。目录_meta说明可用性；写入/输入/登录等未适配入口会明确拒绝。以下为固定上游原说明，不能据此绕过上述授权边界。\n\n'+self.compatibility.catalog['instructions'])
+                    instructions='AutoZZZ兼容层：原28工具和3提示词保留。应用使用本地单次授权；输入/登录/关闭/已核对operation使用本地操作会话；编辑使用本地编辑会话。block=true等待同一原任务且不锁住暂停/停止。刷本预算不限制低层输入，未知operation消费依操作而定；已识别刷本/补电/合成仍核对原预算和资源授权。以下为固定上游原说明，不能据此绕过上述授权边界。\n\n'+self.compatibility.catalog['instructions'])
             else:
                 state=self.sessions.get(session)
                 if state is None:raise ValueError('MCP会话已失效，请重新初始化')
@@ -334,13 +386,18 @@ class McpService:
                 else:return dict(jsonrpc='2.0',id=key,error=dict(code=-32601,message='未开放的方法')),headers
             response=dict(jsonrpc='2.0',id=key,result=result)
             if method!='initialize':
-                if len(state['cache'])>=128:state['cache'].pop(next(iter(state['cache'])))
+                if len(state['cache'])>=128:
+                    from concurrent.futures import Future
+                    evict=next((name for name,(_,value)in state['cache'].items()if not isinstance(value,Future)or value.done()),None)
+                    if evict is None:raise ValueError('等待中的请求过多。')
+                    state['cache'].pop(evict)
                 state['cache'][cache_key]=(copy.deepcopy(request),copy.deepcopy(response))
             return response,headers
 
     def stop(self):
         with self.lock:
             self.grant=None
+            self.actions.disable()
             self.editing.session=None
             if self.owned_job and self.service.execution_status().get('job_id')==self.owned_job:
                 self.service.stop_execution()
@@ -354,3 +411,7 @@ class McpService:
     def close(self):
         with self.lock:self.closed=True
         self.stop()
+        record=self.actions.current
+        if record is not None:
+            record['worker'].join()
+            with self.lock:self.actions.finalize()

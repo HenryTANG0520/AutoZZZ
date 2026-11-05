@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import ttk,filedialog
 import uuid
 
+from .localization_tk import PresentationVar
+from .localization import application_name
 from . import theme
 from .config import GAME_PATHS,ROOT,Settings
 from .onedragon_runtime import RuntimePaths
@@ -18,6 +20,7 @@ LOGIN_MODES=(("进入当前登录","enter"),("登录页：重新登录","forced_
 
 class ExecutionWindow:
     def __init__(self,ui,app_id,app_name,profile,route_debug=None,login_mode=None):
+        app_name=application_name(app_id,app_name)
         self.ui,self.app_id,self.profile=ui,app_id,profile
         self.route_debug=route_debug
         self.closed=self.closing=self.busy=self.prepared=self.connected=False
@@ -47,7 +50,7 @@ class ExecutionWindow:
         self.window.transient(ui.root)
         self.window.columnconfigure(0,weight=1)
         self.window.rowconfigure(3,weight=1)
-        self.status=tk.StringVar(self.window,"正在连接运行环境…")
+        self.status=PresentationVar(self.window,"正在连接运行环境…")
         same_profile=ui.server.get()==("国服" if profile=="cn" else "国际服")
         self.game_path=tk.StringVar(self.window,ui.game_path.get() if same_profile else GAME_PATHS[profile])
         self.region=tk.StringVar(self.window,"cn" if profile=="cn" else "asia")
@@ -64,7 +67,7 @@ class ExecutionWindow:
         header=ttk.Frame(self.window,padding=d(18))
         header.grid(row=0,column=0,sticky="ew")
         header.columnconfigure(0,weight=1)
-        ttk.Label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="w")
+        theme.wrapped_label(header,text=app_name,style="PageTitle.TLabel").grid(row=0,column=0,sticky="ew")
         self.account_badge=ttk.Label(header,text=("国服" if profile=="cn" else "国际服")+" · 试验",style="Hint.TLabel")
         self.account_badge.grid(row=0,column=1,sticky="e")
         style=ttk.Style(self.window)
@@ -117,7 +120,7 @@ class ExecutionWindow:
             selector=ttk.Combobox(login_row,textvariable=self.login_mode,values=[label for label,_ in LOGIN_MODES],state="readonly",width=22)
             selector.pack(side="left")
             self.settings_controls.append(selector)
-            self.login_hint=tk.StringVar(self.window)
+            self.login_hint=PresentationVar(self.window)
             theme.wrapped_label(settings,textvariable=self.login_hint,style="Hint.TLabel").grid(row=3,column=0,columnspan=3,sticky="ew",pady=(d(8),0))
             self.login_mode_changed()
         if profile=="global" and app_id!='_rotation':
@@ -391,6 +394,9 @@ class ExecutionWindow:
                         self.update_buttons();continue
                     self.status.set("正在读取当前账号配置")
                     self.session.send("rpc",method="account_list",tag="run-account-list",params={})
+                elif kind in ('rpc_result','rpc_error','error') and str(event.get('tag','')).startswith('global-capture-'):
+                    capture=getattr(self.ui,'global_capture_controller',None)
+                    if capture is not None:capture.receive(event)
                 elif kind in ('rpc_result','rpc_error') and str(event.get('tag','')).startswith('mcp-'):
                     with self.mcp_requests_lock:
                         future=self.mcp_requests.get(event['tag'])
@@ -528,7 +534,7 @@ class ExecutionWindow:
                     if state["state"]=="success" and not fights and hunt.get("skipped"):
                         name="计划已跳过"
                         detail=hunt["skipped"][-1]["status"]
-                    self.status.set(name+(" · "+detail[:100] if detail else ""))
+                    self.status.set_status(name,detail[:100] if detail else "")
                     if not self.busy and state["state"] not in ("ready","prepared"):
                         self.prepared=False
                         if not self.ui.closing:self.ui.overlay.finish(name)

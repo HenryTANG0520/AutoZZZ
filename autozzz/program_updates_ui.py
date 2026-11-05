@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 import webbrowser
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
@@ -43,14 +44,14 @@ class ProgramUpdatesWindow:
         self.book.bind('<<NotebookTabChanged>>',lambda _:self.buttons())
         footer=ttk.Frame(self.window,padding=d(18));footer.grid(row=2,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
         self.progress=ttk.Progressbar(footer,maximum=100);self.progress.grid(row=0,column=0,sticky='ew',pady=(0,d(10)))
-        self.status=tk.StringVar(self.window,'尚未检查更新');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=1,column=0,sticky='ew')
+        self.status=PresentationVar(self.window,'尚未检查更新');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=1,column=0,sticky='ew')
         actions=ttk.Frame(footer);actions.grid(row=2,column=0,sticky='ew',pady=(d(14),0));actions.columnconfigure(0,weight=1)
         self.page_button=ttk.Button(actions,text='发布页面',command=lambda:webbrowser.open('https://github.com/HenryTANG0520/AutoZZZ/releases'));self.page_button.grid(row=0,column=0,sticky='w')
         self.operation_button=ttk.Button(actions,text='下载并验证',command=self.operation);self.operation_button.grid(row=0,column=1,padx=d(6))
         self.cancel_button=ttk.Button(actions,text='取消',command=self.cancel);self.cancel_button.grid(row=0,column=2,padx=d(6))
         self.apply_button=ttk.Button(actions,text='关闭并安装',command=self.apply,style='Accent.TButton');self.apply_button.grid(row=0,column=3,padx=d(6))
         ttk.Button(actions,text='关闭',command=self.close).grid(row=0,column=4,padx=(d(6),0))
-        self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put);self.worker=self.session.worker
+        self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile,use_selection=False),self.events.put);self.worker=self.session.worker
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.buttons();self.window.after(80,self.poll)
 
     def buttons(self):

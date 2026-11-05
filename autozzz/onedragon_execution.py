@@ -89,6 +89,8 @@ class OneDragonExecution:
         return RunLock() if self.run_lease is None else self.run_lease.scope()
 
     def _validate_task_input(self):
+        guard=getattr(self.ctx,'autozzz_runtime_guard',None)
+        if guard is not None:guard()
         if self.run_lease is not None:self.run_lease.check()
         if self.client_exit is not None:self.client_exit.input_guard()
 
@@ -123,6 +125,8 @@ class OneDragonExecution:
             raise
 
     def _submit(self, state: str, operation) -> dict:
+        guard=getattr(self.ctx,'autozzz_runtime_guard',None)
+        if guard is not None:guard()
         with self.lock:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
@@ -144,6 +148,7 @@ class OneDragonExecution:
                         from .model_install import ModelInstall
                         ModelInstall(self.data).assert_clear()
                         if self.rotation_guard is not None:self.rotation_guard.check()
+                        if guard is not None:guard()
                         operation()
                         if self.rotation_guard is not None:self.rotation_guard.check()
                         with self.lock:

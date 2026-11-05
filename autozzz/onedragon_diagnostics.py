@@ -12,7 +12,7 @@ def check_runtime(root: Path,report: Path):
     report=report.resolve();data=report.with_name(report.stem+'.data')
     if report.exists() or data.exists():raise ValueError('检查报告或资料目录已存在，请指定新路径。')
     report.parent.mkdir(parents=True,exist_ok=True)
-    paths=replace(RuntimePaths.discover(root),data=data)
+    paths=replace(RuntimePaths.discover(root,use_selection=False),data=data)
     client=OneDragonClient(paths)
     result=dict(state='failed',game_started=False,game_input_sent=False)
     try:

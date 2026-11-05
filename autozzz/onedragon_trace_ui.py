@@ -7,6 +7,7 @@ import time
 import tkinter as tk
 from tkinter import ttk,filedialog
 
+from .localization_tk import PresentationVar
 from . import theme
 from .overlay import NativePresentation
 from .windows import user32,W,C
@@ -209,7 +210,7 @@ class TraceWindow:
             self.tables[kind]=table;self.details[kind]=detail;self.records[kind]={}
             table.bind('<<TreeviewSelect>>',lambda _,kind=kind:self.detail(kind))
         footer=ttk.Frame(self.window,padding=d(14));footer.grid(row=3,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window,'正在启用追踪…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew')
+        self.status=PresentationVar(self.window,'正在启用追踪…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=2,sticky='ew')
         appearance=ttk.Frame(footer);appearance.grid(row=1,column=0,sticky='w',pady=(d(10),0))
         self.font_size=tk.StringVar(self.window,str(self.preferences['base_font_size']));self.opacity=tk.StringVar(self.window,str(self.preferences['base_opacity']))
         for label,var,low,high in (('覆盖字号',self.font_size,8,28),('不透明度 %',self.opacity,5,100)):

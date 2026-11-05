@@ -5,6 +5,7 @@ import queue
 import tkinter as tk
 from tkinter import filedialog,messagebox,simpledialog,ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_forms import ScalarForm,enable_scroll
@@ -78,7 +79,7 @@ class AccountsWindow:
         footer.grid(row=3,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
         theme.wrapped_label(footer,text="选择当前配置不会立即切换游戏中的登录账号。",style="Hint.TLabel").grid(row=0,column=0,columnspan=3,sticky="ew",pady=(0,d(8)))
-        self.status=tk.StringVar(self.window,"正在连接…")
+        self.status=PresentationVar(self.window,"正在连接…")
         theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=1,column=0,columnspan=3,sticky="ew",pady=(0,d(10)))
         self.save_button=ttk.Button(footer,text="保存登录设置",command=self.save,style="Accent.TButton")
         self.save_button.grid(row=2,column=0,sticky="w")

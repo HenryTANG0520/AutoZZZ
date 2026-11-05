@@ -5,6 +5,7 @@ from copy import deepcopy
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .trace_preferences import DEFAULTS, METRICS, ALL_PANELS, PANEL_LABELS, validate
 
@@ -94,7 +95,7 @@ class TraceSettingsWindow:
         self.field(logs,'log_max_lines','最多保留日志行数',value['log_max_lines'],2,1,500,1,d)
         self.field(logs,'log_fade_seconds','日志保留秒数（0为不淡出）',value['log_fade_seconds'],3,0,3600,1,d)
         footer=ttk.Frame(self.window,padding=(d(14),0,d(14),d(14)));footer.grid(row=1,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window)
+        self.status=PresentationVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=3,sticky='ew',pady=(0,d(10)))
         ttk.Button(footer,text='恢复默认',command=self.defaults).grid(row=1,column=0,sticky='w')
         ttk.Button(footer,text='取消',command=self.close).grid(row=1,column=1,padx=d(8))

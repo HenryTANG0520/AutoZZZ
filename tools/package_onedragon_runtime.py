@@ -34,7 +34,7 @@ def copy_files(source,target,names):
 
 def build(output: Path):
     root=Path(__file__).resolve().parents[1]
-    defaults=RuntimePaths.discover(root)
+    defaults=RuntimePaths.discover(root,use_selection=False)
     if defaults.bundle is not None:raise ValueError('请在源码工作目录构建，不重打包已有分发运行时。')
     defaults.verify()
     # 源码与内置资料必须保持完整固定版本，包括将随包提供的许可证与部署声明。

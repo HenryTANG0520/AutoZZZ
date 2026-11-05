@@ -2,6 +2,7 @@
 import json
 import queue
 import threading
+from .localization_tk import PresentationVar
 import tkinter as tk
 from tkinter import ttk
 
@@ -14,13 +15,15 @@ class McpWindow:
         frame=ttk.Frame(self.window,padding=round(16*scale));frame.pack(fill='both',expand=True)
         frame.columnconfigure(1,weight=1);frame.rowconfigure(10,weight=1)
         self.port=tk.StringVar(frame,'23001');self.url=tk.StringVar(frame);self.token=tk.StringVar(frame)
-        self.message=tk.StringVar(frame,'尚未启动');self.prepared=tk.StringVar(frame,'尚未准备应用')
+        self.message=PresentationVar(frame,'尚未启动');self.prepared=tk.StringVar(frame,'尚未准备应用')
         ttk.Label(frame,text='本机 MCP 服务').grid(row=0,column=0,columnspan=3,sticky='w')
         ttk.Label(frame,text='端口').grid(row=1,column=0,sticky='w',pady=8)
         ttk.Entry(frame,textvariable=self.port,width=10).grid(row=1,column=1,sticky='w')
         actions=ttk.Frame(frame);actions.grid(row=2,column=0,columnspan=3,sticky='w')
         for text,fn in [('启动',self.start),('停止',lambda:self.call('mcp_stop')),('刷新',lambda:self.call('mcp_status'))]:
             ttk.Button(actions,text=text,command=fn).pack(side='left',padx=(0,8))
+        ttk.Button(actions,text='操作会话…',command=lambda:self.show_actions(scale)).pack(side='left')
+        self.action_window=None
         ttk.Label(frame,text='连接地址').grid(row=3,column=0,sticky='w',pady=8)
         ttk.Entry(frame,textvariable=self.url,state='readonly').grid(row=3,column=1,columnspan=2,sticky='ew')
         ttk.Label(frame,text='Bearer令牌').grid(row=4,column=0,sticky='w')
@@ -72,6 +75,12 @@ class McpWindow:
         if not self.token.get():return
         self.window.clipboard_clear();self.window.clipboard_append(self.token.get())
         self.message.set('本次连接令牌已复制')
+
+    def show_actions(self,scale=1):
+        from .onedragon_mcp_actions_ui import ActionWindow
+        if self.action_window is not None and not self.action_window.closed:
+            self.action_window.window.lift();return
+        self.action_window=ActionWindow(self.window,self.rpc,lambda:{key:value.get()for key,value in self.fields.items()},scale)
 
     def enable_edit(self):
         scopes=[key for key,value in self.edit_scopes.items() if value.get()]
@@ -137,6 +146,7 @@ class McpWindow:
     def destroy(self):
         if self.closed:return
         self.closed=True
+        if self.action_window is not None:self.action_window.destroy()
         if self.poll_token is not None:
             self.window.after_cancel(self.poll_token);self.poll_token=None
         self.window.destroy()

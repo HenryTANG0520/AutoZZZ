@@ -20,6 +20,7 @@ sys.path[:0]=[str(root),str(root/'vendor/onedragon/src')]
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,required=True)
     parser.add_argument('--tool',choices=('run_prepared_application','run_standalone_app'),default='run_prepared_application')
+    parser.add_argument('--block',action='store_true')
     args=parser.parse_args()
     data=args.data.resolve()
     if data.exists():raise ValueError('请选择新的小型夹具目录')
@@ -99,13 +100,13 @@ def main():
             session.send('rpc',method='mcp_grant',tag='mcp-grant',params=dict(timeout_seconds=30))
             wait(lambda e:e['type']=='rpc_result' and e['tag']=='mcp-grant')
             token=started['bearer_token'];session_id=None
-            run_http(session,token,port,wait,service,manager,actions,data,args.tool)
+            run_http(session,token,port,wait,service,manager,actions,data,args.tool,args.block)
             session.close();session.worker.join(10);assert not session.worker.is_alive()
     finally:
         service.mcp_stop();manager.close();ctx.controller=None;service.close()
 
 
-def run_http(session,token,port,wait,service,manager,actions,data,tool):
+def run_http(session,token,port,wait,service,manager,actions,data,tool,block=False):
         session_id=None
         def request(body):
             nonlocal session_id
@@ -118,9 +119,10 @@ def run_http(session,token,port,wait,service,manager,actions,data,tool):
             conn.close();return json.loads(raw) if raw else None
         request(dict(jsonrpc='2.0',id=1,method='initialize',params=dict(protocolVersion='2025-03-26')))
         request(dict(jsonrpc='2.0',method='notifications/initialized'))
-        arguments=dict(app_id='email',block=False) if tool=='run_standalone_app' else {}
+        arguments=dict(app_id='email',block=block) if tool=='run_standalone_app' else {}
         response=request(dict(jsonrpc='2.0',id=2,method='tools/call',params=dict(name=tool,arguments=arguments)))
         assert not response['result']['isError'],response
+        if block:assert json.loads(response['result']['content'][0]['text'])=='独立应用运行成功'
         wait(lambda e:e['type']=='state' and e['state']['state']=='success')
         assert manager.state=='success',manager.status()
         assert session.job_id==manager.job_id and session.phase==''

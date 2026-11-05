@@ -6,6 +6,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
@@ -50,7 +51,7 @@ class DownloadsWindow:
         self.source = tk.StringVar(self.window)
         theme.wrapped_label(foot,textvariable=self.source,style='Hint.TLabel').grid(row=0,column=0,sticky='ew')
         self.progress = ttk.Progressbar(foot,maximum=100);self.progress.grid(row=1,column=0,sticky='ew',pady=d(10))
-        self.status = tk.StringVar(self.window,'正在读取模型目录…')
+        self.status = PresentationVar(self.window,'正在读取模型目录…')
         theme.wrapped_label(foot,textvariable=self.status,style='Hint.TLabel').grid(row=2,column=0,sticky='ew')
         actions = ttk.Frame(foot);actions.grid(row=3,column=0,sticky='ew',pady=(d(15),0));actions.columnconfigure(0,weight=1)
         self.recover_button = ttk.Button(actions,text='恢复未完成安装',command=self.recover);self.recover_button.grid(row=0,column=0,sticky='w')

@@ -43,9 +43,16 @@ class RuntimePaths:
     python: Path
     data: Path
     bundle: Path | None = None
+    revision: str = UPSTREAM_REVISION
+    bridge: Path | None = None
+    selection: Any = field(default=None,repr=False,compare=False)
+    product_root: Path | None = None
+    stable_data: Path | None = None
+    generation: str | None = None
+    management_only: bool = False
 
     @classmethod
-    def discover(cls, root: Path, profile: str = "cn") -> RuntimePaths:
+    def discover(cls, root: Path, profile: str = "cn", *, use_selection: bool = True) -> RuntimePaths:
         if profile not in ("cn", "global"):
             raise ValueError("区服必须为 cn 或 global。")
         root=Path(root).resolve()
@@ -53,17 +60,57 @@ class RuntimePaths:
         base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".local" / "share")))
         from .onedragon_bundle import BUNDLE_DIRECTORY
         bundle=root/BUNDLE_DIRECTORY
-        if bundle.exists():
-            return cls(bundle/'source',bundle/'python/python.exe',base/'AutoZZZ/OneDragon'/profile,bundle)
-        return cls(source, source / ".venv" / "Scripts" / "python.exe",
-                   base / "AutoZZZ" / "OneDragon" / profile)
+        data=base/'AutoZZZ/OneDragon'/profile
+        stable=cls(bundle/'source',bundle/'python/python.exe',data,bundle,product_root=root,stable_data=data) if bundle.exists() else cls(
+            source,source/'.venv/Scripts/python.exe',data,product_root=root,stable_data=data)
+        from .runtime_generation import selection_generation
+        generation=selection_generation(data)
+        stable=cls(stable.source,stable.python,stable.data,stable.bundle,product_root=root,stable_data=data,
+            generation=generation,management_only=not use_selection)
+        if use_selection and ((data/'autozzz/sdk-selection.json').exists() or (data/'autozzz/sdk-activation.json').exists()):
+            from .runtime_selection import resolve_selection
+            selected=resolve_selection(data.resolve(),stable_source=stable.source,stable_python=stable.python,
+                stable_bridge=stable.bridge_root,stable_bundle=stable.bundle,stable_revision=UPSTREAM_REVISION,protocol=PROTOCOL_VERSION,verify_files=False)
+            if selected is not None:
+                return cls(selected.source,selected.python,selected.data,stable.bundle if selected.kind=='stable' else None,
+                    selected.revision,selected.bridge,selected,root,data.resolve(),generation,False)
+        return stable
+
+    @property
+    def bridge_root(self):
+        return self.bridge if self.bridge is not None else self.bundle/'bridge' if self.bundle is not None else Path(__file__).resolve().parent.parent
+
+    def with_selection(self,selected):
+        return type(self)(selected.source,selected.python,selected.data,self.bundle if selected.kind=='stable' else None,
+            selected.revision,selected.bridge,selected,self.product_root,selected.stable_data,
+            self.generation,self.management_only)
+
+    def identity_arguments(self):
+        from .runtime_generation import selection_generation
+        arguments=['--runtime-revision',self.revision,'--stable-data',str((self.stable_data or self.data).resolve()),
+            '--product-root',str((self.product_root or (self.bundle.parent if self.bundle else self.source.parent.parent)).resolve()),
+            '--selection-generation',self.generation if self.generation is not None else selection_generation(self.stable_data or self.data)]
+        if self.management_only:arguments.append('--management-only')
+        if self.selection is not None and self.selection.identity_file is not None:
+            arguments+=['--runtime-identity',str(self.selection.identity_file),'--runtime-identity-digest',self.selection.identity_digest]
+        return arguments
 
     def verify(self) -> None:
+        from .runtime_generation import RuntimeGeneration
+        try:RuntimeGeneration(self.stable_data or self.data,self.generation,self.management_only).check_current()
+        except RuntimeError as exc:raise RuntimeUnavailable(str(exc)) from exc
+        if self.selection is not None:
+            if self.data.resolve()!=self.selection.data.resolve():
+                raise RuntimeUnavailable('候选 SDK 的资料目录与已验证快照不一致。')
+            try:self.selection.verify()
+            except (OSError,ValueError) as exc:raise RuntimeUnavailable(str(exc)) from exc
+            if self.selection.kind=='candidate':
+                self._verify_data_directory();return
         if self.bundle is not None:
             from .onedragon_bundle import verify_bundle,BundleError
             if self.source.resolve()!=self.bundle.resolve()/'source' or self.python.resolve()!=self.bundle.resolve()/'python/python.exe':
                 raise RuntimeUnavailable('分发运行时路径与清单目录不一致。')
-            try:verify_bundle(self.bundle,UPSTREAM_REVISION,PROTOCOL_VERSION)
+            try:verify_bundle(self.bundle,self.revision,PROTOCOL_VERSION)
             except BundleError as exc:raise RuntimeUnavailable(str(exc)) from exc
             self._verify_data_directory()
             return
@@ -77,7 +124,7 @@ class RuntimePaths:
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError) as exc:
             raise RuntimeUnavailable("无法核实一条龙源码版本。") from exc
-        if result.stdout.strip() != UPSTREAM_REVISION:
+        if result.stdout.strip() != self.revision:
             raise RuntimeUnavailable("一条龙源码版本与 AutoZZZ 固定版本不一致，请恢复子模块版本。")
         for extra in ([], ["--cached"]):
             clean = subprocess.run(["git", "-C", str(self.source), "diff", "--quiet", *extra,
@@ -95,11 +142,15 @@ class RuntimePaths:
     def prepare(self) -> None:
         """只复制版本控制中的资源；已有用户文件不覆盖。"""
         self.verify()
+        if self.selection is not None:
+            try:self.selection.prepare()
+            except (OSError,ValueError) as exc:raise RuntimeUnavailable(str(exc)) from exc
+            return
         self.data.mkdir(parents=True, exist_ok=True)
         marker = self.data / "autozzz-runtime.json"
         if marker.exists():
             saved = json.loads(marker.read_text(encoding="utf-8"))
-            if saved.get("revision") != UPSTREAM_REVISION:
+            if saved.get("revision") != self.revision:
                 raise RuntimeUnavailable("数据目录来自其他一条龙版本，需要先迁移配置与资源。")
             return
         if self.bundle is None:
@@ -109,7 +160,7 @@ class RuntimePaths:
             names=result.stdout.decode("utf-8").split("\0")
         else:
             from .onedragon_bundle import read_manifest
-            names=read_manifest(self.bundle,UPSTREAM_REVISION,PROTOCOL_VERSION)['resources']
+            names=read_manifest(self.bundle,self.revision,PROTOCOL_VERSION)['resources']
         for name in names:
             if not name:
                 continue
@@ -135,7 +186,7 @@ class RuntimePaths:
                 temporary.unlink(missing_ok=True)
         temporary = marker.with_name(marker.name + "." + uuid.uuid4().hex + ".tmp")
         try:
-            temporary.write_text(json.dumps({"revision": UPSTREAM_REVISION, "protocol": PROTOCOL_VERSION}),
+            temporary.write_text(json.dumps({"revision": self.revision, "protocol": PROTOCOL_VERSION}),
                                  encoding="utf-8")
             temporary.replace(marker)
         finally:
@@ -196,11 +247,11 @@ class OneDragonClient:
                 environment.pop(name,None)
             environment['PYTHONNOUSERSITE']='1'
             # 独立解释器只通过明确的模块路径加载桥接代码。
-            package_root = self.paths.bundle/'bridge' if self.paths.bundle is not None else Path(__file__).resolve().parent.parent
+            package_root = self.paths.bridge_root
             environment["PYTHONPATH"] = str(package_root)
             self.process = subprocess.Popen(
                 [str(self.paths.python), "-s", "-P", "-u", "-m", "autozzz.onedragon_worker",
-                 "--source", str(self.paths.source.resolve()), "--data", str(self.paths.data.resolve())],
+                 "--source", str(self.paths.source.resolve()), "--data", str(self.paths.data.resolve()),*self.paths.identity_arguments()],
                 cwd=package_root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -219,7 +270,7 @@ class OneDragonClient:
             return self._accept_hello(hello)
 
     def _accept_hello(self,hello):
-        if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != UPSTREAM_REVISION:
+        if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != self.paths.revision:
             self.close()
             raise RuntimeUnavailable("一条龙通信协议或源码版本不一致。")
         if self.run_lease is not None and hello.get("task_lease") is not True:

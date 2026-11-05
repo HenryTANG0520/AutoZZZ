@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import OneDragonClient,RuntimePaths,RequestPending
@@ -13,13 +14,13 @@ from .onedragon_runtime import OneDragonClient,RuntimePaths,RequestPending
 class SourceBranchesWindow:
     def __init__(self,ui,profile):
         self.closed=self.closing=self.worker_done=False;self.events=queue.Queue();self.commands=queue.Queue();self.busy=False
-        self.ui=ui;self.profile=profile
+        self.ui=ui;self.profile=profile;self.sdk_window=None;self.lifecycle_lock=threading.Lock();self.worker_finalizing=False
         self.window=tk.Toplevel(ui.root);self.window.title('AutoZZZ · 上游源码工作副本');self.window.transient(ui.root)
         d=lambda n:round(n*ui.ui_scale)
         self.window.geometry(f'{d(860)}x{d(620)}');self.window.minsize(d(680),d(480))
         self.window.columnconfigure(0,weight=1);self.window.rowconfigure(2,weight=1)
         header=ttk.Frame(self.window,padding=d(16));header.grid(row=0,column=0,sticky='ew');header.columnconfigure(0,weight=1)
-        theme.wrapped_label(header,text='此副本用于查看和同步上游源码。切换分支不改变当前战斗引擎；升级执行 SDK 仍需兼容验证并重建完整包。',style='Hint.TLabel').grid(row=0,column=0,sticky='ew')
+        theme.wrapped_label(header,text='选择并同步上游分支后，可构建独立执行SDK候选。当前引擎在明确激活前保持不变。',style='Hint.TLabel').grid(row=0,column=0,sticky='ew')
         self.path=tk.StringVar(self.window,'正在读取工作副本…');theme.wrapped_label(header,textvariable=self.path).grid(row=1,column=0,sticky='ew',pady=(d(10),0))
         bar=ttk.Frame(self.window,padding=(d(16),0));bar.grid(row=1,column=0,sticky='ew');bar.columnconfigure(1,weight=1)
         ttk.Label(bar,text='分支').grid(row=0,column=0,padx=(0,d(8)))
@@ -29,7 +30,8 @@ class SourceBranchesWindow:
             button=ttk.Button(bar,text=label,command=lambda action=action:self.request(action));button.grid(row=0,column=col,padx=d(4));self.buttons.append(button)
         self.detail=tk.Text(self.window,wrap='word',state='disabled');self.detail.grid(row=2,column=0,sticky='nsew',padx=d(16),pady=d(14))
         footer=ttk.Frame(self.window,padding=(d(16),0,d(16),d(16)));footer.grid(row=3,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window,'正在连接…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=3,sticky='ew')
+        self.status=PresentationVar(self.window,'正在连接…');theme.wrapped_label(footer,textvariable=self.status,style='Hint.TLabel').grid(row=0,column=0,columnspan=3,sticky='ew')
+        ttk.Button(footer,text='执行SDK…',command=self.open_sdk).grid(row=1,column=0,padx=d(110),sticky='w',pady=(d(12),0))
         ttk.Button(footer,text='刷新状态',command=lambda:self.commands.put(('catalog',None))).grid(row=1,column=0,sticky='w',pady=(d(12),0))
         ttk.Button(footer,text='取消操作',command=lambda:self.commands.put(('cancel',None))).grid(row=1,column=1,padx=d(8))
         ttk.Button(footer,text='关闭',command=self.close).grid(row=1,column=2)
@@ -52,7 +54,7 @@ class SourceBranchesWindow:
             except RequestPending:continue
 
     def work(self):
-        client=OneDragonClient(RuntimePaths.discover(ROOT,self.profile))
+        client=OneDragonClient(RuntimePaths.discover(ROOT,self.profile,use_selection=False))
         try:
             try:client.start()
             except RequestPending:
@@ -82,7 +84,19 @@ class SourceBranchesWindow:
             while True:
                 try:client.close(timeout=1);break
                 except RequestPending:continue
+            with self.lifecycle_lock:self.worker_finalizing=True;child=self.sdk_window
+            if child is not None:
+                child.request_close()
+                child.worker.join()  # Parent helper remains alive until the child SDK job and process exit.
             self.events.put(('closed',None))
+
+    def open_sdk(self):
+        with self.lifecycle_lock:
+            if self.closing or self.worker_done or self.worker_finalizing:return
+            if self.sdk_window is not None and not self.sdk_window.closed:
+                self.sdk_window.window.deiconify();self.sdk_window.window.lift();return
+            from .sdk_upgrade_ui import SDKUpgradeWindow
+            self.sdk_window=SDKUpgradeWindow(self)
 
     def poll(self):
         while True:
@@ -107,3 +121,4 @@ class SourceBranchesWindow:
         if self.worker_done:
             self.closed=True;self.window.destroy();return
         self.closing=True;self.set_buttons();self.status.set('正在取消源码操作并等待原进程退出…')
+        if self.sdk_window is not None:self.sdk_window.close()

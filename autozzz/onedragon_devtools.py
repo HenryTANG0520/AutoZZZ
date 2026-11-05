@@ -32,13 +32,13 @@ class DevtoolsSession:
             self.paths.prepare()
             if self.closing.is_set():return
             lease.acquire()
-            bridge=self.paths.bundle/'bridge' if self.paths.bundle is not None else Path(__file__).resolve().parent.parent
+            bridge=self.paths.bridge_root
             environment=os.environ.copy()
             for name in ('PYTHONHOME','PYTHONUSERBASE','VIRTUAL_ENV','CONDA_PREFIX','PYTHONSTARTUP',LEASE_ENV):environment.pop(name,None)
             environment.update(PYTHONUTF8='1',PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1',PYTHONPATH=str(bridge))
             environment[LEASE_ENV]=lease.export()
             command=[str(self.paths.python),'-s','-P','-u','-m','autozzz.onedragon_devtools_host',
-                     '--source',str(self.paths.source.resolve()),'--data',str(self.paths.data.resolve()),'--profile',self.profile]
+                     '--source',str(self.paths.source.resolve()),'--data',str(self.paths.data.resolve()),'--profile',self.profile,*self.paths.identity_arguments()]
             with self.lock:
                 if self.closing.is_set():return
                 self.process=subprocess.Popen(command,cwd=bridge,env=environment,stdin=subprocess.PIPE,

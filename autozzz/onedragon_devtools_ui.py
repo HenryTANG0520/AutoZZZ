@@ -3,6 +3,7 @@ import queue
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
 from .onedragon_devtools import DevtoolsSession
@@ -15,7 +16,7 @@ class DevtoolsWindow:
         self.window=tk.Toplevel(ui.root);self.window.title('AutoZZZ · 开发工具');self.window.transient(ui.root)
         d=lambda n:round(n*ui.ui_scale);self.window.geometry(f'{d(520)}x{d(250)}');self.window.minsize(d(360),d(200))
         self.window.columnconfigure(0,weight=1);self.window.rowconfigure(1,weight=1)
-        self.status=tk.StringVar(self.window,'正在打开独立开发工具…')
+        self.status=PresentationVar(self.window,'正在打开独立开发工具…')
         theme.wrapped_label(self.window,textvariable=self.status).grid(row=0,column=0,sticky='ew',padx=d(20),pady=d(18))
         theme.wrapped_label(self.window,text='图像分析、模板管理、画面管理\n修改保存到当前区服资料；关闭工具后，重新准备任务生效。').grid(row=1,column=0,sticky='new',padx=d(20))
         self.close_button=ttk.Button(self.window,text='关闭开发工具',command=self.close);self.close_button.grid(row=2,column=0,sticky='e',padx=d(20),pady=d(16))

@@ -176,6 +176,8 @@ def _settings(ui, server_names):
     line = row(run, 2, "游戏日志")
     ui.overlay_control = line.mount(ttk.Checkbutton(line, text="显示覆盖日志", variable=ui.overlay_logs))
     ui.setting_controls.extend((ui.close_game_control, ui.overlay_control))
+    from .appearance_ui import open_appearance
+    ttk.Button(run,text='外观…',command=lambda:open_appearance(ui)).grid(row=3,column=0,sticky='w',pady=d(12))
 
     recognition = sections["recognition"]
     title(recognition, "识别与等待")

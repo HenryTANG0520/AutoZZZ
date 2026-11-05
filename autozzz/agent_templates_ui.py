@@ -9,6 +9,7 @@ import time
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox,simpledialog
 
+from .localization_tk import PresentationVar
 from . import theme
 from .config import ROOT
 from .onedragon_runtime import RuntimePaths
@@ -107,7 +108,7 @@ class AgentTemplatesWindow:
         ttk.Button(archive,text='恢复选中归档前的版本',command=self.restore).grid(row=1,column=0,sticky='w',pady=d(10))
         ttk.Button(archive,text='恢复未完成保存',command=self.recover).grid(row=2,column=0,sticky='w')
         footer=ttk.Frame(self.window,padding=d(12));footer.grid(row=2,column=0,sticky='ew');footer.columnconfigure(0,weight=1)
-        self.progress=tk.StringVar(self.window,'尚未打开模板');self.status=tk.StringVar(self.window,'连接只读模板服务…')
+        self.progress=tk.StringVar(self.window,'尚未打开模板');self.status=PresentationVar(self.window,'连接只读模板服务…')
         theme.wrapped_label(footer,textvariable=self.status).grid(row=0,column=0,sticky='ew');ttk.Label(footer,textvariable=self.progress).grid(row=1,column=0,sticky='w',pady=d(6))
         self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put);self.worker=self.session.worker
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.buttons();self.window.after(80,self.poll)

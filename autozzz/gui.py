@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
+from .localization_tk import PresentationVar
 from .config import CONFIG_PATH, GAME_PATHS, ROOT, Settings
 from .ux import report_context, recovery_text, exit_text
 from . import theme
@@ -29,6 +30,8 @@ STATUS_NAMES = {
 class AutoZZZWindow:
     def __init__(self, root: tk.Tk, config_path: Path = CONFIG_PATH, *, server: str | None = None,
                  game_path: str | None = None, background_helpers: bool = True):
+        from .localization_tk import install_tk_localization
+        install_tk_localization()
         self.root, self.config_path = root, Path(config_path)
         load_error = None
         try:
@@ -61,24 +64,28 @@ class AutoZZZWindow:
         self.overlay_logs = tk.BooleanVar(root, self.settings.overlay_logs)
         self.pip_enabled=tk.BooleanVar(root,False)
         self.pip_controller=None
+        self.global_capture_controller=None
         self.tasks = {name: tk.BooleanVar(root, getattr(self.settings, name)) for name in TASK_NAMES}
         self.action_delay = tk.StringVar(root, str(self.settings.action_delay))
         self.transition_timeout = tk.StringVar(root, str(self.settings.transition_timeout))
         self.ocr_confidence = tk.StringVar(root, str(self.settings.ocr_confidence))
         self.promoter = tk.StringVar(root, self.settings.promoter)
-        self.promoter_hint = tk.StringVar(root, "输入角色名；留空或未拥有时选第一位。")
-        self.status = tk.StringVar(root, "准备就绪")
-        self.summary = tk.StringVar(root, "准备就绪")
+        self.promoter_hint = PresentationVar(root, "输入角色名；留空或未拥有时选第一位。")
+        self.status = PresentationVar(root, "准备就绪")
+        self.summary = PresentationVar(root, "准备就绪")
         self.elapsed = tk.StringVar(root, "00:00")
-        self.engagement = tk.StringVar(root, "未验证")
-        self.saved = tk.StringVar(root, "设置已加载" if self.config_path.exists() else "默认设置")
-        self.plan = tk.StringVar(root)
-        self.readiness = tk.StringVar(root, "游戏窗口与输入条件：尚未检测")
-        self.history_context = tk.StringVar(root, "暂无历史运行记录")
+        self.engagement = PresentationVar(root, "未验证")
+        self.saved = PresentationVar(root, "设置已加载" if self.config_path.exists() else "默认设置")
+        self.plan = PresentationVar(root)
+        self.readiness = PresentationVar(root, "游戏窗口与输入条件：尚未检测")
+        self.history_context = PresentationVar(root, "暂无历史运行记录")
         self.setting_controls: list[ttk.Widget] = []
         from .program_update_check_ui import StartupUpdates
         self.startup_updates=StartupUpdates(self,background_helpers)
+        theme.configure_appearance()
         self._build()
+        from .appearance_ui import AppearanceController
+        self.appearance_controller=AppearanceController(self)
         from .battle_ui import BattlePanel
         self.combat_panel = BattlePanel(self)
         from .onedragon_apps_ui import ApplicationsPanel
@@ -87,6 +94,8 @@ class AutoZZZWindow:
         self.overlay = GameLogOverlay(root, lambda: self.overlay_game_handle, self._log)
         self.overlay.set_enabled(self.overlay_logs.get())
         if background_helpers:
+            from .global_capture_ui import GlobalCaptureController
+            self.global_capture_controller=GlobalCaptureController(self)
             try:
                 from .onedragon_pip_ui import PipController
                 self.pip_controller=PipController(self)
@@ -128,6 +137,8 @@ class AutoZZZWindow:
                 page.grid_remove()
             self.nav_buttons[key].configure(style="Selected.Nav.TButton" if key == name else "Nav.TButton")
         self._sync_footer()
+        appearance=getattr(self,'appearance_controller',None)
+        if appearance is not None:appearance.visibility()
 
     def _sync_footer(self) -> None:
         if not hasattr(self,"footer"):return
@@ -600,6 +611,8 @@ class AutoZZZWindow:
         self.started_at = None
 
     def _drain(self) -> None:
+        capture=getattr(self,'global_capture_controller',None)
+        if capture is not None:capture.poll()
         try:
             for _ in range(100):
                 event = self.events.get_nowait()
@@ -686,7 +699,7 @@ class AutoZZZWindow:
 
     def _maintenance_workers_alive(self):
         # A closed child window can still own an installer or SDK process.
-        for name in ('gamepad_install_window','source_workspace_window','devtools_window','environment_tools_window'):
+        for name in ('gamepad_install_window','source_workspace_window','devtools_window','environment_tools_window','global_capture_controller','appearance_controller','appearance_window'):
             window=getattr(self,name,None)
             worker=getattr(window,'worker',None)
             if worker is not None and worker.is_alive():return True
@@ -732,6 +745,11 @@ class AutoZZZWindow:
         if devtools is not None and not devtools.closed:devtools.close()
         environment_tools=getattr(self,'environment_tools_window',None)
         if environment_tools is not None and not environment_tools.closed:environment_tools.close()
+        capture=getattr(self,'global_capture_controller',None)
+        if capture is not None:capture.close()
+        for name in ('appearance_window','appearance_controller'):
+            appearance=getattr(self,name,None)
+            if appearance is not None:appearance.close()
         if applications is not None:
             applications.close(discard=True)
         execution=getattr(self,"execution_window",None)

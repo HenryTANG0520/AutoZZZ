@@ -279,6 +279,24 @@ class Runner:
         self.focus_epoch = 0
         self.inactive_duration = 0.0
         self._run_had_problem = False
+        self._capture_lock=threading.RLock();self._capture_mutex=None
+        from weakref import WeakSet
+        self._capture_leases=WeakSet()
+
+    def capture_lease(self):
+        """Export only a short read-only capability from this run's actual known mutex."""
+        from .capture_lease import CaptureLeaseOwner
+        with self._capture_lock:
+            if not self._capture_mutex or self._stop.is_set() or self._window is None:
+                raise RuntimeError('旧任务尚未绑定窗口或已经结束。')
+            lease=CaptureLeaseOwner(self._capture_mutex,self.input_epoch);self._capture_leases.add(lease)
+            return lease
+
+    def _invalidate_capture_leases(self):
+        if not hasattr(self,'_capture_lock'):return
+        with self._capture_lock:
+            for lease in list(self._capture_leases):lease.close()
+            self._capture_leases.clear()
 
     def _daily_completed(self) -> bool:
         # Only the workflow's verified reward claim may publish this terminal state.
@@ -397,9 +415,11 @@ class Runner:
     def stop(self):
         self._stop.set()
         self._pause.clear()
+        self._invalidate_capture_leases()
 
     def toggle_pause(self) -> bool:
         self.input_epoch += 1
+        self._invalidate_capture_leases()
         if self._pause.is_set():
             self._pause.clear()
             self.log("继续任务；正在重新检查游戏窗口。")
@@ -448,6 +468,7 @@ class Runner:
         inactive_before = self.inactive_duration
         self.input_epoch += 1
         self.focus_epoch += 1
+        self._invalidate_capture_leases()
         self._focus_waiting = True
         self.log("游戏窗口暂时失去焦点，已暂停输入；等待游戏回到前台后自动继续。", "warning")
         self.emit(dict(type="focus_wait", waiting=True))
@@ -470,6 +491,7 @@ class Runner:
                     continue
                 window.baseline = geometry
                 self.input_epoch += 1
+                self._invalidate_capture_leases()
                 self.log("游戏窗口已回到前台，重新识别当前界面并继续任务。")
                 return
         finally:
@@ -582,6 +604,7 @@ class Runner:
         try:
             if not mutex or already_running:
                 raise AutomationError("另一个 AutoZZZ 任务正在运行，请先停止后重试。")
+            with self._capture_lock:self._capture_mutex=mutex
             self.settings.validate("battle" if battle_plan is not None else "enter_game" if entry_only else "daily")
             if battle_plan is not None:
                 from .battle_strategy import resolve_strategy
@@ -712,6 +735,11 @@ class Runner:
                     self.report.results.append(TaskResult("run", "failed", detail))
                     self.log(detail, "error")
 
+            try:
+                with self._capture_lock:self._capture_mutex=None
+                self._invalidate_capture_leases()
+            except Exception as error:
+                record_finalization_error('截图能力撤销',error)
             try:
                 if mutex and not kernel32.CloseHandle(mutex):
                     raise AutomationError(f"Windows 运行锁释放失败（错误 {C.get_last_error()}）。")

@@ -79,19 +79,22 @@ class CompatibilityTests(unittest.TestCase):
         self.assertFalse(self.service.calls)
         self.assertFalse(self.manager.grant['consumed'])
 
-    def test_blocking_alias_rejected_before_grant_consumption(self):
+    def test_blocking_alias_submits_once_and_returns_shared_wait_ticket(self):
+        from autozzz.onedragon_mcp_wait import PendingTool
         self.grant()
-        with self.assertRaisesRegex(ValueError,'block=false'):
-            self.manager.tool('run_standalone_app',dict(block=True))
-        self.assertFalse(self.manager.grant['consumed'])
-        self.assertFalse(self.service.calls)
+        ticket=self.manager.tool('run_standalone_app',dict(block=True))
+        self.assertIsInstance(ticket,PendingTool)
+        self.assertTrue(self.manager.grant['consumed'])
+        self.assertEqual(len(self.service.calls),1)
 
     def test_changed_fixed_source_fails_closed(self):
         source=Path(__file__).resolve().parents[1]/'vendor/onedragon'
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);directory=root/'src/zzz_od/backend/mcp';directory.mkdir(parents=True)
             for name in source_hashes(source):
-                (directory/name).write_bytes((source/'src/zzz_od/backend/mcp'/name).read_bytes())
+                (directory/name).write_bytes((source/'src/zzz_od/backend/mcp'/name).read_bytes().replace(b'\r\n',b'\n'))
+            self.assertEqual(source_hashes(source),source_hashes(root))
+            UpstreamCompatibility(NS(source=root))
             (directory/'app.py').write_text('# changed',encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError,'源码已变化'):UpstreamCompatibility(NS(source=root))
 

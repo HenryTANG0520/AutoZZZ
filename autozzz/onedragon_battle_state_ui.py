@@ -4,6 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from .localization_tk import PresentationVar
 from . import theme
 
 
@@ -15,7 +16,7 @@ class BattleStateWindow:
         self.window.geometry(f'{width}x{height}');self.window.minsize(min(d(590),width),min(d(430),height))
         self.window.configure(background=theme.PANEL);self.window.columnconfigure(0,weight=1);self.window.rowconfigure(2,weight=1)
         header=ttk.Frame(self.window,padding=d(16));header.grid(row=0,column=0,sticky='ew');header.columnconfigure(0,weight=1)
-        self.status=tk.StringVar(self.window,'尚未加载战斗策略')
+        self.status=PresentationVar(self.window,'尚未加载战斗策略')
         theme.wrapped_label(header,textvariable=self.status,style='PageTitle.TLabel').grid(row=0,column=0,sticky='ew')
         self.trigger=tk.StringVar(self.window,'—');self.conditions=tk.StringVar(self.window,'—');self.elapsed=tk.StringVar(self.window,'—')
         for row,(name,var) in enumerate((('触发器',self.trigger),('条件集',self.conditions),('持续时间 / 优先级',self.elapsed)),1):
