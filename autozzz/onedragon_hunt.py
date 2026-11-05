@@ -10,6 +10,7 @@ from typing import Any
 from .onedragon_control import ExecutionStopped
 
 _current_hunt: ContextVar[Any] = ContextVar("autozzz_current_hunt", default=None)
+_REWARD_PENDING_WEEK = "autozzz_reward_pending_week"
 
 
 def current_hunt() -> Any:
@@ -61,14 +62,51 @@ class NotoriousHuntControl:
         return parse_free_times(text)
 
     def install(self) -> None:
+        from one_dragon.utils.os_utils import get_sunday_dt
         from zzz_od.operation.compendium.notorious_hunt import NotoriousHunt
         from zzz_od.application.notorious_hunt.notorious_hunt_app import NotoriousHuntApp
+        from zzz_od.application.notorious_hunt.notorious_hunt_run_record import NotoriousHuntRunRecord
         from zzz_od.application.charge_plan.charge_plan_app import ChargePlanApp
         from zzz_od.operation.challenge_mission.check_next_after_battle import ChooseNextOrFinishAfterBattle
         from zzz_od.operation.compendium.tp_by_compendium import TransportByCompendium
         from zzz_od.operation.restore_charge import RestoreCharge
         from zzz_od.operation.exchange_ether_battery import ExchangeEtherBattery
         owner = self
+
+        def exhausted(record):
+            remaining = record.left_times
+            return type(remaining) is int and remaining == 0
+
+        def pending_reward_week(record):
+            week = record.get(_REWARD_PENDING_WEEK)
+            if (isinstance(week, str) and exhausted(record) and not record._should_reset_by_dt()
+                    and week == get_sunday_dt(record.get_current_dt())):
+                return week
+            return None
+
+        def is_current_record(record):
+            return record is owner.ctx.run_context.get_run_record("notorious_hunt", owner.ctx.current_instance_idx)
+
+        done = NotoriousHuntRunRecord.is_done
+
+        @property
+        def is_done(record):
+            if pending_reward_week(record) is not None and is_current_record(record):
+                return not record.is_auto_run_allowed_today
+            return done.fget(record)
+
+        reset = NotoriousHuntRunRecord.reset_record
+
+        @wraps(reset)
+        def reset_record(record):
+            if record.get(_REWARD_PENDING_WEEK) is not None and is_current_record(record):
+                record.update(_REWARD_PENDING_WEEK, None, save=False)
+            return reset(record)
+
+        self.originals.extend([(NotoriousHuntRunRecord, "is_done", done, True),
+                               (NotoriousHuntRunRecord, "reset_record", reset, True)])
+        NotoriousHuntRunRecord.is_done = is_done
+        NotoriousHuntRunRecord.reset_record = reset_record
 
         def decide(operation, original):
             if operation.use_charge_power:
@@ -153,7 +191,21 @@ class NotoriousHuntControl:
                     operation.try_next = False
             return original(operation)
 
+        def find_next_plan(operation, original):
+            week = pending_reward_week(operation.run_record)
+            operation._autozzz_reward_retry_week = week
+            if week is not None:
+                # 复用原来的领奖边，绕过计划循环、传送出战和计次。
+                return operation.round_success(NotoriousHuntApp.STATUS_ROUND_FINISHED)
+            return original(operation)
+
+        def reward_retry_expired(operation):
+            week = getattr(operation, "_autozzz_reward_retry_week", None)
+            return week is not None and week != pending_reward_week(operation.run_record)
+
         def reward_entry(operation, original):
+            if reward_retry_expired(operation):
+                return operation.round_fail("恶名狩猎补领记录已失效。")
             on_board = any(operation.round_by_find_area(operation.last_screenshot, "恶名狩猎", area).is_success
                            for area in ("当期剩余奖励次数", "按钮-街区"))
             if not on_board:
@@ -165,17 +217,29 @@ class NotoriousHuntControl:
                 return operation.round_wait("等待恶名狩猎奖励入口", wait=1)
             return original(operation)
 
+        def claim_reward(operation, original):
+            if reward_retry_expired(operation):
+                return operation.round_fail("恶名狩猎补领记录已失效。")
+            return original(operation)
+
         def back_after_reward(operation, original):
+            record = operation.run_record
             previous = operation.previous_node
             claim_stage = previous.name == "全部领取"
-            owner.reward = dict(outcome="clicked" if previous.is_success else "unverified",
+            claimed = claim_stage and previous.is_success and previous.status == "全部领取"
+            retrying = (getattr(operation, "_autozzz_reward_retry_week", None) is not None
+                        or pending_reward_week(record) is not None)
+            no_new_reward = (claim_stage and previous.status == "未找到 全部领取" and not retrying
+                             and not any(item["mode"] == "weekly" for item in owner.results))
+            owner.reward = dict(outcome="clicked" if claimed else "unverified",
                                 stage="claim" if claim_stage else "entry", status=previous.status or "")
+            if claimed and record.get(_REWARD_PENDING_WEEK) is not None:
+                record.update(_REWARD_PENDING_WEEK, None)
+            elif (not claimed and not no_new_reward and exhausted(record)
+                  and not reward_retry_expired(operation) and not record._should_reset_by_dt()):
+                record.update(_REWARD_PENDING_WEEK, get_sunday_dt(record.get_current_dt()))
             result = original(operation)
-            if result.is_success and not previous.is_success:
-                # 本轮没有新胜利时，缺少领取按钮也可能只是没有待领奖励。
-                if (claim_stage and previous.status == "未找到 全部领取"
-                        and not any(item["mode"] == "weekly" for item in owner.results)):
-                    return result
+            if result.is_success and not claimed and not no_new_reward:
                 return operation.round_fail(f"恶名狩猎奖励领取未核实（{previous.status or previous.name}）。")
             return result
 
@@ -186,7 +250,9 @@ class NotoriousHuntControl:
         self.patch_node(NotoriousHunt, "check_next", choose_next)
         self.patch_node(NotoriousHunt, "wait_back_to_entry", wait_back_to_entry)
         self.patch_node(ChooseNextOrFinishAfterBattle, "check_next", free_repeat)
+        self.patch_node(NotoriousHuntApp, "find_next_plan", find_next_plan)
         self.patch_node(NotoriousHuntApp, "click_reward_entry", reward_entry)
+        self.patch_node(NotoriousHuntApp, "claim_all", claim_reward)
         self.patch_node(NotoriousHuntApp, "back_to_world", back_after_reward)
 
         finish = NotoriousHunt.after_operation_done
@@ -206,6 +272,11 @@ class NotoriousHuntControl:
             original = cls.after_operation_done
             @wraps(original)
             def finish_app(operation, result, original=original):
+                if isinstance(operation, NotoriousHuntApp):
+                    record = operation.run_record
+                    retry_week = getattr(operation, "_autozzz_reward_retry_week", None)
+                    if (retry_week is not None or record.get(_REWARD_PENDING_WEEK) is not None) and record._should_reset_by_dt():
+                        record.reset_record()
                 failed = [item for item in owner.failures if item["app_id"] == operation.app_id]
                 if result.success and failed:
                     result.success = False

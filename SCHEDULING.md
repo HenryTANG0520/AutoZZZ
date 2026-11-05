@@ -40,7 +40,7 @@ Windows 行为依据：[任务安全上下文](https://learn.microsoft.com/en-us
 
 ## 2026-11-06 国服源码自然触发
 
-Windows 在 05:07:01 按时启动 `b03f72b` 的 `pythonw -m autozzz`，原生流程打开国服并绑定游戏窗口。游戏可见且未最小化，其他进程持有前台，计划停在等待游戏恢复焦点。现场读取的 Windows 前台锁定间隔为 2,147,483,647 毫秒。无人值守登录尚未通过，Windows 对程序取得前台的限制见 [SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)。
+Windows 在 05:07:01 按时启动 `b03f72b` 的 `pythonw -m autozzz`，原生流程打开国服并绑定游戏窗口，随后等待游戏恢复焦点。计划停止后于 05:11:10 采样，游戏可见且未最小化，前台由其他进程持有，Windows 前台锁定间隔为 2,147,483,647 毫秒。启动瞬间的前台归属及置前调用结果仍待采集。无人值守登录尚未通过。 [Windows 前台窗口规则](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
 
 原定时实例收到合作停止，于 05:09:48 退出。临时计划移除，随后核实原游戏的 PID、创建时间与窗口并正常关闭，交还 AutoHSR。无电量消耗。证据见 `runs/source-scheduled-b03f72b-cn-20261106/` 的实例记录、`foreground-observation.json` 和 `client-cleanup.json`。
 
