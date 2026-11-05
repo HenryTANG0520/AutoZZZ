@@ -9,16 +9,9 @@ from .models import AutomationError
 
 
 def game_processes():
-    """使用上游已有 psutil 依赖识别尚未创建窗口的游戏进程。"""
-    import psutil
-    result=[]
-    for process in psutil.process_iter(['name']):
-        try:
-            if (process.info.get('name') or '').casefold()!='zenlesszonezero.exe':continue
-            result.append(dict(pid=process.pid,path=str(Path(process.exe()).resolve()),created=process.create_time()))
-        except psutil.NoSuchProcess:continue
-        except psutil.AccessDenied:raise AutomationError('无法核实游戏进程身份，请检查助手权限。') from None
-    return result
+    """Both the frozen launcher and the standalone SDK use the same inventory."""
+    from .process_inventory import process_inventory
+    return process_inventory('ZenlessZoneZero.exe')
 
 
 def launch_client(path):

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import sys
 
 from .onedragon_runtime import RuntimePaths,OneDragonClient,RequestPending
 
@@ -16,6 +18,10 @@ def check_runtime(root: Path,report: Path):
     client=OneDragonClient(paths)
     result=dict(state='failed',game_started=False,game_input_sent=False)
     try:
+        from .process_inventory import process_inventory
+        launcher=process_inventory(Path(sys.executable).name,only_pid=os.getpid())
+        if len(launcher)!=1:raise RuntimeError('未能核实程序自身的 Windows 进程身份。')
+        result['launcher_process_inventory']=True
         try:hello=client.start(timeout=60)
         except RequestPending:hello=client.finish_start(timeout=60)
         catalog=client.call('catalog',timeout=60)
