@@ -10,6 +10,7 @@ from typing import Any
 import uuid
 
 from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState, validate_finish_after_battle, validate_runtime_timeout
+from .onedragon_patrol import PATROL_INCOMPLETE_ERROR, patrol_incomplete
 from .run_lock import RunLock, profile_lock
 
 
@@ -634,6 +635,12 @@ class OneDragonExecution:
                 pending_error = self.charge_control.pending_result_error()
                 if pending_error:
                     self.error = pending_error
+                    result_state = 'failed'
+            # 巡逻路线失败后 SDK 仍会继续执行，在整组返回后检查路线结果。
+            if result_state == 'success' and app_id in ('world_patrol', 'one_dragon'):
+                patrol_control = getattr(self, 'patrol_control', None)
+                if patrol_control is not None and patrol_incomplete(patrol_control.status()):
+                    self.error = PATROL_INCOMPLETE_ERROR
                     result_state = 'failed'
             close_ready=keep_running_on_success and result_state=='success'
             if not close_ready:self.state=result_state

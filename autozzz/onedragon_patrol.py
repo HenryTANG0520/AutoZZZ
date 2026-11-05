@@ -9,10 +9,15 @@ from .onedragon_library_rules import route_selection
 
 
 MAX_ROUTE_RESULTS = 512
+PATROL_INCOMPLETE_ERROR = "巡逻未完成，有路线失败或被跳过。"
 RESTART_SKIP_STATUSES = (
     "界面消失已重开游戏并跳过路线 ",
     "界面消失重试耗尽，已重开游戏并跳过路线 ",
 )
+
+
+def patrol_incomplete(result: object) -> bool:
+    return isinstance(result, dict) and result.get("outcome") == "incomplete"
 
 
 def managed_patrol_service(ctx):

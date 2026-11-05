@@ -90,6 +90,19 @@ class FinishActionTests(unittest.TestCase):
         self.assertEqual(self.arm(self.action()).state, 'refused')
         self.assertEqual(self.dispatched, [])
 
+    def test_old_success_report_cannot_arm_power_action_for_incomplete_patrol(self):
+        execution = {'job_id': 'original', 'state': 'success', 'busy': False,
+                     'world_patrol': {'outcome': 'incomplete'}}
+        self.write_report(execution=execution)
+        self.assertEqual(self.arm(self.action()).state, 'refused')
+        self.write_report(operation='account_rotation', job_id='original', finish_action='shutdown', stages=[
+            {'method': 'start_application', 'execution': execution},
+            {'method': 'start_application', 'execution': {'state': 'success'}},
+        ])
+        self.assertEqual(self.arm(self.action(), app_id='_rotation').state, 'refused')
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.dispatched, [])
+
     def test_rotation_dispatch_claim_is_durable_and_holds_task_lock(self):
         self.write_report(operation='account_rotation', job_id='original', finish_action='hibernate')
         entered = threading.Event()

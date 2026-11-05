@@ -9,6 +9,7 @@ import queue
 import threading
 import uuid
 
+from .onedragon_patrol import PATROL_INCOMPLETE_ERROR, patrol_incomplete
 from .onedragon_runtime import OneDragonClient,RequestPending,RemoteError
 from .rotation_snapshot import snapshot
 from .task_lease import RunLeaseOwner
@@ -199,6 +200,10 @@ class RotationSession:
                 if not self.client.protocol_available or not self.client.alive:raise
                 self._log('继续查询原轮换阶段：'+str(exc));self.stop_requested.wait(.1);continue
             if state['job_id']!=self.job:raise RuntimeError('轮换阶段编号变化，停止后续账号。')
+            # 兼容只在巡逻结果字段标记未完成的工作进程。
+            if (method == 'start_application' and not state['busy'] and state['state'] == 'success'
+                    and patrol_incomplete(state.get('world_patrol'))):
+                state = dict(state, state='failed', error=PATROL_INCOMPLETE_ERROR)
             self.source_state=state
             if state.get('budget'):self.budget_state=state['budget']
             with self.lock:

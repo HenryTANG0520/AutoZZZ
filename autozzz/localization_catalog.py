@@ -69,6 +69,7 @@ _WORDS='''快捷手册|Handbook
 今日巡逻：{done:g} / {goal} 轮|Patrols today: {done:g} / {goal} rounds
 巡逻已完成|Patrol completed
 巡逻未完成|Patrol incomplete
+巡逻未完成，有路线失败或被跳过。|Patrol incomplete. Some routes failed or were skipped.
 巡逻无需执行|No patrol routes to run
 巡逻失败|Patrol failed
 巡逻已停止|Patrol stopped

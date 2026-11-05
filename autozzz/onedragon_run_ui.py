@@ -12,6 +12,7 @@ from .localization_tk import PresentationVar
 from .localization import application_name,tr
 from . import theme
 from .config import GAME_PATHS,ROOT,Settings
+from .onedragon_patrol import PATROL_INCOMPLETE_ERROR
 from .onedragon_patrol_results import ATTENTION, patrol_attention, patrol_counts, patrol_label, patrol_result
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
@@ -710,7 +711,12 @@ class ExecutionWindow:
                         detail=hunt["skipped"][-1]["status"]
                     terminal = not self.busy and state["state"] in ("success", "failed", "stopped", "interrupted")
                     attention = patrol_attention([patrol_outcome, *(item.get("patrol_outcome") for item in rotation_accounts)])
-                    if terminal and self.app_id == "world_patrol" and patrol and name == "运行完成":
+                    if terminal and patrol_outcome == 'incomplete' and detail == PATROL_INCOMPLETE_ERROR:
+                        name = patrol_label(patrol_outcome)
+                        if self.app_id == 'one_dragon':
+                            name = tr('流程结束') + ' · ' + name
+                        detail = patrol_counts(patrol)
+                    elif terminal and self.app_id == "world_patrol" and patrol and name == "运行完成":
                         name = patrol_label(patrol_outcome)
                     elif terminal and attention:
                         heading = {"运行完成": "流程结束", "轮换完成": "轮换结束"}.get(name, name)

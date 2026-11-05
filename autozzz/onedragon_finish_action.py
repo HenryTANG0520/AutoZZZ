@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 
+from .onedragon_patrol import PATROL_INCOMPLETE_ERROR, patrol_incomplete
 from .run_lock import RunLock
 
 POWER_ACTIONS = ('shutdown', 'hibernate', 'sleep')
@@ -74,6 +75,11 @@ class FinishAction:
         if app_id == '_rotation':
             matches = (data.get('operation') == 'account_rotation' and data.get('job_id') == job_id
                        and data.get('finish_action') == self._mode)
+            stages = data.get('stages')
+            if not isinstance(stages, list):
+                stages = []
+            executions = (stage.get('execution') for stage in stages
+                          if isinstance(stage, dict) and stage.get('method') == 'start_application')
         else:
             request, execution = data.get('request'), data.get('execution')
             matches = (data.get('operation') == 'onedragon' and data.get('app_id') == app_id
@@ -81,8 +87,12 @@ class FinishAction:
                        and request.get('finish_action') == self._mode
                        and isinstance(execution, dict) and execution.get('job_id') == job_id
                        and execution.get('state') == 'success' and execution.get('busy') is False)
+            executions = (execution,)
         if not matches:
             raise ValueError('收尾动作与原任务报告不符。')
+        if any(isinstance(execution, dict) and patrol_incomplete(execution.get('world_patrol'))
+               for execution in executions):
+            raise ValueError(PATROL_INCOMPLETE_ERROR)
         return hashlib.sha256(raw).hexdigest()
 
     def _write_record(self, state: str, detail: str = '') -> None:
