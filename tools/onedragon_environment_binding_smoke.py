@@ -1,4 +1,4 @@
-"""实际环境配置和 QQ 网关协议回放；阻止真实网络、游戏及注册表写入。"""
+"""在隔离目录中验证实际 SDK 环境配置和 QQ 网关协议。"""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ from contextlib import ExitStack
 import io
 import json
 import logging
+import os
 import platform
 from pathlib import Path
 import queue
@@ -27,32 +28,53 @@ def wait(predicate, timeout=8):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--bundle", type=Path, help="使用指定的固定 SDK 分发目录，例如 dist/AutoZZZ/onedragon。")
     args = parser.parse_args()
-    marker = args.data / ".autozzz-environment-binding-test"
-    if args.data.exists() and any(args.data.iterdir()) and not marker.is_file(): raise SystemExit("请使用空目录或本工具拥有的测试目录。")
-    args.data.mkdir(parents=True, exist_ok=True)
-    marker.write_text("isolated SDK protocol test", encoding="utf-8")
+    data = args.data.resolve()
+    marker = data / ".autozzz-environment-binding-test"
+    if data.exists() and any(data.iterdir()) and not marker.is_file(): raise SystemExit("请使用空目录或本工具拥有的测试目录。")
     from autozzz.onedragon_runtime import RuntimePaths
     root = Path(__file__).resolve().parents[1]
-    paths = RuntimePaths.discover(root)
+    if args.bundle is None:
+        paths = RuntimePaths(root / "vendor" / "onedragon", Path(sys.executable), data)
+    else:
+        bundle = args.bundle.resolve()
+        paths = RuntimePaths(bundle / "source", bundle / "python" / "python.exe", data, bundle)
+        if Path(sys.executable).resolve() != paths.python:
+            raise SystemExit("请用该 SDK 分发目录内的 python/python.exe 运行本工具。")
     platform.uname()  # Windows 首次版本查询可能调用 ver；在禁止创建进程前缓存只读结果。
-    RuntimePaths(paths.source, paths.python, args.data.resolve()).prepare()
+    paths.prepare()
+    marker.write_text("isolated SDK protocol test", encoding="utf-8")
     sys.path.insert(0, str(paths.source / "src"))
-    from autozzz.onedragon_service import OneDragonService
-    from autozzz.onedragon_environment import EnvironmentStore
-    from autozzz.onedragon_notify import NotificationStore
-    from one_dragon.base.push.channel import qq_bot as qq
-    from one_dragon.utils.log_utils import log
-    import requests
-    import websocket
     capture, checks, calls, sockets = io.StringIO(), [], [], []
     handler = logging.StreamHandler(capture)
     def forbidden(*_, **__): raise AssertionError("离线测试禁止外部操作")
     with ExitStack() as blocks:
-        for target in ("subprocess.Popen", "winreg.SetValueEx", "winreg.DeleteValue", "requests.sessions.Session.request",
+        blocks.enter_context(patch.dict(os.environ, {"LOCALAPPDATA": str(data / "local-app-data"),
+                                                     "APPDATA": str(data / "app-data")}))
+        for target in ("subprocess.Popen", "winreg.CreateKey", "winreg.CreateKeyEx", "winreg.DeleteKey", "winreg.DeleteKeyEx",
+                       "winreg.SetValue", "winreg.SetValueEx", "winreg.DeleteValue", "requests.sessions.Session.request",
                        "socket.socket.connect", "socket.socket.connect_ex", "socket.getaddrinfo"):
             blocks.enter_context(patch(target, side_effect=forbidden))
-        service = OneDragonService(paths.source, args.data.resolve())
+        from one_dragon.utils import os_utils
+        os_utils.set_work_dir(data)  # Upstream logging opens its file on import.
+        from autozzz.onedragon_service import OneDragonService
+        from autozzz.onedragon_environment import EnvironmentStore, load_run_hotkeys
+        from autozzz.onedragon_notify import NotificationStore
+        from autozzz.onedragon_host import ManagedController
+        from one_dragon.base.controller.pc_button.pc_button_listener import PcButtonListener
+        from one_dragon.base.push.channel import qq_bot as qq
+        from one_dragon.envs.env_config import EnvConfig
+        from one_dragon.utils.log_utils import log
+        from zzz_od.operation.enter_game.open_game import OpenGame
+        import requests
+        import websocket
+        import yaml
+
+        blocks.enter_context(patch.object(PcButtonListener, "start", side_effect=forbidden))
+        blocks.enter_context(patch.object(ManagedController, "bind", side_effect=forbidden))
+        blocks.enter_context(patch.object(OpenGame, "execute", side_effect=forbidden))
+        service = OneDragonService(paths.source, data)
         ctx, env = service.ctx, EnvironmentStore(service)
         notify, push = NotificationStore(service), ctx.push_service
         log.addHandler(handler)
@@ -80,6 +102,50 @@ def main():
             save_env(dict(proxy_type="None", clear_personal_proxy=True, screenshot_method="auto"))
             assert env.config("_environment").personal_proxy == ""
             checks.append("actual_environment_atomic_save_proxy_redaction_keep_clear_validation_conflict_and_source_order")
+
+            start_key, stop_key = "key_start_running", "key_stop_running"
+            default_keys = {start_key: "f9", stop_key: "f10"}
+            fixed = {"f9": (0x78,), "f10": (0x79,)}
+            default_shortcuts = (fixed, dict(start="F9", stop="F10", warning=""))
+            fields = {field["name"]: field for field in initial["fields"]}
+            actual = env.config("_environment")
+            target = Path(actual.file_path)
+            assert isinstance(actual, EnvConfig) and target == data / "config" / "env.yml"
+            for name, expected in default_keys.items():
+                assert fields[name]["kind"] == "str" and fields[name]["value"].casefold() == expected
+                assert getattr(actual, name).casefold() == expected
+            assert load_run_hotkeys(paths.data) == default_shortcuts
+            checks.append("actual_sdk_environment_exposes_fixed_run_hotkey_defaults")
+
+            aliases = {start_key: "Ctrl+F7", stop_key: "mouse_x1"}
+            configured = save_env(aliases)
+            actual = env.config("_environment")
+            hotkey_yaml = target.read_bytes()
+            raw_config = yaml.safe_load(hotkey_yaml)
+            for name, expected in aliases.items():
+                assert getattr(actual, name).casefold() == raw_config[name].casefold() == expected.casefold()
+            loaded_bindings, loaded_settings = load_run_hotkeys(paths.data)
+            assert loaded_bindings == {**fixed, "start": (0x11, 0x76), "stop": (0x05,)}
+            assert loaded_settings["start"] == "Ctrl+F7" and loaded_settings["stop"].casefold() == "mouse_x1"
+            assert loaded_settings["warning"] == "" and target.read_bytes() == hotkey_yaml
+            checks.append("actual_sdk_yaml_round_trip_for_keyboard_chord_and_mouse_shortcut")
+
+            conflicts = (({start_key: "mouse_x1"}, "不能相同"), ({stop_key: "F9"}, "F9"),
+                         ({start_key: "F11"}, "全局截图"), (dict(key_screenshot="Ctrl+F7"), "全局截图"),
+                         ({start_key: "Ctrl+Shift+F7"}, "追踪工具"), ({start_key: "Ctrl+1"}, "素材工具"))
+            for values, reason in conflicts:
+                try:
+                    save_env({**values, "is_debug": True})
+                except ValueError as exc:
+                    assert reason in str(exc), str(exc)
+                else:
+                    raise AssertionError("冲突的快捷键未拒绝")
+                assert target.read_bytes() == hotkey_yaml
+                assert env.describe("_environment")["revision"] == configured["revision"]
+            assert load_run_hotkeys(paths.data) == (loaded_bindings, loaded_settings)
+            save_env(default_keys)
+            assert load_run_hotkeys(paths.data) == default_shortcuts
+            checks.append("run_hotkey_conflicts_leave_sdk_yaml_and_revision_unchanged")
 
             models = env.describe("_models")
             model_values = {f["name"]: f["options"][-1]["value"] if f["kind"] == "enum" else False for f in models["fields"]}
@@ -330,7 +396,7 @@ def main():
             checks.append("close_waits_original_binding_worker_and_restores_upstream_dependency_references")
             # 供原生界面布局回放读取的描述均脱敏。
             descriptions = dict(environment=env.describe("_environment"), models=env.describe("_models"), qq=notify.describe_channel("QQ_BOT"))
-            (args.data / "ui-descriptions.json").write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
+            (data / "ui-descriptions.json").write_text(json.dumps(descriptions, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(dict(checks=checks, count=len(checks), external_messages_sent=0, game_input_sent=False), ensure_ascii=False))
         finally:
             service.close()

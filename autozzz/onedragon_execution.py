@@ -27,6 +27,11 @@ class OneDragonExecution:
         self.manual_pause=threading.Event()
         self._input_ready=False
         self._f9_down=False
+        self._run_key_events = None
+        self._run_key_listener_failed = False
+        from .onedragon_environment import load_run_hotkeys
+        bindings, self.run_hotkeys = load_run_hotkeys(self.data)
+        self._run_aliases = {key: bindings[key] for key in ('start', 'stop') if key in bindings}
         self.startup=None
         self.client_exit=None
         self.client_exit_result={}
@@ -135,13 +140,17 @@ class OneDragonExecution:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
             if state=="running":
-                paused,down=self.handoff or (False,False);self.handoff=None
+                from .windows import user32
+                f9_is_down = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
+                paused,down=self.handoff or (False,f9_is_down);self.handoff=None
                 if paused:self.manual_pause.set()
                 else:self.manual_pause.clear()
                 self._input_ready=False;self._f9_down=down;self.client_exit_result={}
+                self._run_key_listener_failed = False
             self.ctx.download_cancel.clear()
             self.state, self.error, self.job_id = state, "", uuid.uuid4().hex
             def work():
+                key_events = None
                 try:
                     with profile_lock(self.data):
                         from .onedragon_plugins import verify_context_plugins
@@ -152,6 +161,19 @@ class OneDragonExecution:
                         ModelInstall(self.data).assert_clear()
                         if self.rotation_guard is not None:self.rotation_guard.check()
                         if guard is not None:guard()
+                        if state == 'preparing' and hasattr(self, 'run_hotkeys'):
+                            from .onedragon_environment import load_run_hotkeys
+                            bindings, self.run_hotkeys = load_run_hotkeys(self.data)
+                            self._run_aliases = {key: bindings[key] for key in ('start', 'stop') if key in bindings}
+                            self._run_key_listener_failed = False
+                        if state == 'running' and self.rotation_guard is None and getattr(self, '_run_aliases', None):
+                            # During rotation, the parent owns the aliases for the whole plan.
+                            from .run_hotkeys import RunKeyEvents
+                            try:
+                                key_events = RunKeyEvents(self._run_aliases)
+                            except (OSError, RuntimeError):
+                                self._run_key_listener_failed = True
+                            self._run_key_events = key_events
                         operation()
                         if self.rotation_guard is not None:self.rotation_guard.check()
                         with self.lock:
@@ -164,6 +186,13 @@ class OneDragonExecution:
                     with self.lock:
                         self.error = f"{type(exc).__name__}: {exc}"
                         self.state = "stopped" if self.cancelled.is_set() else "failed"
+                finally:
+                    if key_events is not None:
+                        key_status = key_events.status()
+                        self._run_key_listener_failed = 'polling' in (key_status['mode'], key_status.get('mouse_mode'))
+                        key_events.close()
+                        key_events.join()
+                        self._run_key_events = None
             self.worker = threading.Thread(target=work, name="AutoZZZ-OneDragon-"+state, daemon=False)
             self.worker.start()
             return self.status()
@@ -570,6 +599,11 @@ class OneDragonExecution:
             if self.control.error:
                 self.error=self.control.error
                 result_state="failed"
+            elif result_state == 'success' and self.charge_control is not None:
+                pending_error = self.charge_control.pending_result_error()
+                if pending_error:
+                    self.error = pending_error
+                    result_state = 'failed'
             close_ready=keep_running_on_success and result_state=='success'
             if not close_ready:self.state=result_state
         finally:
@@ -593,12 +627,22 @@ class OneDragonExecution:
     def _poll_task_keys(self):
         from .windows import user32
         if self.run_lease is not None:self.run_lease.check()
-        if user32.GetAsyncKeyState(0x79) & 0x8000:
+        hard_stop = bool(user32.GetAsyncKeyState(0x79) & 0x8000)
+        source = getattr(self, '_run_key_events', None)
+        aliases = []
+        if not hard_stop and source is not None:
+            aliases = [edge.action for edge in source.drain()
+                       if edge.source == 'hook' and edge.down and not edge.injected]
+        if hard_stop or 'stop' in aliases:
             self.cancelled.set()
             if self._input_ready:self.control.stop()
-        pressed=bool(user32.GetAsyncKeyState(0x78)&0x8000)
-        if pressed and not self._f9_down:self._set_manual_pause(not self.manual_pause.is_set())
-        self._f9_down=pressed
+            return
+        pressed = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
+        with self.lock:
+            toggle = pressed and not self._f9_down
+            self._f9_down = pressed
+            if not self.cancelled.is_set() and (toggle + aliases.count('start')) % 2:
+                self._set_manual_pause(not self.manual_pause.is_set())
 
     def _set_manual_pause(self,paused):
         with self.lock:
@@ -633,6 +677,12 @@ class OneDragonExecution:
         with self.lock:
             result = dict(job_id=self.job_id, state=self.state, busy=self.busy,
                           ready=bool(self.ctx.ready_for_application), error=self.error)
+            result['run_hotkeys'] = dict(getattr(self, 'run_hotkeys', dict(start='F9', stop='F10', warning='')))
+            key_events = getattr(self, '_run_key_events', None)
+            key_status = key_events.status() if key_events is not None else {}
+            if (getattr(self, '_run_key_listener_failed', False)
+                or 'polling' in (key_status.get('mode'), key_status.get('mouse_mode'))):
+                result['run_hotkeys']['warning'] = '自定义运行键监听不可用，可使用 F9/F10。'
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())

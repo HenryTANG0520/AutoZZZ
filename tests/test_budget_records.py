@@ -49,6 +49,32 @@ class BudgetRecordTests(unittest.TestCase):
             self.records.account_reserved_upper_bound(item['id'],item['revision'])
         self.assertEqual(self.budget.path.read_bytes(),original)
 
+    def test_failed_settlement_keeps_original_pending_entry_on_disk_and_in_reports(self):
+        entry=self.budget.pending[0].copy()
+        original=self.budget.path.read_bytes()
+        with patch.object(Path,'replace',side_effect=OSError('fixture write failed')):
+            with self.assertRaisesRegex(OSError,'write failed'):
+                self.budget.settle(entry['id'],20)
+        self.assertEqual(self.budget.pending,[entry])
+        self.assertEqual(self.budget.path.read_bytes(),original)
+        self.assertFalse(list(self.folder.glob('*.tmp')))
+        reopened=BattleBudget(self.folder,'stopped-test','cn',40,2)
+        self.assertEqual(reopened.pending,[entry])
+
+    def test_failed_reservation_does_not_leave_a_phantom_entry(self):
+        budget=BattleBudget(self.folder,'reservation','global',40,2)
+        original=budget.path.read_bytes()
+        with patch('autozzz.battle_budget.os.fsync',side_effect=OSError('fixture flush failed')):
+            with self.assertRaisesRegex(OSError,'flush failed'):
+                budget.reserve(20,'fixture')
+        self.assertEqual((budget.pending,budget.remaining,budget.rounds_left),([],40,2))
+        self.assertEqual(budget.path.read_bytes(),original)
+
+    def test_other_pending_record_blocks_before_creating_an_empty_budget(self):
+        with self.assertRaisesRegex(RuntimeError,'未结算'):
+            BattleBudget(self.folder,'blocked','cn',40,2)
+        self.assertFalse((self.folder/'blocked.json').exists())
+
     def test_profile_filter_path_and_corrupted_records(self):
         self.assertEqual(self.records.pending('global'),[])
         with self.assertRaises(ValueError):self.records.account_reserved_upper_bound('../outside','revision')

@@ -8,6 +8,11 @@ _WORDS='''快捷手册|Handbook
 设置|Settings
 游戏|Game
 运行|Run
+运行快捷键|Run shortcuts
+开始和暂停快捷键|Start and pause shortcut
+停止快捷键|Stop shortcut
+例如 Ctrl+F7。F9 始终可用。|For example, Ctrl+F7. F9 remains available.
+例如 Ctrl+F8。F10 始终可用。|For example, Ctrl+F8. F10 remains available.
 识别|Recognition
 定时|Schedules
 工具|Tools
@@ -951,6 +956,9 @@ EN_UI=dict(line.split('|',1)for line in _WORDS.splitlines()if line)
 # Explicit templates are formatted only after translation; inserted user/game
 # names, paths and numeric values are left untouched.
 EN_UI.update({
+    '{key} 开始 / 暂停': '{key} Start / pause',
+    '{key} 停止': '{key} Stop',
+    '运行快捷键不可用：{reason}': 'Run shortcut unavailable. {reason}',
     '画中画':'Mini view',
     '角色名不在内置名单，请检查输入后再保存。':'Agent name not recognized. Check it before saving.',
     '宣传员名字不在内置名单中。是否想输入：{name}？':'Promoter name not recognized. Did you mean {name}?',

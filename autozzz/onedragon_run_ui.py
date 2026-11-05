@@ -35,6 +35,8 @@ class ExecutionWindow:
         self.last_report=None
         self.finish_selector=self.finish_action=self.finish_previous_report=None
         self.finish_display=None
+        self.run_shortcut=None
+        self.run_hotkey_settings={}
         self.battle_monitor=None
         self.trace_window=None
         self.mcp_window=None
@@ -209,6 +211,9 @@ class ExecutionWindow:
         footer.grid(row=4,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
         theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=0,column=0,sticky="ew",pady=(0,d(12)))
+        self.run_hotkey_hint=theme.wrapped_label(footer,text='',style='Hint.TLabel')
+        self.run_hotkey_hint.grid(row=2,column=0,sticky='ew',pady=(d(7),0))
+        self.run_hotkey_hint.grid_remove()
         actions=ttk.Frame(footer)
         actions.grid(row=1,column=0,sticky="w")
         self.prepare_button=ttk.Button(actions,text="准备运行",command=self.prepare)
@@ -299,6 +304,7 @@ class ExecutionWindow:
 
     def disposed(self,event):
         if event.widget is self.window:
+            if self.run_shortcut is not None:self.run_shortcut.close()
             if self.finish_action is not None:self.finish_action.cancel()
             self.cancel_mcp_requests()
             if self.mcp_window is not None:self.mcp_window.destroy()
@@ -320,7 +326,10 @@ class ExecutionWindow:
         finish_busy=self.finish_display is not None and self.finish_display.state in ('pending','dispatching')
         self.prepare_button.configure(text="重新准备" if self.last_state else "准备运行", style="TButton" if self.prepared else "Accent.TButton")
         self.start_button.configure(style="Accent.TButton" if self.prepared else "TButton")
-        self.start_button.configure(text="开始轮换" if self.app_id=='_rotation' else "开始登录" if self.login_mode is not None else "开始运行")
+        start_label = "开始轮换" if self.app_id=='_rotation' else "开始登录" if self.login_mode is not None else "开始运行"
+        if self.prepared and self.run_shortcut is not None:
+            start_label = tr(start_label) + ' F9'
+        self.start_button.configure(text=start_label)
         if self.app_id=='_rotation':self.prepare_button.configure(text='重新预检' if self.last_state else '轮换预检')
         self.prepare_button.state(["!disabled"] if self.connected and not self.loading_account and not self.busy and not self.closing and not finish_busy else ["disabled"])
         confirmed=not self.resource_required or (self.resource_accepted.get() and bool(self.resource_confirmation_id))
@@ -328,6 +337,17 @@ class ExecutionWindow:
         self.pause_button.state(["!disabled"] if self.busy and (self.app_id=='_rotation' or self.bootstrapping or self.last_state.get("state")=="running") and not self.closing else ["disabled"])
         self.pause_button.configure(text="继续 F9" if self.paused else "暂停 F9")
         self.stop_button.state(["!disabled"] if self.busy and not self.closing else ["disabled"])
+        shortcuts = self.run_hotkey_settings
+        aliases = []
+        if shortcuts.get('start', 'F9') != 'F9':
+            aliases.append(tr('{key} 开始 / 暂停', key=shortcuts['start']))
+        if shortcuts.get('stop', 'F10') != 'F10':
+            aliases.append(tr('{key} 停止', key=shortcuts['stop']))
+        if aliases and (self.prepared or self.busy or finish_busy):
+            self.run_hotkey_hint.configure(text=' · '.join(aliases))
+            self.run_hotkey_hint.grid()
+        else:
+            self.run_hotkey_hint.grid_remove()
         self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
         for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing or self.loading_account else ["!disabled"])
         if self.finish_selector is not None and finish_busy:self.finish_selector.state(['disabled'])
@@ -342,6 +362,24 @@ class ExecutionWindow:
         if self.resource_required:self.resource_check.grid()
         else:self.resource_check.grid_remove()
         self.resource_check.state(["!disabled"] if self.prepared and not self.busy and not self.closing else ["disabled"])
+
+    def configure_run_shortcuts(self, settings):
+        if settings == self.run_hotkey_settings or self.closing:
+            return
+        from .onedragon_run_shortcut_ui import PreparedRunShortcut
+
+        if self.run_shortcut is None:
+            self.run_shortcut = PreparedRunShortcut(self)
+        try:
+            self.run_shortcut.configure(settings)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            self.run_shortcut.close()
+            self.run_shortcut = None
+            self.write(tr('运行快捷键不可用：{reason}', reason=str(exc)))
+            return
+        self.run_hotkey_settings = dict(settings)
+        if settings.get('warning'):
+            self.write(tr('运行快捷键不可用：{reason}', reason=settings['warning']))
 
     def set_assistant_mode(self,_event=None):
         if self.mode_selector.instate(["disabled"]):return
@@ -519,6 +557,8 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    if 'run_hotkeys' in state:
+                        self.configure_run_shortcuts(state['run_hotkeys'])
                     if any(item.get('kind')=='restore_charge' for item in state.get('resources',{}).get('actions',[])):self.budget_note.grid_remove()
                     else:self.budget_note.grid()
                     if self.trace_window is not None and not self.trace_window.closed:self.trace_window.update_state(state)
@@ -640,12 +680,16 @@ class ExecutionWindow:
                         return
                 self.update_buttons()
         except queue.Empty:pass
+        if getattr(self, 'run_shortcut', None) is not None:
+            self.run_shortcut.poll()
         if getattr(self,'finish_action',None) is not None:self._update_finish_display()
         self.poll_token=self.window.after(80,self.poll)
 
     def close(self):
         if not self.closing:
             self.closing=True
+            if self.run_shortcut is not None:
+                self.run_shortcut.close()
             self.cancel_finish()
             self.cancel_mcp_requests()
             if self.mcp_window is not None:self.mcp_window.destroy()

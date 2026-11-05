@@ -272,10 +272,11 @@ class Context:
 
 
 class Runner:
-    def __init__(self, settings: Settings, emit=None, *, launch_options=None, runtime_guard=None):
+    def __init__(self, settings: Settings, emit=None, *, launch_options=None, runtime_guard=None, run_hotkeys=None):
         self.settings = settings
         self.launch_options = launch_options
         self.runtime_guard = runtime_guard
+        self.run_hotkeys = run_hotkeys
         self.report = RunReport()
         self._event_sink = emit or (lambda event: None)
         self._stop = threading.Event()
@@ -550,16 +551,39 @@ class Runner:
 
     def _hotkeys(self):
         from .windows import user32
+
+        listener = None
+        settings = getattr(self, 'run_hotkeys', None)
+        if settings:
+            from .run_hotkeys import RunKeyEvents, run_bindings
+
+            try:
+                bindings = run_bindings(settings['start'], settings['stop'])
+                aliases = {action: chord for action, chord in bindings.items() if action in ('start', 'stop')}
+                if aliases:
+                    listener = RunKeyEvents(aliases)
+            except (OSError, RuntimeError, ValueError, KeyError) as error:
+                self.log(f'运行快捷键不可用：{error}', 'warning')
         previous = False
-        while not self._monitor_end.wait(0.05):
-            emergency = (self._window.emergency_pressed() if self._window is not None
-                         else bool(user32.GetAsyncKeyState(0x79) & 0x8000))
-            if emergency:
-                self.stop()
-            current = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
-            if current and not previous and self._window is not None and user32.GetForegroundWindow() == self._window.hwnd:
-                self.toggle_pause()
-            previous = current
+        try:
+            while not self._monitor_end.wait(0.05):
+                actions = set() if listener is None else {
+                    edge.action for edge in listener.drain() if edge.down and edge.source == 'hook' and not edge.injected
+                }
+                emergency = (self._window.emergency_pressed() if self._window is not None
+                             else bool(user32.GetAsyncKeyState(0x79) & 0x8000))
+                if emergency or 'stop' in actions:
+                    self.stop()
+                    return
+                current = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
+                fixed_pause = current and not previous and self._window is not None and user32.GetForegroundWindow() == self._window.hwnd
+                if fixed_pause or 'start' in actions:
+                    self.toggle_pause()
+                previous = current
+        finally:
+            if listener is not None:
+                listener.close()
+                listener.join()
 
     def _initial_snapshot(self, context: Context) -> Scene:
         if not self.settings.auto_launch:
@@ -620,6 +644,7 @@ class Runner:
         already_running = C.get_last_error() == 183
         context = None
         launch_session = None
+        hotkey_thread = None
         legacy_sdk_degraded = False
         try:
             if not mutex or already_running:
@@ -637,7 +662,8 @@ class Runner:
             self.report.started_at = now.isoformat()
             self.report.reset_day = (now-timedelta(hours=4)).date().isoformat() if self.settings.server == "cn" else "unverified-global-reset"
             self.checkpoint()
-            threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True).start()
+            hotkey_thread = threading.Thread(target=self._hotkeys, name="AutoZZZ-hotkeys", daemon=True)
+            hotkey_thread.start()
             if self.settings.auto_launch:
                 from .game_launch import LaunchSession,legacy_launch_configuration
                 if self.runtime_guard is None:
@@ -744,6 +770,8 @@ class Runner:
                 self.report.results.append(TaskResult("run", "failed", str(error)))
         finally:
             self._monitor_end.set()
+            if hotkey_thread is not None and hotkey_thread.ident is not None:
+                hotkey_thread.join()
             if self.settings.close_game_on_success and not entry_only and battle_plan is None and not any(r.task == "close_game" for r in self.report.results):
                 self.report.results.append(TaskResult("close_game", "skipped", "本轮已停止或未完整核实；未发送退出请求。"))
             self.report.finished_at = datetime.now(timezone(timedelta(hours=8))).isoformat()

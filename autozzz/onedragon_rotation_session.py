@@ -30,6 +30,10 @@ class RotationSession:
             read_key=user32.GetAsyncKeyState
         self.read_key=read_key;self.commands=queue.Queue();self.lock=threading.RLock()
         self.closing=threading.Event();self.stop_requested=threading.Event();self.manual=False;self.version=0;self.f9_down=False
+        self.run_hotkeys = dict(start='F9', stop='F10', warning='')
+        self._run_aliases = {}
+        self._run_key_events = None
+        self._run_key_listener_failed = False
         self.client=None;self.owner=None;self.bound=False;self.job=None;self.game_active=False;self.stop_request=None
         self.busy=False;self.prepared=False;self.plan=None;self.manifest=None;self.confirmation='';self.source_state={}
         self.state='idle';self.error='';self.phase='';self.accounts=[];self.current=None;self.returning=False
@@ -59,11 +63,23 @@ class RotationSession:
         self.stop();self.closing.set();self.commands.put(('close',{}))
 
     def _keys(self):
-        if self.read_key(0x79)&0x8000:self.stop()
+        hard_stop = bool(self.read_key(0x79) & 0x8000)
+        source = self._run_key_events
+        aliases = []
+        if not hard_stop and source is not None:
+            aliases = [edge.action for edge in source.drain()
+                       if edge.source == 'hook' and edge.down and not edge.injected]
+        if hard_stop or 'stop' in aliases:
+            self.stop()
+            return
+        toggle = False
         if not self.game_active:
             pressed=bool(self.read_key(0x78)&0x8000)
-            if pressed and not self.f9_down:self.pause(not self.manual)
+            toggle = pressed and not self.f9_down
             self.f9_down=pressed
+        if (toggle + aliases.count('start')) % 2:
+            with self.lock:
+                if not self.stop_requested.is_set():self.pause(not self.manual)
 
     def _gate(self):
         while True:
@@ -80,8 +96,13 @@ class RotationSession:
         resources=[] if self.plan is None else [dict(item,text=row['name']+'：'+item['text']) for row in self.plan['instances'] for item in row['resources']]
         source=copy.deepcopy(self.source_state)
         if self.budget_state:source['budget']=copy.deepcopy(self.budget_state)
+        run_hotkeys = dict(self.run_hotkeys)
+        key_status = self._run_key_events.status() if self._run_key_events is not None else {}
+        if self._run_key_listener_failed or 'polling' in (key_status.get('mode'), key_status.get('mouse_mode')):
+            run_hotkeys['warning'] = '自定义运行键监听不可用，可使用 F9/F10。'
         source.update(state=self.state,busy=self.busy,ready=self.prepared,prepared_app='_rotation',
                       uses_charge=bool(self.plan and self.plan['uses_charge']),error=self.error,preparation_step=self.phase,
+                      run_hotkeys=run_hotkeys,
                       resources=dict(actions=resources,confirmation_id=self.confirmation,
                                      confirmation_required=any(item['requires_confirmation'] for item in resources),
                                      confirmed=[item['id'] for item in resources if item['requires_confirmation']] if self.accepted else []),
@@ -157,13 +178,22 @@ class RotationSession:
             try:start=self._rpc(method,action=True,handoff_version=applied if game else None,**params);break
             except RotationControlChanged:self.job=None;continue
         self.job=start['job_id']
+        pause_sent = applied
         while True:
             self._keys()
-            if game and self.version!=applied and not self.stop_requested.is_set():
-                version=self.version
-                try:self._rpc('pause_execution',paused=self.manual)
-                except RemoteError:pass  # 任务可能已在暂停请求前结束，仍查询原编号。
-                applied=version
+            with self.lock:
+                pause_pending = game and self.version != pause_sent and not self.stop_requested.is_set()
+                version, paused = self.version, self.manual
+            if pause_pending:
+                pause_sent = version
+                try:
+                    self._rpc('pause_execution', paused=paused)
+                except RemoteError:
+                    # A stage can finish before accepting the pause. Keep the
+                    # local intent for the handoff instead of adopting stale status.
+                    pass
+                else:
+                    applied = version
             try:state=self._rpc('execution_status')
             except RemoteError as exc:
                 if not self.client.protocol_available or not self.client.alive:raise
@@ -172,8 +202,10 @@ class RotationSession:
             self.source_state=state
             if state.get('budget'):self.budget_state=state['budget']
             with self.lock:
-                if game and self.version==applied and state.get('handoff_control'):
-                    self.manual=state['handoff_control']['paused'];self.f9_down=state['handoff_control']['f9_down']
+                if game and state.get('handoff_control'):
+                    self.f9_down = state['handoff_control']['f9_down']
+                    if self.version == applied:
+                        self.manual = state['handoff_control']['paused']
             self._state()
             self._trace_poll()
             if not state['busy']:break
@@ -195,6 +227,9 @@ class RotationSession:
         return state
 
     def _preview(self,params):
+        self.run_hotkeys = dict(start='F9', stop='F10', warning='')
+        self._run_aliases = {}
+        self._run_key_listener_failed = False
         self.state='preparing';self.error='';self.prepared=False;self.plan=None;self.manifest=None;self.accepted=False;self.budget_state={};self.phase='读取逐账号配置';self._state()
         self._connect(False)
         try:
@@ -206,6 +241,12 @@ class RotationSession:
             self.manifest=self._rpc('rotation_snapshot',plan_id=self.plan['plan_id'],**binding)
         finally:self._disconnect()
         if self.stop_requested.is_set() or self.closing.is_set():raise RotationStopped('轮换预检已停止。')
+        from .onedragon_environment import load_run_hotkeys
+        bindings, run_hotkeys = load_run_hotkeys(self.paths.data)
+        if snapshot(self.paths.data) != self.manifest:
+            raise ValueError('读取快捷键期间轮换资料已变化，请重新预检。')
+        self._run_aliases = {key: bindings[key] for key in ('start', 'stop') if key in bindings}
+        self.run_hotkeys = run_hotkeys
         self.confirmation=uuid.uuid4().hex;self.state='prepared';self.prepared=True;self.phase=''
         for row in self.plan['instances']:self._log(row['name']+'：'+' → '.join(item['name'] for item in row['applications']))
 
@@ -324,13 +365,27 @@ class RotationSession:
                 if command=='close':break
                 try:
                     if command=='prepare':self._preview(params)
-                    else:self._run(params)
+                    else:
+                        self._run_key_listener_failed = False
+                        if self.prepared and self._run_aliases:
+                            from .run_hotkeys import RunKeyEvents
+                            try:
+                                self._run_key_events = RunKeyEvents(self._run_aliases)
+                            except (OSError, RuntimeError):
+                                self._run_key_listener_failed = True
+                        self._run(params)
                 except RotationStopped as exc:self.state='stopped';self.error=str(exc)
                 except Exception as exc:self.state='failed';self.error=str(exc)
                 finally:
                     if self.client is not None:
                         try:self._disconnect(transfer=False)
                         except Exception as exc:self.error+='；退出：'+str(exc)
+                    if self._run_key_events is not None:
+                        key_status = self._run_key_events.status()
+                        self._run_key_listener_failed = 'polling' in (key_status['mode'], key_status.get('mouse_mode'))
+                        self._run_key_events.close()
+                        self._run_key_events.join()
+                        self._run_key_events = None
                     self.busy=False;self.prepared=self.state=='prepared';self.phase=''
                     for row in self.accounts:
                         if row['state']=='running':row['state']=self.state

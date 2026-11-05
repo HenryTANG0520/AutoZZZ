@@ -21,6 +21,7 @@ class RuntimeSession:
         self.closing=threading.Event()
         self.stop_requested=threading.Event()
         self.runner=None
+        self.run_hotkeys=None
         self.phase,self.job_id="",""
         self.mcp_active=False
         self.mcp_event_sequence=0
@@ -118,8 +119,9 @@ class RuntimeSession:
             if paths.generation is None:raise RuntimeError('原 SDK 连接未绑定选择代次，请重新准备。')
             guard=RuntimeGeneration(paths.stable_data or paths.data,paths.generation,paths.management_only).check_execution
             options=self._call(client,'game_launch_options')
+        shortcut_options = {'run_hotkeys': self.run_hotkeys} if getattr(self, 'run_hotkeys', None) else {}
         runner=Runner(Settings(server=params["server"],game_path=params["game_path"],auto_launch=True),self._legacy_event,
-                      launch_options=options,runtime_guard=guard)
+                      launch_options=options,runtime_guard=guard,**shortcut_options)
         self.runner=runner
         try:
             if self.closing.is_set() or self.stop_requested.is_set():runner.stop()
@@ -196,6 +198,8 @@ class RuntimeSession:
         if self.job_id and state["job_id"]!=self.job_id:raise RuntimeError("任务编号发生变化，请停止并检查原任务。")
         if self.mcp_active and not self.phase and not adopted:return
         if not state["busy"]:
+            if state['state']=='prepared':
+                self.run_hotkeys=state.get('run_hotkeys')
             if self.phase=="initializing" and state["state"]=="ready":
                 extra = {"route_debug": self.parameters["route_debug"]} if self.parameters.get("route_debug") is not None else {}
                 result=(self._call(client,"prepare_login",mode=self.parameters["login_mode"]) if self.parameters["app_id"]=="_login"

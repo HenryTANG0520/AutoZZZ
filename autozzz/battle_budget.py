@@ -1,5 +1,6 @@
 """Durable reservation of an explicitly authorized combat energy budget."""
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -33,11 +34,12 @@ class BattleBudget:
         _validate_totals(allowance,battle_limit)
         self.path=Path(directory)/(identifier+".json")
         expected=dict(version=1,id=identifier,server=server,allowance=allowance,battle_limit=battle_limit)
-        if self.path.exists():
+        new_budget=not self.path.exists()
+        if not new_budget:
             self.data=json.loads(self.path.read_text(encoding="utf-8"))
             if any(self.data.get(k)!=v for k,v in expected.items()):
                 raise AutomationError("现有战斗预算与此次授权不一致；未覆盖预算或出战。")
-        else:self.data=dict(**expected,entries=[]);self.save()
+        else:self.data=dict(**expected,entries=[])
         for other in self.path.parent.glob("*.json"):
             if other==self.path:continue
             try:record=json.loads(other.read_text(encoding="utf-8"))
@@ -50,6 +52,7 @@ class BattleBudget:
                 or sum(e["cost"] for e in entries)>allowance or len(entries)>battle_limit
                 or len({e["id"] for e in entries})!=len(entries)):
             raise AutomationError("战斗预算记录损坏，停止出战。")
+        if new_budget:self.save()
 
     @property
     def reserved(self):return sum(e["cost"] for e in self.data["entries"])
@@ -61,20 +64,39 @@ class BattleBudget:
     def pending(self):return [e for e in self.data["entries"] if e["status"]=="pending"]
 
     def save(self):
+        self._write(self.data)
+
+    def _write(self,data):
         self.path.parent.mkdir(parents=True,exist_ok=True)
-        temp=self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps(self.data,ensure_ascii=False,indent=2),encoding="utf-8")
-        temp.replace(self.path)
+        temp=self.path.with_name(f"{self.path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temp.open("x",encoding="utf-8") as file:
+                json.dump(data,file,ensure_ascii=False,indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            temp.replace(self.path)
+        except BaseException:
+            try:temp.unlink(missing_ok=True)
+            except OSError:pass
+            raise
+
+    def _commit_entries(self,entries):
+        # Reports must read the same pending entries that would survive a process restart.
+        updated=dict(self.data,entries=entries)
+        self._write(updated)
+        self.data=updated
 
     def reserve(self,cost,source):
         if self.pending:raise AutomationError("本预算有出战尚未结算；请续接当前战斗，不得重开。")
         if type(cost) is not int or cost<=0 or cost>self.remaining or self.rounds_left<=0:
             raise AutomationError("此次出战超出剩余电量或场次预算，已停止。")
         item=dict(id=uuid.uuid4().hex,cost=cost,source=source,status="pending")
-        self.data["entries"].append(item);self.save();return item["id"]
+        self._commit_entries([*self.data["entries"],item])
+        return item["id"]
 
     def settle(self,identifier,energy_after):
         entries=[e for e in self.data["entries"] if e["id"]==identifier]
         if len(entries)!=1 or entries[0]["status"]!="pending":
             raise AutomationError("战斗预算的结算记录无效。")
-        entries[0].update(status="settled",energy_after=energy_after);self.save()
+        settled=dict(entries[0],status="settled",energy_after=energy_after)
+        self._commit_entries([settled if entry["id"]==identifier else entry for entry in self.data["entries"]])

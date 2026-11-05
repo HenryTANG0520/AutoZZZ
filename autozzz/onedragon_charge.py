@@ -12,12 +12,17 @@ from .onedragon_control import ExecutionStopped
 
 class ChargeBudgetControl:
     CATEGORIES = {"实战模拟室":20,"区域巡防":60,"专业挑战室":40,"恶名狩猎":60,"合成电池":60}
+    REPEAT_BUTTON = "战斗结果-再来一次"
+    FINISH_BUTTON = "战斗结果-完成"
 
     def __init__(self,ctx:Any,control:Any,budget:BattleBudget,max_per_battle:int,restore_mode='不使用',restore_authorized=False,synthesis_authorized=False,evidence_dir=None):
         if budget.pending:raise ValueError("该预算有尚未核对的出战，不能重新开始。")
         if type(max_per_battle)is not int or not 20<=max_per_battle<=100:raise ValueError("单次电量上限须为 20—100。")
         self.ctx,self.control,self.budget,self.maximum = ctx,control,budget,max_per_battle
         self.owner,self.cost,self.reservation = None,0,None
+        self._repeat_operation = None
+        self._repeat_attempted = False
+        self._repeat_after_restore = False
         self.originals = []
         self.limited = False
         self.restore_mode,self.restore_authorized=restore_mode,restore_authorized
@@ -38,6 +43,11 @@ class ChargeBudgetControl:
     def _block(self,message:str):
         self.control.stop(message)
         raise ExecutionStopped(message)
+
+    def pending_result_error(self) -> str:
+        if self.budget.pending:
+            return "本轮仍有待核对的电量消耗。请在预算记录中核对。"
+        return ""
 
     def _patch_node(self,cls,name,handler):
         original = getattr(cls,name)
@@ -139,6 +149,9 @@ class ChargeBudgetControl:
             if result.is_success:
                 self.budget.settle(self.reservation,None)
                 self.reservation=None
+                self._repeat_operation=None
+                self._repeat_attempted=False
+                self._repeat_after_restore=False
             return result
 
         def repeat(operation,original):
@@ -146,15 +159,62 @@ class ChargeBudgetControl:
             hunt = current_hunt()
             if hunt is not None and not hunt.use_charge_power:
                 return original(operation)
-            if operation.try_next:
-                if operation.is_agent_plan and operation.round_by_find_area(operation.last_screenshot,"战斗画面","战斗结果-已达成").is_success:
-                    return original(operation)
+            if not operation.try_next:
+                return original(operation)
+            screen = operation.last_screenshot
+            if self.reservation is not None:
+                if self._repeat_operation is not operation:
+                    self._block("上一场出战未结算，不能开始新的出战。")
+                if self._repeat_attempted:
+                    # A focus change or an ambiguous click response can re-enter this node.
+                    # Continue from new evidence without clicking the paid button again.
+                    recovery = operation.round_by_find_area(screen, "恢复电量", "标题-恢复电量")
+                    battle = operation.round_by_find_area(screen, "战斗画面", "按键-普通攻击")
+                    if recovery.is_success or battle.is_success:
+                        return operation.round_success(self.REPEAT_BUTTON)
+                    return operation.round_retry("等待再来一次提交后的新画面", wait=.5)
+            else:
+                if operation.is_agent_plan and operation.round_by_find_area(screen,"战斗画面","战斗结果-已达成").is_success:
+                    result=operation.round_by_find_and_click_area(screen,"战斗画面",self.FINISH_BUTTON,
+                                                                  success_wait=5,retry_wait=1)
+                    if result.is_success:
+                        return operation.round_success(ChooseNextOrFinishAfterBattle.STATUS_AGENT_PLAN_FINISHED)
+                    return result
                 if self.owner is None:self._block("未找到上一场副本，不能重复出战。")
                 if self.budget.remaining<self.cost or self.budget.rounds_left<=0:
                     self.limited=True
                     operation.try_next=False
-                elif operation.round_by_find_area(operation.last_screenshot,"战斗画面","战斗结果-再来一次").is_success:
-                    self._reserve(self.owner,self.cost)
+                    return original(operation)
+            if not operation.round_by_find_area(screen, "战斗画面", self.REPEAT_BUTTON).is_success:
+                if self.reservation is not None:
+                    return operation.round_retry("等待恢复电量后重新核实再来一次按钮", wait=.5)
+                return operation.round_by_find_and_click_area(screen, "战斗画面", self.FINISH_BUTTON,
+                                                              success_wait=5, retry_wait=1)
+            self._repeat_operation=operation
+            self._reserve(self.owner,self.cost)
+            self._repeat_attempted=True
+            return operation.round_by_find_and_click_area(screen, "战斗画面", self.REPEAT_BUTTON,
+                                                          success_wait=1, retry_wait=1)
+
+        def after_repeat_submit(operation, original):
+            if self._repeat_operation is not operation:
+                return original(operation)
+            recovery = operation.round_by_find_area(operation.last_screenshot, "恢复电量", "标题-恢复电量")
+            if recovery.is_success and self._repeat_after_restore:
+                self._block("恢复后再次提示电量不足，预算保持待核对。")
+            result=original(operation)
+            if recovery.is_success and result.is_success and result.status==self.FINISH_BUTTON and operation.try_next:
+                # The game explicitly rejected the first start for insufficient energy.
+                # A successful authorized restore permits one retry of this same reservation.
+                self._repeat_after_restore=True
+                self._repeat_attempted=False
+            return result
+
+        def open_restore(operation, original):
+            if operation.is_after_battle_retry:
+                recovery = operation.round_by_find_area(operation.last_screenshot, "恢复电量", "标题-恢复电量")
+                if not recovery.is_success:
+                    return operation.round_retry("等待已提交的恢复电量提示", wait=.5)
             return original(operation)
 
         def next_plan(operation,original):
@@ -168,6 +228,9 @@ class ChargeBudgetControl:
             if not previous.is_success:
                 self.failures.append(dict(plan_id=operation.current_plan.uid,
                     detail=str(previous.status or "副本执行失败")))
+            pending_error=self.pending_result_error()
+            if pending_error:
+                self._block(pending_error)
             return original(operation)
 
         def back_to_world(operation,original):
@@ -180,12 +243,14 @@ class ChargeBudgetControl:
             self._patch_node(cls,"click_next",before_next)
             self._patch_node(cls,"after_battle",after_battle)
         self._patch_node(ChooseNextOrFinishAfterBattle,"check_next",repeat)
+        self._patch_node(ChooseNextOrFinishAfterBattle,"restore_charge",after_repeat_submit)
         self._patch_node(ChargePlanApp,"find_next_plan",next_plan)
         self._patch_node(ChargePlanApp,"challenge_complete",challenge_complete)
         self._patch_node(ChargePlanApp,"back_to_world",back_to_world)
         if self.restore_mode!='不使用':
             from .onedragon_restore import RestoreChargeControl
             self.restore_control=RestoreChargeControl(self.ctx,self.control,self.restore_mode,self);self.restore_control.install()
+            self._patch_node(RestoreCharge,"click_charge_text",open_restore)
         if self.synthesis_authorized:
             from .onedragon_synthesis import SynthesisControl
             self.synthesis_control=SynthesisControl(self.ctx,self.control,self);self.synthesis_control.install()

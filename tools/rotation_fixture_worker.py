@@ -16,7 +16,10 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--data',type=Path,required=True);args=parser.parse_args()
+    from autozzz.onedragon_worker import add_runtime_identity_arguments, main as worker_main
+    parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--data',type=Path,required=True)
+    add_runtime_identity_arguments(parser)
+    args=parser.parse_args()
     data=args.data.resolve()
     if not (data/'.autozzz-rotation-flow-test').is_file() or (data/'.autozzz-rotation-flow-test').read_text()!='offline sdk only':
         raise RuntimeError('Fixture worker requires its owned offline profile')
@@ -44,6 +47,19 @@ def main():
             temporary=state_file.with_suffix('.tmp');temporary.write_text(json.dumps(value),encoding='utf-8');temporary.replace(state_file)
     def launch(path):
         value=load();value.update(running=True,world=False,path=path,pid=value['pid']+1,hwnd=value['hwnd']+1);save(value)
+    from autozzz.game_launch import HdrStore, LaunchSession
+    original_launch_init = LaunchSession.__init__
+    def launch_init(session, path, *args, **kwargs):
+        def popen(argv, *, cwd, shell):
+            executable = Path(argv[0]).resolve()
+            if shell or executable.name.casefold() != 'zenlesszonezero.exe' or not executable.is_relative_to(data) or Path(cwd) != executable.parent:
+                raise AssertionError('offline fixture must launch only its own dummy client')
+            with executable.open('rb') as stream:
+                if stream.read(64) not in (b'fixture only', b'fixture; not executable'):
+                    raise AssertionError('offline fixture client is not a dummy executable')
+            launch(str(executable))
+        kwargs.update(popen=popen, hdr_store=HdrStore(path, root=data / 'fixture-launch-hdr', guard=kwargs.get('guard')))
+        original_launch_init(session, path, *args, **kwargs)
     def inventory():
         value=load();return [dict(pid=value['pid'],path=value['path'],created=1.)] if value['running'] else []
     def window(path):
@@ -142,14 +158,13 @@ def main():
         for name in ('subprocess.Popen','requests.sessions.Session.request','socket.socket.connect','socket.socket.connect_ex','socket.getaddrinfo','winreg.SetValueEx','winreg.DeleteValue','pynput.keyboard.Controller.press','pynput.mouse.Controller.press','win32clipboard.OpenClipboard','autozzz.windows.user32.PostMessageW','autozzz.windows.user32.SendInput'):
             scope.enter_context(patch(name,side_effect=forbidden))
         for cls,name,replacement in ((ManagedZContext,'register_application_factory',register),(ManagedZContext,'init',initialize),(ManagedZContext,'after_app_shutdown',shutdown),
-                                     (EnterGame,'__init__',enter),(SwitchAccount,'__init__',switch),(GotoMenu,'execute',lambda *_:OperationResult(True)),(OneDragonService,'schedule_review',review)):
+                                     (EnterGame,'__init__',enter),(SwitchAccount,'__init__',switch),(GotoMenu,'execute',lambda *_:OperationResult(True)),
+                                     (OneDragonService,'schedule_review',review),(LaunchSession,'__init__',launch_init)):
             scope.enter_context(patch.object(cls,name,replacement))
         scope.enter_context(patch('autozzz.onedragon_startup.game_processes',side_effect=inventory))
-        scope.enter_context(patch('autozzz.onedragon_startup.launch_client',side_effect=launch))
         scope.enter_context(patch('autozzz.windows.find_game',side_effect=window))
         scope.enter_context(patch('autozzz.windows.user32.GetWindowThreadProcessId',side_effect=window_pid))
         scope.enter_context(patch('autozzz.windows.user32.GetAsyncKeyState',return_value=0))
-        from autozzz.onedragon_worker import main as worker_main
         sys.stdout=protocol_output
         return worker_main()
 

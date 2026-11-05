@@ -7,6 +7,83 @@ from .config_transaction import atomic_apply, config_revision
 from .run_lock import profile_lock
 
 PROXY_SCHEMES = {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}
+RUN_HOTKEY_FIELDS = ('key_start_running', 'key_stop_running')
+
+
+def validate_run_hotkeys(config, *, template=None):
+    """Compile the source preferences and check the other AutoZZZ tools' chords."""
+    from .agent_template_hotkeys import DEFAULTS
+    from .global_capture import parse_capture_hotkey
+    from .run_hotkeys import display_run_key, run_bindings
+    from .trace_hotkeys import parse_hotkey
+    from .trace_preferences import TracePreferences
+
+    start = getattr(config, 'key_start_running', 'f9')
+    stop = getattr(config, 'key_stop_running', 'f10')
+    bindings = run_bindings(start, stop)
+    settings = dict(start=display_run_key(start) if 'start' in bindings else 'F9',
+                    stop=display_run_key(stop) if 'stop' in bindings else 'F10', warning='')
+    aliases = {chord for action, chord in bindings.items() if action in ('start', 'stop')}
+    if not aliases:
+        return bindings, settings
+
+    if parse_capture_hotkey(getattr(config, 'key_screenshot', 'f11')) in aliases:
+        raise ValueError('运行快捷键与全局截图键冲突。')
+    trace = TracePreferences().load()['hotkeys']
+    if any(parse_hotkey(key) in aliases for key in trace.values()):
+        raise ValueError('运行快捷键与追踪工具快捷键冲突。')
+    if template is None:
+        from zzz_od.config.agent_template_generator_config import AgentTemplateGeneratorConfig
+        generator = AgentTemplateGeneratorConfig()
+        template = {action: generator.get_hotkey(action, default) for action, default in DEFAULTS.items()}
+    if any(parse_capture_hotkey(key) in aliases for key in template.values()):
+        raise ValueError('运行快捷键与素材工具快捷键冲突。')
+    return bindings, settings
+
+
+def active_run_hotkeys(config, *, template=None):
+    try:
+        return validate_run_hotkeys(config, template=template)
+    except (OSError, ValueError) as exc:
+        from .run_hotkeys import run_bindings
+        return run_bindings(), dict(start='F9', stop='F10', warning=str(exc))
+
+
+def load_run_hotkeys(data):
+    """Read the selected profile when rotation owns the keys between SDK workers."""
+    from pathlib import Path
+    from types import SimpleNamespace
+    import yaml
+    from .agent_template_hotkeys import DEFAULTS
+    from .run_hotkeys import run_bindings
+
+    root = Path(data).resolve()
+
+    def read_config(name):
+        path = root / 'config' / name
+        if path.resolve() != path:
+            raise ValueError('快捷键配置路径被重定向。')
+        try:
+            with path.open('rb') as stream:
+                raw = stream.read(1024 * 1024 + 1)
+        except FileNotFoundError:
+            return {}
+        if len(raw) > 1024 * 1024:
+            raise ValueError('快捷键配置文件过大。')
+        config = yaml.safe_load(raw)
+        if config is not None and not isinstance(config, dict):
+            raise ValueError('快捷键配置格式无效。')
+        return config or {}
+
+    try:
+        raw = read_config('env.yml')
+        config = SimpleNamespace(**{key: raw[key] for key in (*RUN_HOTKEY_FIELDS, 'key_screenshot') if key in raw})
+        raw_template = read_config('agent_template_generator.yml')
+        template = {action: raw_template.get('hotkey_' + action, default) for action, default in DEFAULTS.items()}
+        template = {action: key if isinstance(key, str) else DEFAULTS[action] for action, key in template.items()}
+        return active_run_hotkeys(config, template=template)
+    except (OSError, ValueError, yaml.YAMLError):
+        return run_bindings(), dict(start='F9', stop='F10', warning='无法读取运行快捷键设置。')
 
 
 def field_value(name, label, value, kind="str", options=None, **metadata):
@@ -95,6 +172,10 @@ class EnvironmentStore:
             enum('pip_source','Python 依赖下载源',[dict(label=v.label,value=v.value) for v in config.repo_config.get_source_values('pip_source')],'下载')
             enum("screenshot_method", "截图方式", [dict(label=v.value.label, value=v.value.value) for v in ScreenshotMethodEnum], "运行")
             fields.append(field_value("is_debug", "详细日志", config.is_debug, "bool", group="运行"))
+            fields.append(field_value('key_start_running', '开始和暂停快捷键', config.key_start_running,
+                group='运行快捷键', hint='例如 Ctrl+F7。F9 始终可用。'))
+            fields.append(field_value('key_stop_running', '停止快捷键', config.key_stop_running,
+                group='运行快捷键', hint='例如 Ctrl+F8。F10 始终可用。'))
             fields.append(field_value('key_screenshot','全局截图快捷键',config.key_screenshot,'str',group='截图',
                 hint='例如 F11 或 Ctrl+Shift+P；留空禁用。F9/F10及用户已有工具键保留。'))
             fields.append(field_value('copy_screenshot','截图后复制到剪贴板',config.copy_screenshot,'bool',group='截图'))
@@ -148,10 +229,13 @@ class EnvironmentStore:
             # 校验候选值时只改内存；所有领域 setter 最终统一原子发布。
             if app_id == "_environment":
                 from types import SimpleNamespace
-                names = ("proxy_type", "personal_proxy", "gh_proxy_url", "auto_fetch_gh_proxy_url", "resource_source", "screenshot_method", "is_debug",'pip_source','key_screenshot','copy_screenshot')
+                names = ("proxy_type", "personal_proxy", "gh_proxy_url", "auto_fetch_gh_proxy_url", "resource_source", "screenshot_method", "is_debug",'pip_source','key_screenshot','copy_screenshot',*RUN_HOTKEY_FIELDS)
                 candidate = {name: updates.get(name, getattr(config, name)) for name in names}
                 candidate.update(is_personal_proxy=candidate["proxy_type"] == "personal", is_gh_proxy=candidate["proxy_type"] == "ghproxy")
-                validate_environment(SimpleNamespace(**candidate), self.ctx.repo_config)
+                candidate_config = SimpleNamespace(**candidate)
+                validate_environment(candidate_config, self.ctx.repo_config)
+                if set(updates) & {*RUN_HOTKEY_FIELDS, 'key_screenshot'}:
+                    validate_run_hotkeys(candidate_config)
             else:
                 candidate = self.config("_models")
                 for key, value in updates.items(): candidate.data[key] = value

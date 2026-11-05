@@ -11,6 +11,12 @@ import time
 MODIFIER_CODES=(160,161,162,163,164,165,91,92)
 MODIFIER_GROUPS={16:(160,161),17:(162,163),18:(164,165),91:(91,92)}
 F10=0x79
+_MOUSE_BUTTON_MESSAGES = {
+    0x0201: (1, True), 0x0202: (1, False),    # left
+    0x0204: (2, True), 0x0205: (2, False),    # right
+    0x0207: (4, True), 0x0208: (4, False),    # middle
+    0x020B: (0, True), 0x020C: (0, False),    # X1 or X2, identified in mouseData
+}
 
 
 @dataclass(frozen=True)
@@ -92,14 +98,19 @@ class KeyboardEdgeQueue:
 
 
 class ReadOnlyKeyboardEvents:
-    """WH_KEYBOARD_LL on its own message thread; all callbacks pass through.
+    """Passive Win32 hooks on one message thread; all callbacks pass through.
 
-    Only the configured screenshot key, F10 and modifier state are retained.
+    The default reducer retains only the screenshot key, F10 and modifiers.
+    A run-key reducer can request mouse buttons. Movement and wheel events are ignored.
     Startup/installation failure is observable; there is no silent reliable flag.
     """
-    def __init__(self):
-        self.queue=KeyboardEdgeQueue();self._stop=threading.Event();self.ready=threading.Event();self._close_lock=threading.Lock()
+    def __init__(self, queue=None, *, mouse_enabled=None):
+        self.queue=KeyboardEdgeQueue() if queue is None else queue
+        self._stop=threading.Event();self.ready=threading.Event();self._close_lock=threading.Lock()
         self._state='starting';self._error='';self._thread_id=None;self._user32=None;self._hook=None;self._callback=None
+        self._mouse_enabled = mouse_enabled
+        self._mouse_state = 'disabled'
+        self._mouse_error = ''
         self.worker=threading.Thread(target=self._run,name='AutoZZZ-ReadOnly-Keyboard',daemon=False)
         self.worker.start()
 
@@ -118,8 +129,17 @@ class ReadOnlyKeyboardEvents:
     def drain(self):return self.queue.drain()
 
     def status(self):
-        return self.queue.status()|dict(state=self._state,error=self._error,thread_alive=self.worker.is_alive(),
+        result=self.queue.status()|dict(state=self._state,error=self._error,thread_alive=self.worker.is_alive(),
             installed=self._state=='listening')
+        if self._mouse_enabled is not None:
+            result.update(mouse_state=self._mouse_state, mouse_error=self._mouse_error)
+        return result
+
+    def refresh_mouse(self):
+        """Wake the message thread after the selected mouse buttons change."""
+        with self._close_lock:
+            if not self._stop.is_set() and self._user32 is not None and self._thread_id is not None:
+                self._user32.PostThreadMessageW(self._thread_id, 0x8000, 0, 0)
 
     def close(self):
         with self._close_lock:
@@ -135,7 +155,7 @@ class ReadOnlyKeyboardEvents:
         if threading.current_thread() is not self.worker:self.worker.join(timeout)
 
     def _run(self):
-        hook=None;user32=None
+        hook=mouse_hook=None;user32=None
         try:
             user32=ctypes.WinDLL('user32',use_last_error=True);kernel=ctypes.WinDLL('kernel32',use_last_error=True)
             self._user32=user32
@@ -160,26 +180,89 @@ class ReadOnlyKeyboardEvents:
                 try:
                     if code>=0 and message_id in (0x100,0x101,0x104,0x105):
                         value=ctypes.cast(data_pointer,ctypes.POINTER(KeyboardData)).contents
+                        received=time.monotonic()
                         self.queue.feed(value.vkCode,message_id in (0x100,0x104),foreground=user32.GetForegroundWindow(),
-                            flags=value.flags,scan=value.scanCode,os_time=value.time)
+                            created=received,flags=value.flags,scan=value.scanCode,os_time=value.time)
                 except BaseException as exc:
                     # The hook must never turn a Python callback error into input suppression.
                     self._error='键盘事件处理失败：'+str(exc)
                 return user32.CallNextHookEx(hook,code,message_id,data_pointer)
             self._callback=callback
             if self._stop.is_set():return
-            hook=user32.SetWindowsHookExW(13,callback,kernel.GetModuleHandleW(None),0)
+            module=kernel.GetModuleHandleW(None)
+            hook=user32.SetWindowsHookExW(13,callback,module,0)
             if not hook:raise OSError(ctypes.get_last_error(),'无法安装只读键盘事件监听')
-            self._hook=hook;self._state='listening';self.ready.set()
+            self._hook=hook
+
+            sync_mouse = None
+            if self._mouse_enabled is not None:
+                class MouseData(ctypes.Structure):
+                    _fields_ = [('point', W.POINT), ('button_data', W.DWORD), ('flags', W.DWORD),
+                                ('time', W.DWORD), ('extra', ctypes.c_size_t)]
+
+                @callback_type
+                def mouse_callback(code, message_id, data_pointer):
+                    try:
+                        button = _MOUSE_BUTTON_MESSAGES.get(message_id) if code >= 0 and self._mouse_state == 'listening' else None
+                        if button is not None:
+                            value = ctypes.cast(data_pointer, ctypes.POINTER(MouseData)).contents
+                            key, down = button
+                            if key == 0:
+                                key = {1: 5, 2: 6}.get(value.button_data >> 16)
+                            if key is not None:
+                                # Align LLMHF flags with the existing LLKHF input reducer.
+                                flags = ((value.flags & 1) << 4) | (value.flags & 2)
+                                received = time.monotonic()
+                                self.queue.feed(key, down, foreground=user32.GetForegroundWindow(),
+                                                created=received, flags=flags, os_time=value.time)
+                    except BaseException as exc:
+                        self._mouse_error = '鼠标事件处理失败：' + str(exc)
+                    return user32.CallNextHookEx(mouse_hook, code, message_id, data_pointer)
+
+                mouse_requested = False
+
+                def sync_mouse():
+                    nonlocal mouse_hook, mouse_requested
+                    requested = self._mouse_enabled()
+                    if requested == mouse_requested:
+                        return
+                    mouse_requested = requested
+                    if requested:
+                        if mouse_hook is not None:
+                            return  # Previous removal was uncertain. Never create a duplicate hook.
+                        mouse_hook = user32.SetWindowsHookExW(14, mouse_callback, module, 0) or None
+                        if mouse_hook is None:
+                            self._mouse_state = 'failed'
+                            self._mouse_error = '无法安装只读鼠标事件监听：' + str(ctypes.get_last_error())
+                        else:
+                            self._mouse_state = 'listening'
+                            self._mouse_error = ''
+                    elif mouse_hook is None or user32.UnhookWindowsHookEx(mouse_hook):
+                        mouse_hook = None
+                        self._mouse_state = 'disabled'
+                        self._mouse_error = ''
+                    else:
+                        self._mouse_state = 'failed'
+                        self._mouse_error = '无法核实鼠标事件监听卸载：' + str(ctypes.get_last_error())
+
+                sync_mouse()
+            self._state='listening';self.ready.set()
             while not self._stop.is_set():
                 result=user32.MsgWaitForMultipleObjects(0,None,False,100,0x04FF)
                 if result==0xFFFFFFFF:raise OSError(ctypes.get_last_error(),'键盘事件消息等待失败')
                 while user32.PeekMessageW(ctypes.byref(message),None,0,0,1):
                     if message.message==0x12:return
                     user32.TranslateMessage(ctypes.byref(message));user32.DispatchMessageW(ctypes.byref(message))
+                if sync_mouse is not None and not self._stop.is_set():
+                    sync_mouse()
         except BaseException as exc:
             self._state='failed';self._error=str(exc)
         finally:
+            if mouse_hook is not None and user32 is not None:
+                if not user32.UnhookWindowsHookEx(mouse_hook):
+                    self._mouse_error = '无法核实鼠标事件监听卸载：' + str(ctypes.get_last_error())
+            if self._mouse_enabled is not None:
+                self._mouse_state = 'closed'
             if hook and user32 is not None:
                 if not user32.UnhookWindowsHookEx(hook):
                     self._error='无法核实键盘事件监听卸载：'+str(ctypes.get_last_error())

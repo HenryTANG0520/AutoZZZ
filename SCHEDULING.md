@@ -2,7 +2,7 @@
 
 目标是从 AutoZZZ 管理 Windows 计划任务，并复用现有每日、一条龙应用和账号轮换执行器。上游玩家说明使用 Windows 任务计划程序和启动参数；`service/zzz_base_scheduler.py` 是战斗数据同步服务，不是玩家每日调度器。
 
-当前已接入计划资料、Windows 任务接口、配置核对、原生执行适配、命令行入口、实例记录及“设置 → 定时 → 管理计划”界面。游戏内定时验收与管理员级任务实测仍待完成。
+当前已接入计划资料、Windows 任务接口、配置核对、原生执行适配、命令行入口、实例记录及“设置 → 定时 → 管理计划”界面。管理员级国服每日按需触发已实测。
 
 ## 计划与 Windows 任务
 
@@ -28,9 +28,13 @@
 
 ## 验收范围
 
-先验证计划格式、版本冲突与命令/XML 边界，再用自建 Windows 任务核对真实实例编号、单实例策略、中文路径和正式入口；实际 SDK 在隔离资料与设备夹具中验证执行适配。测试只管理独立文件夹，保留用户原有计划。游戏内定时与管理员级任务尚需验收，不能将隔离回放写成真实每日或一条龙定时成功。
+先验证计划格式、版本冲突与命令/XML 边界，再用自建 Windows 任务核对真实实例编号、单实例策略、中文路径和正式入口。测试使用独立任务文件夹。实际 SDK 在隔离资料与设备夹具中验证执行适配，管理员级国服每日按需触发另有游戏实测记录。
 
 Windows 行为依据：[任务安全上下文](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)、[任务设置](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings)、[正在运行的实例](https://learn.microsoft.com/en-us/windows/win32/taskschd/registeredtask-getinstances)。
+
+## 2026-11-05 国服每日实机
+
+Windows 任务计划程序按需触发隔离的管理员级计划，运行实际安装的 `dev-b21dacd`。第一次冷启动助手与游戏，重复触发返回原实例，合作停止后原助手进程退出。第二次得到新实例，核实当日 400 活跃度与四档奖励全部领取后，由 AutoZZZ 正常关闭所绑定的游戏进程。两份历史分别记录停止与成功，临时计划已移除。本轮使用零电量的原每日入口。自然到点、原生应用和轮换实机待验证。证据见 `runs/scheduled-live-b21dacd-cn-20261105/result.json`。
 
 ## 2026-11-01 管理界面验收
 

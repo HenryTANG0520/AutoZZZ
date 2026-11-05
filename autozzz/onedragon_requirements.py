@@ -107,8 +107,14 @@ class ApplicationRequirements:
                 self._world_patrol(config)
             elif app_id == "commission_assistant":
                 from .onedragon_assistant import validate_shortcuts
+                from .onedragon_environment import load_run_hotkeys
+
                 config=self.store.get(app_id)
-                validate_shortcuts(config)
+                modes = validate_shortcuts(config)
+                bindings, _ = load_run_hotkeys(self.data)
+                run_keys = {chord[-1] for action, chord in bindings.items() if action in ('start', 'stop')}
+                if set(modes.values()) & run_keys:
+                    raise ValueError('委托助手模式键与运行快捷键冲突。')
                 self.shortcuts=dict(dodge=config.dodge_switch,battle=config.auto_battle_switch)
                 self.policy(config.auto_battle)
                 self.policy(config.dodge_config,"dodge")
