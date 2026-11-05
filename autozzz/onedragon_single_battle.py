@@ -99,9 +99,7 @@ class SingleBattleApplication(Application):
         with self._engine_lock:
             # Revoke the previous frame's permit before stopping the source
             # executor. A pending atomic can run concurrently with recognition.
-            with self.control.lock:
-                self.battle_input.allowed = False
-                self.battle_input.permit_reason = 'single_battle_waiting'
+            self.battle_input.revoke_frame('single_battle_waiting')
             was_running = self._engine_epoch is not None
             self._engine_epoch = None
             if was_running:
@@ -135,16 +133,18 @@ class SingleBattleApplication(Application):
     def watch_battle(self):
         self.control.checkpoint(require_frame=True)
         hud = self.battle.is_normal_attack_btn_available(self.last_screenshot)
-        # Missing attack HUD is cheap to detect and invalidates combat input
-        # before reading any potentially slower settlement or menu evidence.
-        interrupted = self._suspend() if not hud else False
-        state = self._screen_state(hud)
+        chain = None
+        if not hud and self._entered_battle:
+            chain = self.battle_input.observe_chain_frame(self.battle, self.last_screenshot, self.last_screenshot_time)
+        # The chain probe also rules out overlapping menus and result labels.
+        interrupted = self._suspend() if not hud and chain is None else False
+        state = 'fighting' if chain is not None else self._screen_state(hud)
         self.control.checkpoint(require_frame=True)
 
         if state == 'fighting':
             self._start_from_frame()
             self.battle.check_battle_state(self.last_screenshot, self.last_screenshot_time,
-                                           check_battle_end_normal_result=True)
+                                           check_battle_end_normal_result=chain is None, chain_prompt=chain)
             self.control.checkpoint(require_frame=True)
             self._wait_started = None
             self._publish('fighting')

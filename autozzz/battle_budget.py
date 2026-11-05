@@ -94,9 +94,11 @@ class BattleBudget:
         self._commit_entries([*self.data["entries"],item])
         return item["id"]
 
-    def settle(self,identifier,energy_after):
+    def settle(self,identifier,energy_after,*,verification=None):
         entries=[e for e in self.data["entries"] if e["id"]==identifier]
         if len(entries)!=1 or entries[0]["status"]!="pending":
             raise AutomationError("战斗预算的结算记录无效。")
         settled=dict(entries[0],status="settled",energy_after=energy_after)
+        if verification is not None:
+            settled.update(battle_result='victory', resolution='verified_source_receipt', verification=verification)
         self._commit_entries([settled if entry["id"]==identifier else entry for entry in self.data["entries"]])

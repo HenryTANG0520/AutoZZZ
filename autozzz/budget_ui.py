@@ -8,11 +8,14 @@ from .localization_tk import PresentationVar
 from . import theme
 from .battle_budget import budget_directory
 from .budget_records import BudgetRecords
+from .onedragon_charge_recovery import NativeChargeRecovery
 
 
 class BudgetWindow:
     def __init__(self,parent,server,scale=1.):
-        self.records=BudgetRecords(budget_directory())
+        directory = budget_directory()
+        self.records = BudgetRecords(directory)
+        self.recovery = NativeChargeRecovery(directory)
         self.server,self.items=server,{}
         self.window=tk.Toplevel(parent)
         self.window.title("AutoZZZ · 待核对消耗")
@@ -44,7 +47,8 @@ class BudgetWindow:
         footer=ttk.Frame(self.window,padding=d(16))
         footer.grid(row=2,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
-        theme.wrapped_label(footer,text="实际消耗与结果未知；计入后，预留电量额度不退回。",style="Hint.TLabel").grid(row=0,column=0,sticky="ew")
+        self.hint = theme.wrapped_label(footer, text='', style='Hint.TLabel')
+        self.hint.grid(row=0, column=0, sticky='ew')
         self.status=PresentationVar(self.window)
         theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=1,column=0,sticky="ew",pady=(d(8),d(12)))
         actions=ttk.Frame(footer)
@@ -55,7 +59,13 @@ class BudgetWindow:
         ttk.Button(actions,text="关闭",command=self.window.destroy).pack(side="right")
         self.refresh()
 
-    def selected(self):self.account.state(["!disabled"] if self.table.selection() else ["disabled"])
+    def selected(self):
+        selection = self.table.selection()
+        item = self.items.get(selection[0]) if selection else None
+        verified = item is not None and 'verified_reservation' in item
+        self.account.configure(text='按胜利记录结清' if verified else '按预留上限计入')
+        self.hint.configure(text='实际消耗与结果未知；计入后，预留电量额度不退回。' if item and not verified else '')
+        self.account.state(['!disabled'] if item is not None else ['disabled'])
 
     def refresh(self):
         self.table.delete(*self.table.get_children())
@@ -68,11 +78,17 @@ class BudgetWindow:
         self.selected()
 
     def resolve(self):
-        selection=self.table.selection()
-        if not selection:return
-        item=self.items[selection[0]]
+        selection = self.table.selection()
+        item = self.items.get(selection[0]) if selection else None
+        if item is None:
+            return
         try:
-            result=self.records.account_reserved_upper_bound(item["id"],item["revision"])
+            if 'verified_reservation' in item:
+                result = self.recovery.recover_verified(item['id'], item['revision'], item['verified_reservation'])
+                message = f"已结清 {result['cost']} 电量的预留，胜利已核实。"
+            else:
+                result = self.records.account_reserved_upper_bound(item['id'], item['revision'])
+                message = f"已按预留上限 {result['cost']} 电量计入；结果未知。"
             self.refresh()
-            self.status.set(f"已按预留上限 {result['cost']} 电量计入；结果未知。")
+            self.status.set(message)
         except Exception as exc:self.status.set(str(exc))

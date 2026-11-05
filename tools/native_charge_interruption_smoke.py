@@ -14,12 +14,14 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'vendor/onedragon/src')]
 
 from autozzz.battle_budget import BattleBudget
 from autozzz.onedragon_charge import ChargeBudgetControl
+from autozzz.onedragon_charge_recovery import NativeChargeRecovery, SOURCE_VICTORY
 from autozzz.onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState
 from autozzz.onedragon_restore import BACKUP, NONE
 from one_dragon.base.operation.operation_base import OperationResult
 from one_dragon.base.operation.operation_round_result import OperationRoundResultEnum
 from zzz_od.application.charge_plan.charge_plan_app import ChargePlanApp
 from zzz_od.operation.challenge_mission.check_next_after_battle import ChooseNextOrFinishAfterBattle
+from zzz_od.operation.compendium.combat_simulation import CombatSimulation
 from zzz_od.operation.restore_charge import RestoreCharge
 
 REPEAT = ChargeBudgetControl.REPEAT_BUTTON
@@ -128,6 +130,45 @@ def replay(directory, restore_enabled):
         scope.close()
 
 
+def replay_victory_recovery(directory):
+    completed = []
+    config = SimpleNamespace(add_plan_run_times=lambda plan: completed.append(plan.uid))
+    ctx = SimpleNamespace(current_instance_idx=1,
+                          run_context=SimpleNamespace(get_config=lambda **_: config),
+                          auto_battle_context=SimpleNamespace(last_check_end_result=SOURCE_VICTORY))
+    control = ExecutionControl(lambda: WindowState(True, True, (0, 0, 1920, 1080)),
+                               lambda: None, lambda: None, lambda: None, lambda: None)
+    budget = BattleBudget(directory, 'victory', 'cn', 20, 1)
+    charge = ChargeBudgetControl(ctx, control, budget, 20)
+    plan = SimpleNamespace(mission_name='异常演练', uid='fixture-victory')
+    charge.install()
+    try:
+        operation = CombatSimulation(ctx, plan)
+        operation._init_network()
+        operation._current_node = operation._node_map['战斗结束']
+        operation.screenshot = lambda: control.observe(lambda: None)
+        control.observe(lambda: None)
+        charge._reserve(operation, 20)
+        revision_before = budget.path.read_bytes()
+        with patch.object(budget, '_write', side_effect=OSError('interrupted ledger settlement')):
+            try:
+                operation._execute_one_round()
+            except OSError as exc:
+                assert str(exc) == 'interrupted ledger settlement'
+            else:
+                raise AssertionError('Expected the ledger write to fail after recording the source victory')
+        assert budget.path.read_bytes() == revision_before
+    finally:
+        charge.close()
+    recovery = NativeChargeRecovery(directory)
+    record = recovery.records.pending('cn')[0]
+    result = recovery.recover_verified(record['id'], record['revision'], record['verified_reservation'])
+    reopened = BattleBudget(directory, 'victory', 'cn', 20, 1)
+    assert completed == [plan.uid] and reopened.reserved == 20 and not reopened.pending
+    assert result['battle_result'] == 'victory' and reopened.data['entries'][0]['verification']['plan_uid'] == plan.uid
+    return result['battle_result']
+
+
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='autozzz-native-charge-') as folder:
         directory = Path(folder)
@@ -136,5 +177,6 @@ if __name__ == '__main__':
         cancelled.mkdir()
         restored.mkdir()
         result = dict(cancelled_clicks=replay(cancelled, False), restored_clicks=replay(restored, True),
+                      recovered_victory=replay_victory_recovery(directory / 'recovery'),
                       pending_kept=True, game_input_sent=False)
         print(json.dumps(result, ensure_ascii=False))

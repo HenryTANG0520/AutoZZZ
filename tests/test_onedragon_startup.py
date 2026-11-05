@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 import tempfile
+from threading import get_native_id
 from types import SimpleNamespace
 import unittest
 
@@ -20,9 +21,14 @@ class WindowAPI:
     def __init__(self):
         self.foreground=100
         self.owners={100:10,200:20}
+        self.threads={100:101,200:202}
         self.requests=[]
+        self.attachments=[]
+        self.brought=[]
         self.on_probe=lambda _:None
-        self.on_request=lambda:None
+        self.on_request=lambda _:False
+        self.on_attach=lambda _thread,_join:False
+        self.on_bring=lambda _:False
 
     def GetForegroundWindow(self):
         return self.foreground
@@ -32,12 +38,23 @@ class WindowAPI:
         if hwnd not in self.owners:
             return 0
         pid._obj.value=self.owners[hwnd]
-        return 1
+        return self.threads.get(hwnd,hwnd)
 
     def SetForegroundWindow(self,hwnd):
         self.requests.append(hwnd)
-        self.on_request()
-        return False
+        return self.on_request(hwnd)
+
+    def AttachThreadInput(self,current,thread,join):
+        self.attachments.append((current,thread,join))
+        return self.on_attach(thread,join)
+
+    def BringWindowToTop(self,hwnd):
+        self.brought.append(hwnd)
+        return self.on_bring(hwnd)
+
+    def activate(self,hwnd):
+        self.foreground=hwnd
+        return True
 
 
 class StartupTests(unittest.TestCase):
@@ -60,8 +77,8 @@ class StartupTests(unittest.TestCase):
                     inventory=lambda:[],find_window=self.missing,launch=self.launches.append,clock=lambda:self.time)
         values.update(extra);return GameStartup(self.path,**values)
 
-    def new_client(self,*,launch_pid=20,exit_code=None,**extra):
-        process=SimpleNamespace(pid=launch_pid,poll=lambda:exit_code)
+    def new_client(self,*,launch_pid=20,exit_code=None,poll_process=None,**extra):
+        process=SimpleNamespace(pid=launch_pid,poll=poll_process or (lambda:exit_code))
         def launch(path):
             self.launches.append(path)
             return process
@@ -96,6 +113,7 @@ class StartupTests(unittest.TestCase):
 
     def test_actual_launch_session_result_can_authorize_one_foreground_request(self):
         startup,api=self.new_client(launch=None)
+        api.on_request=api.activate
         def popen(argv,*,cwd,shell):
             self.assertEqual(cwd,str(self.path.parent))
             self.assertFalse(shell)
@@ -106,16 +124,144 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
         self.assertEqual(self.launches,[str(self.path)])
         self.assertEqual(api.requests,[200])
+        self.assertEqual(api.attachments,[])
 
     def test_refused_foreground_request_is_not_repeated_after_pause(self):
         def poll():
             self.poll()
             if self.ticks==5:self.pause.clear()
         startup,api=self.new_client(poll_keys=poll)
-        api.on_request=self.pause.set
+        api.on_request=lambda _:self.pause.set()
         self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
         self.assertIn('已暂停',self.phases)
         self.assertEqual(api.requests,[200])
+        self.assertEqual(api.attachments,[])
+
+    def test_scoped_fallback_activates_once_and_detaches_both_threads(self):
+        startup,api=self.new_client()
+        api.on_attach=lambda _thread,_join:True
+        current=get_native_id()
+        joins=[(current,101,True),(current,202,True)]
+        def request(hwnd):
+            if len(api.requests)==1:
+                self.assertEqual(api.attachments,[])
+                return False
+            self.assertEqual(api.attachments,joins)
+            return api.activate(hwnd)
+        api.on_request=request
+        self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+        self.assertEqual(api.foreground,200)
+        self.assertEqual(api.requests,[200,200])
+        self.assertEqual(api.brought,[200])
+        self.assertEqual(api.attachments,joins+[(current,202,False),(current,101,False)])
+
+    def test_fallback_does_not_reactivate_after_bring_to_top_focuses_game(self):
+        startup,api=self.new_client()
+        api.on_attach=lambda _thread,_join:True
+        api.on_bring=api.activate
+        startup.run(True)
+        self.assertEqual(api.foreground,200)
+        self.assertEqual(api.requests,[200])
+        self.assertEqual(api.brought,[200])
+        self.assertEqual([row[2] for row in api.attachments],[True,True,False,False])
+
+    def test_fallback_refusal_returns_bound_identity_without_more_requests(self):
+        startup,api=self.new_client()
+        api.on_attach=lambda _thread,_join:True
+        self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+        self.assertEqual(api.foreground,100)
+        self.assertEqual(api.requests,[200,200])
+        self.assertEqual(api.brought,[200])
+        self.assertEqual([row[2] for row in api.attachments],[True,True,False,False])
+
+    def test_user_switch_before_or_during_attachment_abandons_fallback(self):
+        for stage in ('ordinary','attach','bring'):
+            with self.subTest(stage=stage):
+                self.launches.clear()
+                startup,api=self.new_client()
+                def switch():api.foreground=300
+                def attach(thread,join):
+                    if stage=='attach' and join:switch()
+                    return True
+                api.on_request=lambda _:switch() if stage=='ordinary' else False
+                api.on_bring=lambda _:switch() if stage=='bring' else False
+                api.on_attach=attach
+                startup.run(True)
+                self.assertEqual(api.foreground,300)
+                self.assertEqual(api.requests,[200])
+                self.assertEqual(api.brought,[200] if stage=='bring' else [])
+                pairs=[(thread,join) for _,thread,join in api.attachments]
+                expected={'ordinary':[],'attach':[(101,True),(101,False)],
+                          'bring':[(101,True),(202,True),(202,False),(101,False)]}
+                self.assertEqual(pairs,expected[stage])
+
+    def test_fallback_refuses_reused_foreground_and_exited_game(self):
+        for change in ('foreground_owner','game_exited','game_window_owner'):
+            with self.subTest(change=change):
+                self.launches.clear()
+                exited=Flag()
+                startup,api=self.new_client(poll_process=lambda:0 if exited.is_set() else None)
+                def request(_):
+                    if change=='foreground_owner':api.threads[100]=303
+                    elif change=='game_exited':exited.set()
+                    else:api.owners[200]=21
+                    return False
+                api.on_request=request
+                startup.run(True)
+                self.assertEqual(api.requests,[200])
+                self.assertEqual(api.attachments,[])
+                self.assertEqual(api.brought,[])
+
+    def test_fallback_rechecks_process_creation_path_and_generation(self):
+        for change in ('creation','path','generation'):
+            with self.subTest(change=change):
+                self.launches.clear()
+                def inventory():
+                    if not self.launches:return []
+                    if not api.requests:return [self.process]
+                    if change=='creation':return [dict(self.process,created=456.)]
+                    if change=='path':return [dict(self.process,path=str(self.path.parent/'other'/self.path.name))]
+                    return [self.process]
+                def guard():
+                    if change=='generation' and api.requests:raise ValueError('fixture stale generation')
+                startup,api=self.new_client(inventory=inventory,guard=guard)
+                if change=='generation':
+                    with self.assertRaisesRegex(ValueError,'stale generation'):startup.run(True)
+                else:
+                    startup.run(True)
+                self.assertEqual(api.requests,[200])
+                self.assertEqual(api.attachments,[])
+                self.assertEqual(api.brought,[])
+
+    def test_failed_second_attachment_detaches_first_and_avoids_input(self):
+        startup,api=self.new_client()
+        api.on_attach=lambda thread,join:not (thread==202 and join)
+        startup.run(True)
+        self.assertEqual(api.requests,[200])
+        self.assertEqual(api.brought,[])
+        self.assertEqual([(thread,join) for _,thread,join in api.attachments],[(101,True),(202,True),(101,False)])
+
+    def test_fallback_detaches_both_threads_if_native_call_raises(self):
+        startup,api=self.new_client()
+        api.on_attach=lambda _thread,_join:True
+        def fail(_):raise OSError('fixture window failure')
+        api.on_bring=fail
+        with self.assertRaisesRegex(OSError,'window failure'):startup.run(True)
+        self.assertEqual(api.requests,[200])
+        self.assertEqual([(thread,join) for _,thread,join in api.attachments],
+                         [(101,True),(202,True),(202,False),(101,False)])
+
+    def test_stop_during_attachment_detaches_before_returning(self):
+        startup,api=self.new_client()
+        def attach(thread,join):
+            if thread==202 and join:self.cancel.set()
+            return True
+        api.on_attach=attach
+        self.assertIsNone(startup.run(True))
+        self.assertEqual(api.requests,[200])
+        self.assertEqual(api.brought,[])
+        self.assertEqual([(thread,join) for _,thread,join in api.attachments],
+                         [(101,True),(202,True),(202,False),(101,False)])
 
     def test_new_process_already_in_foreground_is_left_in_its_current_window(self):
         startup,api=self.new_client()

@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from .battle_budget import BattleBudget
+from .onedragon_charge_recovery import NativeChargeRecovery, SOURCE_VICTORY
 from .onedragon_control import ExecutionStopped
 
 
@@ -142,12 +143,16 @@ class ChargeBudgetControl:
             if isinstance(operation, NotoriousHunt) and not operation.use_charge_power:
                 return original(operation)
             self.control.checkpoint(require_frame=True)
-            if self.ctx.auto_battle_context.last_check_end_result!="普通战斗-完成":
+            source_result = self.ctx.auto_battle_context.last_check_end_result
+            if source_result != SOURCE_VICTORY:
                 self._block("未核实胜利结算，预算保持待核对。")
             if self.owner is not operation or self.reservation is None:self._block("缺少本场出战的预算记录。")
             result=original(operation)
             if result.is_success:
-                self.budget.settle(self.reservation,None)
+                recovery = NativeChargeRecovery(self.budget.path.parent)
+                proof = recovery.record_victory(self.budget, self.reservation,
+                                                source_result=source_result, plan_uid=operation.plan.uid)
+                self.budget.settle(self.reservation, None, verification=proof)
                 self.reservation=None
                 self._repeat_operation=None
                 self._repeat_attempted=False

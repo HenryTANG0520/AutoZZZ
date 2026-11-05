@@ -112,18 +112,50 @@ class McpService:
         return upstream+extra
 
     def log(self, text):
-        self.logs.append(dict(time=time.time(), message=text))
+        with self.lock:
+            self.logs.append(dict(time=time.time(), message=self._hide_token(text)))
+
+    def _hide_token(self, text):
+        return text.replace(self.token, '[已隐藏]') if self.token else text
+
+    def _local_run_status(self, execution):
+        state = execution.get('state', 'idle')
+        control_state = execution.get('control', {}).get('state')
+        if state == 'running' and control_state in ('paused', 'focus_wait'):
+            state = control_state
+        native = execution.get('run', {})
+        owned = bool(self.owned_job and self.owned_job == execution.get('job_id'))
+        app = native.get('app') if native.get('state') == 'running' else None
+        app = app or execution.get('prepared_app') or (self.owned_run.get('app_id') if owned else None)
+        record = self.actions.current
+        if owned and record is not None and record['job_id'] == self.owned_job:
+            tool = record['descriptor']['tool']
+            if tool in ACTION_TOOLS or tool == 'prepare_mcp_action':
+                app = tool
+        source = 'mcp' if owned else (native.get('source') if native.get('state') == 'running' else None)
+        if not source and app:
+            source = 'autozzz'
+        step = execution.get('preparation_step') or native.get('current_node') or ''
+        duration = native.get('duration_seconds') if native.get('state') == 'running' else None
+        if duration is None and state in ('running', 'paused', 'focus_wait', 'stopping', 'success', 'failed', 'stopped'):
+            duration = execution.get('active_seconds')
+        # The detailed error remains with the original task report. No raw
+        # request, credential, or arbitrary exception is added to diagnostics.
+        return dict(state=state, source=source, app=self._hide_token(app or ''),
+                    step=self._hide_token(step), duration_seconds=duration)
 
     def status(self):
         with self.lock:
             running = self.thread is not None and self.thread.is_alive()
+            actions = self.actions.status()
             execution = self.service.execution_status()
             grant = self.grant
             return dict(running=running, url=f'http://127.0.0.1:{self.server.server_port}/mcp' if running else '',
                 protocol='2025-03-26', transport='streamable-http-json', owned_job=self.owned_job,
                 granted=None if grant is None else dict(app_id=grant['app_id'], budget=copy.deepcopy(grant['budget']),
                     expires_at=grant['expires_at'], consumed=grant['consumed']),
-                execution=execution, editing=self.editing.status(), actions=self.actions.status(), logs=list(self.logs))
+                execution=execution, editing=self.editing.status(), actions=actions,
+                run_status=self._local_run_status(execution), logs=[dict(row) for row in self.logs])
 
     def validate_existing_budget(self,budget):
         validate_runtime_budget(budget)
@@ -144,12 +176,24 @@ class McpService:
         with self.lock:
             if self.closed:raise RuntimeError('MCP管理器已关闭。')
             if self.thread is not None and self.thread.is_alive():raise RuntimeError('MCP服务已启动，请使用原连接。')
-            self.token = secrets.token_urlsafe(32)
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', port), self._handler())
+            except OSError:
+                self.log('MCP服务启动失败，监听端口不可用。')
+                raise
             self.sessions.clear()
-            self.server = ThreadingHTTPServer(('127.0.0.1', port), self._handler())
-            self.server.daemon_threads = True
-            self.thread = threading.Thread(target=self.server.serve_forever, name='AutoZZZ-MCP', daemon=True)
-            self.thread.start()
+            server.daemon_threads = True
+            self.token = secrets.token_urlsafe(32)
+            self.server = server
+            self.thread = threading.Thread(target=server.serve_forever, name='AutoZZZ-MCP', daemon=True)
+            try:
+                self.thread.start()
+            except RuntimeError:
+                self.server = self.thread = None
+                self.token = ''
+                server.server_close()
+                self.log('MCP服务线程启动失败。')
+                raise
             self.log('MCP服务已启动，仅接受回环连接和本次令牌。')
             return dict(self.status(), bearer_token=self.token)
 
@@ -309,7 +353,9 @@ class McpService:
                 return True
             def request_session(self):
                 session=self.headers.get('Mcp-Session-Id')
-                with owner.lock:owner.session_state(session)
+                with owner.lock:
+                    owner.check_listener(self.server)
+                    owner.session_state(session)
                 return session
             def do_GET(self):
                 if not self.authorized():return
@@ -319,7 +365,14 @@ class McpService:
             def do_DELETE(self):
                 if not self.authorized():return
                 session=self.headers.get('Mcp-Session-Id')
-                with owner.lock:state=owner.sessions.pop(session,None)
+                try:
+                    with owner.lock:
+                        owner.check_listener(self.server)
+                        state=owner.sessions.pop(session,None)
+                        if state is not None and state['initialized']:
+                            owner.log('MCP客户端已断开。')
+                except ExpiredMcpSession:
+                    self.respond(404);return
                 self.respond(404 if session is not None and state is None else 200)
             def do_POST(self):
                 if not self.authorized():return
@@ -336,10 +389,10 @@ class McpService:
                     if isinstance(request,list):
                         if not request or len(request)>16 or any(not isinstance(row,dict) or row.get('method')=='initialize' for row in request):
                             raise ValueError('批次请求无效')
-                        pairs=[owner.rpc(row,session) for row in request]
+                        pairs=[owner.rpc(row,session,listener=self.server) for row in request]
                         replies=[value for value,_ in pairs if value is not None]
                         response=replies or None;headers={}
-                    else:response,headers=owner.rpc(request,session)
+                    else:response,headers=owner.rpc(request,session,listener=self.server)
                     self.respond(202 if response is None else 200,response,headers)
                 except ExpiredMcpSession:
                     self.respond(404)
@@ -359,9 +412,16 @@ class McpService:
             raise ExpiredMcpSession('MCP会话已失效，请重新初始化')
         return state
 
-    def rpc(self,request,session):
-        if isinstance(request,dict)and request.get('method')=='tools/call':return tool_rpc(self,request,session)
+    def check_listener(self,listener):
+        # A handler may finish reading its body after the service has restarted.
+        if listener is not None and listener is not self.server:
+            raise ExpiredMcpSession('MCP监听已变化，请重新初始化')
+
+    def rpc(self,request,session,*,listener=None):
+        if isinstance(request,dict)and request.get('method')=='tools/call':
+            return tool_rpc(self,request,session,listener=listener)
         with self.lock:
+            self.check_listener(listener)
             if self.closed:raise ValueError('MCP服务正在关闭。')
             if not isinstance(request,dict) or request.get('jsonrpc')!='2.0':raise ValueError('需要单个JSON-RPC对象')
             method=request.get('method');params=request.get('params',{});key=request.get('id')
@@ -379,7 +439,11 @@ class McpService:
                     instructions='AutoZZZ兼容层：原28工具和3提示词保留。应用使用本地单次授权；输入/登录/关闭/已核对operation使用本地操作会话；编辑使用本地编辑会话。block=true等待同一原任务且不锁住暂停/停止。刷本预算不限制低层输入，未知operation消费依操作而定；已识别刷本/补电/合成仍核对原预算和资源授权。以下为固定上游原说明，不能据此绕过上述授权边界。\n\n'+self.compatibility.catalog['instructions'])
             else:
                 if state is None:raise ValueError('缺少MCP会话编号，请先初始化')
-                if method=='notifications/initialized':state['initialized']=True;return None,headers
+                if method=='notifications/initialized':
+                    if not state['initialized']:
+                        state['initialized']=True
+                        self.log('MCP客户端已连接。')
+                    return None,headers
                 if 'id' not in request:return None,headers
                 if type(key)not in (str,int):raise ValueError('请求编号无效')
                 cache_key=json.dumps(key)

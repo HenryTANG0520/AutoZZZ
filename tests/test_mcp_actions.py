@@ -71,6 +71,21 @@ class ActionTests(unittest.TestCase):
         self.manager.owned_job=self.service._execution.job_id;self.manager.tool('stop_run',{})
         self.assertEqual(self.service.calls,[('stop',)])
 
+    def test_owned_action_diagnostics_are_recorded_once_without_input_payload(self):
+        execution=self.service._execution
+        execution.job_id='completed-action';execution.state='success'
+        execution.status=self.service.execution_status
+        execution.worker=threading.Thread(target=lambda:None)
+        execution.worker.start();execution.worker.join()
+        with self.manager.lock:
+            record=self.manager.actions.note(dict(job_id=execution.job_id),'prepared-1','input_text',
+                                             values=dict(text='fixture-private-input'))
+        record['future'].result(timeout=3)
+        logs=[row['message'] for row in self.manager.status()['logs']]
+        self.assertEqual(logs.count('MCP操作已提交 · input_text'),1)
+        self.assertEqual(logs.count('MCP任务已完成。'),1)
+        self.assertNotIn('fixture-private-input',str(logs))
+
 
 class HistoryReportsTests(unittest.TestCase):
     def test_three_instant_actions_in_one_poll_each_gets_a_report_then_ack(self):

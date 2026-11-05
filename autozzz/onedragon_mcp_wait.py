@@ -38,13 +38,14 @@ class PendingTool:
         return label+'运行成功'if success else label+'运行失败: '+str(status.last_status)
 
 
-def tool_rpc(owner,request,session):
+def tool_rpc(owner,request,session,*,listener=None):
     """Cache one Future per request id, including still-blocking requests.
 
     HTTP connections may retry while an operation runs. They all await the same
     completion, while stop/pause/status continue to acquire the dispatch lock.
     """
     with owner.lock:
+        owner.check_listener(listener)
         if owner.closed:raise ValueError('MCP服务正在关闭。')
         if request.get('jsonrpc')!='2.0':raise ValueError('需要JSON-RPC对象')
         params=request.get('params',{});key=request.get('id')

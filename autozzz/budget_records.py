@@ -1,4 +1,4 @@
-"""读取和核对持久预算；未知消耗按已预留上限记账，不退款或标记获胜。"""
+"""读取持久预算，区分已核实胜利和结果未知的预留。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -34,23 +34,34 @@ class BudgetRecords:
 
     def pending(self,server:str):
         if server not in ("cn","global"):raise ValueError("区服无效。")
+        from .onedragon_charge_recovery import NativeChargeRecovery
+
+        recovery = NativeChargeRecovery(self.directory)
         with RunLock():
             result=[]
             for path in sorted(self.directory.glob("*.json")):
                 data,revision=self._read(path)
                 entries=[entry for entry in data["entries"] if entry["status"]=="pending"]
                 if data["server"]==server and entries:
-                    result.append(dict(id=data["id"],revision=revision,pending=len(entries),cost=sum(e["cost"] for e in entries)))
+                    item = dict(id=data['id'], revision=revision, pending=len(entries), cost=sum(e['cost'] for e in entries))
+                    proof = recovery.verified_receipt(data, revision)
+                    if proof is not None:
+                        item['verified_reservation'] = proof['reservation_id']
+                    result.append(item)
             return result
 
     def account_reserved_upper_bound(self,identifier:str,revision:str):
         if not isinstance(identifier,str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",identifier):raise ValueError("预算编号无效。")
+        from .onedragon_charge_recovery import NativeChargeRecovery
+
         with RunLock():
             target=self.directory/(identifier+".json")
             data,current=self._read(target)
             if current!=revision:raise ValueError("预算记录已变化，请重新读取后核对。")
             entries=[entry for entry in data["entries"] if entry["status"]=="pending"]
             if not entries:raise ValueError("此预算没有待核对出战。")
+            if NativeChargeRecovery(self.directory).verified_receipt(data, current) is not None:
+                raise ValueError('已有核实的胜利记录，请重新读取后结清。')
             for entry in entries:
                 entry.update(status="settled",energy_after=None,resolution="reserved_upper_bound",battle_result="unknown",
                              reconciled_at=datetime.now().astimezone().isoformat())

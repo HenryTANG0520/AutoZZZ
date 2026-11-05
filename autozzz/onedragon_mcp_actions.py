@@ -108,6 +108,8 @@ class McpActions:
         self.manager.owned_job=result['job_id']
         self.manager.owned_run=dict(job_id=result['job_id'],prepared_job=parent,app_id=record['app_id'],
             budget=record['budget'],timeout_seconds=record['timeout_seconds'],source='mcp',session_id=self.session_id)
+        if tool in ACTION_TOOLS:
+            self.manager.log('MCP操作已提交 · '+tool)
         def observe():
             record['worker'].join()
             with self.manager.lock:self.finalize()
@@ -128,6 +130,9 @@ class McpActions:
             state['mcp_run']=copy.deepcopy(self.manager.owned_run)
             record['state']=copy.deepcopy(state)
             self.add_event(record,'finish',state)
+            outcome={'prepared':'MCP操作准备完成。','success':'MCP任务已完成。',
+                     'failed':'MCP任务失败，可在原任务报告查看。','stopped':'MCP任务已停止。'}
+            self.manager.log(outcome.get(state.get('state'),'MCP任务已结束。'))
             record['future'].set_result(state)
         finally:self.finalizing=False
 

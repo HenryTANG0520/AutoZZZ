@@ -12,6 +12,9 @@ from typing import Any
 from .onedragon_control import ObservationExpired,ExecutionStopped
 
 _battle_input: ContextVar[bool] = ContextVar("autozzz_battle_input",default=False)
+_permit_scope: ContextVar[int | str | None] = ContextVar('autozzz_battle_permit', default=None)
+_chain_frame: ContextVar[tuple | None] = ContextVar('autozzz_chain_frame', default=None)
+_UNOBSERVED = object()
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,8 @@ class BattleInputControl:
         self.originals = []
         self.previous_validator=None;self.input_guard=None
         self.permit_reason='not_observed'
+        self.permit_version = 0
+        self._permit_key = None
         self.cancellations=deque(maxlen=16)
         self.cancellation_count=0
         self._diagnostic_lock=threading.Lock()
@@ -40,6 +45,62 @@ class BattleInputControl:
         self._diagnostic_emitted=0
         self._stateful_atomic_types=()
         self._atomic_wait_status=None
+
+    def _current_permit(self):
+        scope = _permit_scope.get()
+        return type(scope) is not int or scope == self.permit_version
+
+    def _frame_permit(self, reason, *, chain_key=None, release=True):
+        control = self.control
+        with control.lock:
+            epoch = control.task_epoch
+            previous = self._permit_key
+            key = ((epoch, reason, chain_key) if reason in ('battle_visible', 'chain_visible') else None)
+            if control.stopped or control.manual_paused or control.focus_waiting or epoch != control.epoch:
+                key = None
+            changed = key != previous or (key is None and self.allowed)
+            release_old = changed and self.allowed and release
+            if changed:
+                self.permit_version += 1
+                self._permit_key = key
+                self.allowed = False
+            self.allowed_epoch = epoch
+            self.permit_reason = reason
+            version = self.permit_version
+        if release_old:
+            from .onedragon_gamepad import release_controller_inputs
+            release_controller_inputs(self.ctx.controller)
+        if changed and previous is not None and previous[1] == 'chain_visible':
+            battle = getattr(self.ctx, 'auto_battle_context', None)
+            if battle is not None:
+                from one_dragon.base.conditional_operation.state_recorder import StateRecord
+
+                token = _permit_scope.set(version)
+                try:
+                    battle.state_record_service.batch_update_states([
+                        StateRecord('连携技-准备', is_clear=True),
+                        StateRecord('按键可用-连携技', is_clear=True),
+                    ])
+                finally:_permit_scope.reset(token)
+        if key is not None and reason == 'battle_visible':
+            with control.lock:
+                if version == self.permit_version and epoch == control.epoch and not control.stopped:
+                    self.allowed = True
+        return version
+
+    def revoke_frame(self, reason='battle_not_verified'):
+        self._frame_permit(reason, release=False)
+
+    def observe_chain_frame(self, battle, screen, screenshot_time):
+        from .onedragon_chain import observe_chain_prompt
+
+        # An ordinary action must not continue while looking for a chain or result.
+        if self.permit_reason != 'chain_visible':
+            self._frame_permit('battle_not_verified')
+        evidence = observe_chain_prompt(battle, screen, screenshot_time)
+        if evidence is None:
+            self._frame_permit('battle_not_verified')
+        return evidence
 
     def _reset_cancelled_atomic(self,operation):
         # These three fixed-source atoms keep a WAIT/RUNNING/STOP state. An
@@ -57,8 +118,10 @@ class BattleInputControl:
                 'manual_pause'if getattr(control,'manual_paused',False)else
                 'focus_wait'if getattr(control,'focus_waiting',False)else
                 'observation_epoch_changed'if task_epoch!=epoch else
+                'battle_permit_changed'if not self._current_permit() else
                 'battle_permit_epoch_changed'if self.allowed_epoch!=epoch else
                 self.permit_reason if not self.allowed else
+                'periodic_action_outside_normal_battle'if _permit_scope.get()=='periodic'and self.permit_reason!='battle_visible'else
                 'fresh_frame_required'if hasattr(control,'observed_epoch')and control.observed_epoch!=epoch else None)
         if reason is None:return None
         return dict(reason=reason,stage=stage,message=str(message)[:160],allowed=self.allowed,
@@ -146,7 +209,8 @@ class BattleInputControl:
         return False
 
     def check_input(self) -> None:
-        if _battle_input.get() and (not self.allowed or self.allowed_epoch!=self.control.epoch):
+        if _battle_input.get() and (not self.allowed or self.allowed_epoch!=self.control.epoch or not self._current_permit()
+                or (_permit_scope.get()=='periodic' and self.permit_reason!='battle_visible')):
             message="当前画面不允许战斗输入。"
             # Capture at rejection: a newer HUD frame may restore permission
             # before the atomic Future handles this cancellation.
@@ -159,16 +223,22 @@ class BattleInputControl:
     def install(self) -> None:
         from one_dragon.base.conditional_operation.operation_executor import OperationExecutor
         from one_dragon.base.conditional_operation import operation_executor as executor_source
-        from one_dragon.base.screen import screen_utils
-        from one_dragon.base.screen.screen_utils import FindAreaResultEnum
+        from one_dragon.base.conditional_operation.operator import ConditionalOperator
+        from one_dragon.base.conditional_operation.state_record_service import StateRecordService
         from zzz_od.auto_battle.auto_battle_operator import AutoBattleOperator
         from zzz_od.auto_battle.auto_battle_context import AutoBattleContext
         from zzz_od.auto_battle.atomic_op.btn_common import AtomicBtnCommon,BtnRunStatus
         from zzz_od.auto_battle.atomic_op.btn_switch_agent import AtomicBtnSwitchAgent
         from zzz_od.auto_battle.atomic_op.btn_quick_assist import AtomicBtnQuickAssist
         execute = OperationExecutor._run
+        submit = OperationExecutor.run_async
+        trigger = ConditionalOperator._trigger_scene
         periodic = AutoBattleOperator.operate_periodically
         check = AutoBattleContext.check_battle_state
+        chain_check = AutoBattleContext.check_chain_attack
+        chain_recognition = AutoBattleContext._check_chain_attack_in_parallel
+        switch = AutoBattleContext.switch_by_name
+        publish = StateRecordService.batch_update_states
         assign = AutoBattleContext.__setattr__
         owner = self
         self._stateful_atomic_types=(AtomicBtnCommon,AtomicBtnSwitchAgent,AtomicBtnQuickAssist)
@@ -187,61 +257,150 @@ class BattleInputControl:
 
         @wraps(execute)
         def guarded_execute(executor):
-            if not owner.allowed or owner.allowed_epoch!=owner.control.epoch:
+            if not owner.allowed or owner.allowed_epoch!=owner.control.epoch or not owner._current_permit():
                 return owner._retire_cancelled(executor,owner._cancellation_evidence('entry'))
             token = _battle_input.set(True)
             try:return owner._run_sequence(executor,executor_source)
             finally:_battle_input.reset(token)
 
+        @wraps(submit)
+        def guarded_submit(executor):
+            scope = _permit_scope.get()
+            token = _permit_scope.set(owner.permit_version if type(scope) is not int else scope)
+            try:return submit(executor)
+            finally:_permit_scope.reset(token)
+
+        @wraps(trigger)
+        def guarded_trigger(operator, state_name):
+            if not owner._current_permit():
+                return None
+            if _chain_frame.get() is not None:
+                # A trigger-only source policy may retain its finished executor.
+                # It no longer owns priority over the next chain choice.
+                with operator._task_lock:
+                    previous = operator.running_executor
+                    if previous is not None and not previous.running:
+                        operator.running_executor = None
+            return trigger(operator, state_name) if owner._current_permit() else None
+
         @wraps(periodic)
-        def guarded_periodic(operator,*args,**kwargs):
+        def guarded_periodic(operator, generation):
             token = _battle_input.set(True)
-            try:return periodic(operator,*args,**kwargs)
-            finally:_battle_input.reset(token)
+            scope = _permit_scope.set('periodic')
+            try:
+                while operator.is_running and operator._periodic_generation == generation:
+                    try:return periodic(operator, generation)
+                    except (ObservationExpired, ExecutionStopped) as exc:
+                        evidence = owner._cancellation_evidence('periodic', exc)
+                        if evidence is None:raise
+                        if owner.control.task_epoch != owner.control.epoch or operator._stop_event.wait(.05):
+                            return None
+            finally:
+                _permit_scope.reset(scope)
+                _battle_input.reset(token)
 
         def guarded_assign(battle,name,value):
             if name in ("last_check_end_result","last_check_in_battle"):
                 with owner.control.lock:
-                    if owner.control.task_epoch != owner.control.epoch:return
+                    if owner.control.task_epoch != owner.control.epoch or not owner._current_permit():return
                     return assign(battle,name,value)
             return assign(battle,name,value)
+
+        @wraps(publish)
+        def guarded_publish(service, records):
+            if type(_permit_scope.get()) is not int:
+                return publish(service, records)
+            with owner.control.lock:
+                if owner._current_permit():
+                    return publish(service, records)
+            return None
+
+        @wraps(chain_check)
+        def guarded_chain_check(battle, screen, screenshot_time):
+            frame = _chain_frame.get()
+            if frame is None or frame[0] is not battle or frame[1] is not screen or frame[2] != screenshot_time:
+                return
+            control = owner.control
+            with control.lock:
+                if (not owner._current_permit() or owner.permit_reason != 'chain_visible'
+                        or control.task_epoch != control.epoch or control.observed_epoch != control.epoch
+                        or control.stopped or control.manual_paused or control.focus_waiting):
+                    return
+                owner.allowed = True
+            token = _battle_input.set(True)
+            try:return chain_check(battle, screen, screenshot_time)
+            finally:_battle_input.reset(token)
+
+        @wraps(chain_recognition)
+        def guarded_chain_recognition(battle, screen, screenshot_time):
+            try:
+                owner.control.checkpoint(require_frame=True)
+                owner.check_input()
+                return chain_recognition(battle, screen, screenshot_time)
+            except (ObservationExpired, ExecutionStopped) as exc:
+                evidence = owner._cancellation_evidence('chain', exc)
+                if evidence is None:raise
+                owner._record_cancellation(evidence)
+
+        @wraps(switch)
+        def guarded_switch(battle, agent_name):
+            if _chain_frame.get() is None:
+                return switch(battle, agent_name)
+            owner.control.checkpoint(require_frame=True)
+            owner.check_input()
+            try:
+                return switch(battle, agent_name)
+            except (ObservationExpired, ExecutionStopped):
+                # The source predicts the new team order before sending the key.
+                # If a transition wins that race, refresh the prediction from HUD.
+                battle.agent_context.team_info.request_check_all_agents()
+                battle.agent_context._last_check_agent_time = 0
+                raise
 
         @wraps(check)
         def guarded_check(battle,screen,screenshot_time,check_battle_end_normal_result=False,
                           check_battle_end_hollow_result=False,check_battle_end_defense_result=False,
-                          check_distance=False,sync=False):
+                          check_distance=False,sync=False,*,chain_prompt=_UNOBSERVED):
             owner.control.checkpoint(require_frame=True)
             in_battle = battle.is_normal_attack_btn_available(screen)
+            chain = None
             if not in_battle:
+                chain = (owner.observe_chain_frame(battle, screen, screenshot_time)
+                         if chain_prompt is _UNOBSERVED else chain_prompt)
                 # 结束结果同步确认，避免异步检查窗口中仍然发普攻。
                 battle._check_battle_end(screen,screenshot_time,check_battle_end_normal_result,
                                         check_battle_end_hollow_result,check_battle_end_defense_result)
             ended = battle.last_check_end_result is not None
-            chain = False
-            if not in_battle and not ended:
-                chain = any(screen_utils.find_area(owner.ctx,screen,"战斗画面",area)==FindAreaResultEnum.TRUE
-                            for area in ("连携技-1","连携技-2"))
             owner.control.checkpoint(require_frame=True)
-            with owner.control.lock:
-                owner.allowed = (not ended and (in_battle or chain) and not owner.control.manual_paused
-                                 and not owner.control.focus_waiting and owner.control.task_epoch==owner.control.epoch)
-                owner.allowed_epoch=owner.control.task_epoch
-                owner.permit_reason=('battle_end_confirmed'if ended else
-                                     'battle_visible'if in_battle else
-                                     'chain_visible'if chain else'battle_not_verified')
-            if not owner.allowed:
-                from .onedragon_gamepad import release_controller_inputs
-                release_controller_inputs(owner.ctx.controller)
             if ended:
+                owner._frame_permit('battle_end_confirmed')
                 if battle.auto_op is not None:battle.auto_op.stop_running()
                 return False
-            # 结束结果已经同步检查，其余角色、闪光、连携等仍走真实上游识别。
-            return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
+            if in_battle:
+                version = owner._frame_permit('battle_visible')
+            elif chain is not None:
+                chain_key = tuple((portrait.side, portrait.agent.agent_name) for portrait in chain.portraits)
+                version = owner._frame_permit('chain_visible', chain_key=chain_key)
+            else:
+                version = owner._frame_permit('battle_not_verified')
+            scope = _permit_scope.set(version)
+            frame = _chain_frame.set((battle, screen, screenshot_time) if not in_battle and chain is not None else None)
+            try:
+                return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
+            finally:
+                _chain_frame.reset(frame)
+                _permit_scope.reset(scope)
 
         self._patch(OperationExecutor,"_run",guarded_execute)
+        self._patch(OperationExecutor,'run_async',guarded_submit)
+        self._patch(ConditionalOperator,'_trigger_scene',guarded_trigger)
         self._patch(AutoBattleOperator,"operate_periodically",guarded_periodic)
         self._patch(AutoBattleContext,"check_battle_state",guarded_check)
+        self._patch(AutoBattleContext,'check_chain_attack',guarded_chain_check)
+        self._patch(AutoBattleContext,'_check_chain_attack_in_parallel',guarded_chain_recognition)
+        self._patch(AutoBattleContext,'switch_by_name',guarded_switch)
         self._patch(AutoBattleContext,"__setattr__",guarded_assign)
+        self._patch(StateRecordService,'batch_update_states',guarded_publish)
         self.previous_validator=self.control.input_validator
         def validate():
             if self.previous_validator is not None:self.previous_validator()

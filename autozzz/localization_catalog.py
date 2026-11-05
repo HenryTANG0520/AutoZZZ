@@ -510,6 +510,7 @@ YAML 条件策略|YAML conditional strategy
 待核对消耗|Unverified usage
 没有待核对消耗|No unverified usage
 按预留上限计入|Count reserved maximum
+按胜利记录结清|Settle verified victory
 已达到本轮预算|Budget limit reached
 已达到运行时限|Time limit reached
 刷本消耗电量。|Farming consumes energy.
@@ -639,6 +640,21 @@ MCP服务…|MCP service…
 本机 MCP 服务|Local MCP service
 端口|Port
 连接地址|Endpoint
+复制地址|Copy endpoint
+连接地址已复制|Endpoint copied
+重启|Restart
+当前运行状态|Current run
+服务日志|Service log
+资源操作清单|Resource actions
+暂无任务|No task
+就绪|Ready
+已准备|Prepared
+状态未知|Unknown status
+状态读取失败|Status refresh failed
+MCP端口须为1024—65535。|The MCP port must be between 1024 and 65535.
+MCP服务尚未停止。|The MCP service is still running.
+准备任务已变化，请重新核对授权。|The prepared task changed. Review it again before authorizing.
+编辑会改写所选资料并撤销未用授权。停止或重启服务、关闭窗口会停止 MCP 启动的任务。|Editing changes the selected data and revokes unused grants. Stopping, restarting, or closing this window stops tasks started by MCP.
 Bearer令牌|Bearer token
 执行授权|Run authorization
 授权准备的应用一次|Authorize one prepared run
@@ -1072,6 +1088,8 @@ EN_UI.update({
     '安装后默认不加载；启用后重新读取应用。':'Installed plugins are disabled by default. Enable one and reload apps.',
     '安装或修复会更改系统驱动，可能需要 Windows 管理员确认及重启。':'Installing or repairing changes system drivers and may require Windows administrator approval and a restart.',
     '实际消耗与结果未知；计入后，预留电量额度不退回。':'Actual consumption and outcome are unknown. Charging this reservation does not restore its energy allowance.',
+    '已有核实的胜利记录，请重新读取后结清。':'A verified victory is available. Reload the ledger to settle it.',
+    '已结清 {cost} 电量的预留，胜利已核实。':'Settled the {cost}-energy reservation with a verified victory.',
     '导入或截图后显示客户区与裁剪区域':'Import or capture to view the client area and crop',
     '已存内容留空保留；清除需勾选。':'Leave blank to retain stored content. Select Clear to remove it.',
     '应用到草稿':'Apply to draft',

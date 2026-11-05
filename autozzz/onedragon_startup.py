@@ -1,9 +1,11 @@
 """启动客户端、核实窗口，并尝试让本次启动的客户端取得焦点。"""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
+from threading import get_native_id
 import time
 
 from .models import AutomationError
@@ -56,11 +58,12 @@ class GameStartup:
         return str(Path(process['path']).resolve()).casefold()==str(self.path).casefold()
 
     @staticmethod
-    def _window_pid(api,hwnd):
+    def _window_owner(api,hwnd):
+        if not hwnd:
+            return None
         pid=wintypes.DWORD()
-        if hwnd and api.GetWindowThreadProcessId(hwnd,ctypes.byref(pid)):
-            return pid.value
-        return None
+        thread=api.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+        return (thread,pid.value) if thread and pid.value else None
 
     def _focus_new_client(self,window,identity):
         process=self._launched_process
@@ -69,16 +72,22 @@ class GameStartup:
         if self._focus_checked or getattr(process,'pid',None)!=pid or not callable(poll_process):
             return
 
-        def focus():
+        def interrupted():
+            return self.cancelled.is_set() or self.paused.is_set()
+
+        def verified_process():
             self.poll_keys()
-            if self.cancelled.is_set() or self.paused.is_set():
-                return
+            if interrupted():
+                return False
             self.launch_session.guard()
             rows=self.inventory()
             if len(rows)!=1:
-                return
+                return False
             row=rows[0]
-            if row['pid']!=pid or row['created']!=created or not self._matches_path(row):
+            return row['pid']==pid and row['created']==created and self._matches_path(row)
+
+        def focus():
+            if not verified_process():
                 return
             api=self._window_api
             if api is None:
@@ -86,16 +95,46 @@ class GameStartup:
                 api=user32
             hwnd=window.hwnd
             foreground=api.GetForegroundWindow()
-            if foreground==hwnd or self._window_pid(api,foreground)==pid:
+            foreground_owner=self._window_owner(api,foreground)
+            if foreground==hwnd or (foreground_owner is not None and foreground_owner[1]==pid):
                 self._focus_checked=True
                 return
-            if self._window_pid(api,hwnd)!=pid or poll_process() is not None:
+            target_owner=self._window_owner(api,hwnd)
+            if target_owner is None or target_owner[1]!=pid or poll_process() is not None:
                 return
-            if self.cancelled.is_set() or self.paused.is_set():
+            if interrupted():
                 return
             self._focus_checked=True
-            # Windows may decline. The normal login gate waits for foreground.
-            api.SetForegroundWindow(hwnd)
+            if api.GetForegroundWindow()!=foreground or interrupted():
+                return
+            if api.SetForegroundWindow(hwnd):
+                return
+            if foreground_owner is None or api.GetForegroundWindow()!=foreground or interrupted():
+                return
+            if not verified_process():
+                return
+
+            def can_continue():
+                return (self._window_owner(api,foreground)==foreground_owner
+                        and self._window_owner(api,hwnd)==target_owner
+                        and poll_process() is None and api.GetForegroundWindow()==foreground
+                        and not interrupted())
+
+            # Join only the input queues involved in this attempt. If the user
+            # changes windows, stop before making another foreground request.
+            current=get_native_id()
+            with ExitStack() as attached:
+                for thread in dict.fromkeys((foreground_owner[0],target_owner[0])):
+                    if thread==current:
+                        continue
+                    if not can_continue() or not api.AttachThreadInput(current,thread,True):
+                        return
+                    attached.callback(api.AttachThreadInput,current,thread,False)
+                if can_continue():
+                    api.BringWindowToTop(hwnd)
+                    if can_continue():
+                        api.SetForegroundWindow(hwnd)
+            # If Windows still declines, the normal login gate waits for focus.
 
         self.attempt(focus)
 

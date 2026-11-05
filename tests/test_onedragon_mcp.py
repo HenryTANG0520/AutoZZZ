@@ -152,6 +152,96 @@ class McpTests(unittest.TestCase):
         self.assertNotIn('confirmation_id',self.manager.tool('get_run_status',{})['autozzz']['resources'])
         self.assertNotIn(self.token,json.dumps(self.manager.status()['logs']))
 
+    def test_service_log_tracks_authenticated_lifecycle_without_poll_noise(self):
+        session=self.initialize()
+        notifications=dict(jsonrpc='2.0',method='notifications/initialized')
+        self.assertEqual(self.http(notifications,headers=self.session)[0],202)
+        ping=dict(jsonrpc='2.0',id=2,method='ping')
+        self.assertEqual(self.http(ping,headers=self.session)[0],200)
+        self.assertEqual(self.http(ping,headers={**self.session,'Authorization':'Bearer rejected-secret'})[0],401)
+        remote=dict(jsonrpc='2.0',id=3,method='tools/call',params=dict(name='get_run_status',arguments={}))
+        self.assertNotIn('logs',json.loads(self.http(remote,headers=self.session)[1]['result']['content'][0]['text']))
+        self.assertEqual(self.http(method='DELETE',headers=self.session)[0],200)
+        self.assertEqual(self.http(method='DELETE',headers=self.session)[0],404)
+        logs=self.manager.status()['logs']
+        messages=[row['message'] for row in logs]
+        self.assertEqual(len(messages),3)
+        self.assertEqual(messages[1:],['MCP客户端已连接。','MCP客户端已断开。'])
+        self.assertTrue(all(isinstance(row['time'],float) for row in logs))
+        for value in (self.token,session,'rejected-secret'):
+            self.assertNotIn(value,str(logs))
+
+    def test_current_run_summary_uses_control_state_without_copying_raw_error(self):
+        self.service.execution_status=lambda:dict(state='running',busy=True,job_id='other',prepared_app='email',
+            control={'state':'focus_wait'},run=dict(state='running',source='autozzz',app='email',current_node='检查邮件',
+            duration_seconds=12.5),error='fixture-password')
+        before=self.manager.status()
+        self.assertEqual(before['run_status'],dict(state='focus_wait',source='autozzz',app='email',step='检查邮件',duration_seconds=12.5))
+        self.assertEqual(before['logs'],self.manager.status()['logs'])
+        self.assertNotIn('fixture-password',str(before['logs'])+str(before['run_status']))
+
+    def test_log_ring_is_bounded_copied_and_redacts_the_current_bearer(self):
+        for index in range(205):self.manager.log(str(index))
+        self.manager.log('unexpected secret '+self.token)
+        rows=self.manager.status()['logs']
+        self.assertEqual(len(rows),200)
+        self.assertEqual(rows[0]['message'],'6')
+        self.assertNotIn(self.token,str(rows))
+        rows[0]['message']='changed'
+        self.assertEqual(self.manager.status()['logs'][0]['message'],'6')
+
+    def test_stop_then_start_rotates_bearer_and_invalidates_old_sessions(self):
+        old_session=self.initialize()
+        old_token=self.token
+        self.assertFalse(self.manager.stop()['running'])
+        self.token=self.manager.start(self.port)['bearer_token']
+        self.assertNotEqual(self.token,old_token)
+        ping=dict(jsonrpc='2.0',id=2,method='ping')
+        self.assertEqual(self.http(ping,headers={**self.session,'Authorization':'Bearer '+old_token})[0],401)
+        self.assertEqual(self.http(ping,headers=self.session)[0],404)
+        self.assertNotEqual(self.initialize(),old_session)
+        self.assertEqual(self.http(ping,headers=self.session)[0],200)
+
+    def test_delayed_body_on_old_listener_cannot_initialize_after_restart(self):
+        entered=threading.Event()
+        original=self.manager.session_state
+        def observe(session):
+            result=original(session)
+            entered.set()
+            return result
+
+        body=json.dumps(dict(jsonrpc='2.0',id=1,method='initialize',
+                            params=dict(protocolVersion='2025-03-26'))).encode()
+        connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=3)
+        try:
+            with patch.object(self.manager,'session_state',side_effect=observe):
+                connection.putrequest('POST','/mcp')
+                connection.putheader('Authorization','Bearer '+self.token)
+                connection.putheader('Accept','application/json, text/event-stream')
+                connection.putheader('Content-Type','application/json')
+                connection.putheader('Content-Length',str(len(body)))
+                connection.endheaders()
+                self.assertTrue(entered.wait(2))
+                self.manager.stop()
+                self.token=self.manager.start(self.port)['bearer_token']
+                connection.send(body)
+                response=connection.getresponse()
+                response.read()
+                self.assertEqual(response.status,404)
+                self.assertEqual(self.manager.sessions,{})
+        finally:
+            connection.close()
+        self.initialize()
+
+    def test_start_failure_is_logged_without_partial_token_or_native_error(self):
+        self.manager.stop()
+        with patch('autozzz.onedragon_mcp.ThreadingHTTPServer',side_effect=OSError('fixture native bind detail')):
+            with self.assertRaises(OSError):self.manager.start(self.port)
+        status=self.manager.status()
+        self.assertFalse(status['running'])
+        self.assertEqual(self.manager.token,'')
+        self.assertEqual(status['logs'][-1]['message'],'MCP服务启动失败，监听端口不可用。')
+
     def test_close_stops_only_owned_job_and_releases_port(self):
         self.grant();self.manager.tool('run_prepared_application',{});self.manager.close()
         self.assertFalse(self.manager.status()['running']);self.assertIn(('stop',),self.service.calls)
