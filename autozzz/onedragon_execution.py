@@ -587,9 +587,18 @@ class OneDragonExecution:
                         from .onedragon_group import GroupRunControl
                         self.group_control=GroupRunControl(self.ctx,self.control,self.prepared_applications)
                         self.group_control.install()
-                    if app_id == "lost_void" or (app_id == "one_dragon" and "lost_void" in self.prepared_applications):
+                    applications = self.prepared_applications if app_id == "one_dragon" else (app_id,)
+                    if "lost_void" in applications:
                         from .onedragon_lost_void import preserve_failed_exit
                         adapters.enter_context(preserve_failed_exit(self.ctx))
+                    if "shiyu_defense" in applications:
+                        from .onedragon_shiyu import preserve_battle_failure
+                        adapters.enter_context(preserve_battle_failure(self.ctx))
+                    if "withered_domain" in applications:
+                        from .onedragon_withered import WitheredExitControl
+                        withered_exit = WitheredExitControl(self.ctx, self.control)
+                        adapters.callback(withered_exit.close)
+                        withered_exit.install()
                     if self.uses_charge:
                         from .battle_budget import BattleBudget,budget_directory
                         from .onedragon_charge import ChargeBudgetControl

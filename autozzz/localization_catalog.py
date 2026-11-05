@@ -470,6 +470,7 @@ OCR 识别耗时|OCR time
 情报板|Intel board
 迷失之地|Lost Void
 迷失之地战斗失败，已撤退。|Lost Void battle failed. Retreat confirmed.
+式舆防卫战战斗失败，已返回大世界。|Shiyu Defense battle failed. Return to the world confirmed.
 迷失之地挑战重试已耗尽，已退出。|Lost Void retries exhausted. Exit confirmed.
 枯萎之都|Withered Domain
 委托助手|Commission assistant
