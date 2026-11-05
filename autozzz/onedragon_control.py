@@ -15,6 +15,13 @@ def validate_runtime_timeout(seconds):
     if type(seconds)is not int or seconds<30:raise ValueError('运行时限须为不小于 30 的整数秒。')
 
 
+def validate_finish_after_battle(app_id, enabled, *, auto_launch=False):
+    if type(enabled) is not bool:
+        raise ValueError('结算后停止开关须为布尔值。')
+    if enabled and (app_id != 'auto_battle' or auto_launch):
+        raise ValueError('结算后停止仅用于已进入战斗的独立自动战斗。')
+
+
 class ObservationExpired(RuntimeError):
     pass
 

@@ -122,12 +122,36 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
         if not check_desktop():record.update(state='skipped',error='当前交互桌面不可用，未启动游戏。');return dict(state='skipped',record=str(path))
         if plan.mode=='daily' and daily_review(plan,Path(review['config_path']))!=review:raise ValueError('每日配置已变化，请重新核对计划。')
         log_path=folder/'run.log'
+        legacy_paused = legacy_focus_waiting = False
+        phase_lock = threading.Lock()
         def emit(event):
-            if event.get('type')=='log':
+            nonlocal legacy_paused, legacy_focus_waiting
+            kind = event.get('type')
+            if kind == 'log':
                 with log_path.open('a',encoding='utf-8') as stream:stream.write(str(event.get('message',''))+'\n')
-            if event.get('type')in ('phase','report'):
-                record['phase']=str(event.get('phase') or event.get('path') or '')
-                write_record(path,record)
+                return
+            with phase_lock:
+                phase = None
+                if kind == 'phase':
+                    phase = str(event.get('phase') or '')
+                elif kind in ('focus_wait', 'paused'):
+                    if kind == 'focus_wait':
+                        legacy_focus_waiting = bool(event.get('waiting'))
+                    else:
+                        legacy_paused = bool(event.get('paused'))
+                    phase = '已暂停' if legacy_paused else '等待游戏恢复焦点' if legacy_focus_waiting else ''
+                elif kind == 'state' and event['state'].get('busy'):
+                    state = event['state']
+                    control = state.get('control', {})
+                    if control.get('manual_paused'):
+                        phase = '已暂停'
+                    elif control.get('focus_waiting'):
+                        phase = '等待游戏恢复焦点'
+                    else:
+                        phase = str(state.get('preparation_step') or '')
+                if phase is not None and phase != record['phase']:
+                    record['phase'] = phase
+                    write_record(path,record)
         record['state']='running';write_record(path,record)
         result=execute_task(plan,review,stop,emit,folder/'reports')
         state=result.get('state')

@@ -276,6 +276,8 @@ B服|Bilibili
 进入当前登录|Enter current login
 登出并登录|Log out and log in
 自动进入游戏|Enter game automatically
+结算后停止|Stop after this battle
+先进入普通战斗|Enter a normal battle first
 仅进入游戏，不执行每日|Enter game without daily tasks
 使用已打开的游戏|Use running game
 未运行时启动游戏|Launch game if not running
@@ -739,6 +741,11 @@ Bearer令牌|Bearer token
 等待原模板服务退出…|Waiting for the template service to exit…
 等待游戏回到前台|Waiting for game focus
 等待游戏恢复焦点|Waiting for game focus
+等待识别战斗|Waiting to detect battle
+正在接管战斗|Controlling the battle
+战斗胜利|Battle won
+已退出战斗|Battle exited
+战斗结算未核实|Battle result unverified
 等待通知发送|Waiting for notifications
 游戏已失焦；切回后自动继续。|Game lost focus. Return to it to resume.
 正在结束当前操作并保存运行报告。|Finishing the current action and saving the report.

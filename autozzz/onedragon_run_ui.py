@@ -64,6 +64,7 @@ class ExecutionWindow:
         if self.login_mode is not None:self.traces.append((self.login_mode,self.login_mode.trace_add("write",self.login_mode_changed)))
         self.window.bind("<Destroy>",self.disposed,add="+")
         self.auto_launch=tk.BooleanVar(self.window,app_id not in ("auto_battle","dodge_assistant","commission_assistant","operation_debug"))
+        self.finish_after_battle = None
         self.timeout=tk.StringVar(self.window,"600")
         self.allowance=tk.StringVar(self.window,"20")
         self.rounds=tk.StringVar(self.window,"1")
@@ -118,6 +119,20 @@ class ExecutionWindow:
         timeout=ttk.Entry(row,textvariable=self.timeout,width=7)
         timeout.pack(side="left")
         self.settings_controls=[path,browse,launch,timeout]
+        if app_id == 'auto_battle':
+            self.finish_after_battle = tk.BooleanVar(self.window, False)
+            self.auto_launch_button = launch
+            self._prior_auto_launch = False
+            battle_mode = ttk.Frame(settings)
+            battle_mode.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(d(12), 0))
+            battle_mode.columnconfigure(1, weight=1)
+            single = ttk.Checkbutton(battle_mode, text='结算后停止', variable=self.finish_after_battle,
+                                     command=self.single_battle_changed, style='Config.TCheckbutton')
+            single.grid(row=0, column=0, sticky='w')
+            self.single_battle_hint = theme.wrapped_label(battle_mode, text='先进入普通战斗', style='Hint.TLabel')
+            self.single_battle_hint.grid(row=0, column=1, sticky='ew', padx=(d(12), 0))
+            self.single_battle_hint.grid_remove()
+            self.settings_controls.append(single)
         if self.login_mode is not None:
             login_row=ttk.Frame(settings)
             login_row.grid(row=2,column=0,columnspan=3,sticky="ew",pady=(d(12),0))
@@ -302,6 +317,16 @@ class ExecutionWindow:
                                  "switch":"将退出游戏当前账号，并使用此账号配置中已保存的登录设置。"}[dict(LOGIN_MODES)[self.login_mode.get()]])
         self.connection_changed()
 
+    def single_battle_changed(self):
+        if self.finish_after_battle.get():
+            self._prior_auto_launch = self.auto_launch.get()
+            self.auto_launch.set(False)
+            self.single_battle_hint.grid()
+        else:
+            self.auto_launch.set(self._prior_auto_launch)
+            self.single_battle_hint.grid_remove()
+        self.update_buttons()
+
     def disposed(self,event):
         if event.widget is self.window:
             if self.run_shortcut is not None:self.run_shortcut.close()
@@ -350,6 +375,8 @@ class ExecutionWindow:
             self.run_hotkey_hint.grid_remove()
         self.report_button.state(["!disabled"] if self.last_report is not None else ["disabled"])
         for control in self.settings_controls:control.state(["disabled"] if self.busy or self.closing or self.loading_account else ["!disabled"])
+        if self.finish_after_battle is not None and self.finish_after_battle.get():
+            self.auto_launch_button.state(['disabled'])
         if self.finish_selector is not None and finish_busy:self.finish_selector.state(['disabled'])
         if self.uses_charge:self.budget_frame.grid()
         else:self.budget_frame.grid_remove()
@@ -423,7 +450,8 @@ class ExecutionWindow:
         except ValueError as exc:
             self.status.set(str(exc))
             return
-        extra={}
+        single_battle = self.app_id == 'auto_battle' and self.finish_after_battle.get()
+        extra = {'finish_after_battle': True} if single_battle else {}
         self.finish_action=None;self.finish_display=None
         if self.finish_selector is not None:
             index=max(0,self.finish_selector.current());label,mode=FINISH_CHOICES[index]
@@ -445,7 +473,10 @@ class ExecutionWindow:
         self.status.set("正在开始运行")
         confirmation=self.resource_confirmation_id if self.resource_required else None
         if self.app_id=='_rotation':self.session.send('start',budget=budget,timeout_seconds=timeout,resource_confirmation=confirmation,**extra)
-        else:self.session.send("start",app_id=self.app_id,budget=budget,timeout_seconds=timeout,auto_launch=self.auto_launch.get(),resource_confirmation=confirmation,**extra)
+        else:
+            self.session.send('start', app_id=self.app_id, budget=budget, timeout_seconds=timeout,
+                              auto_launch=False if single_battle else self.auto_launch.get(),
+                              resource_confirmation=confirmation, **extra)
         self._update_finish_display()
         self.update_buttons()
 
@@ -615,6 +646,16 @@ class ExecutionWindow:
                     name={"ready":"运行环境已就绪","prepared":"已准备","running":"正在运行","initializing":"正在初始化",
                           "preparing":"正在准备策略和模型","stopping":"正在停止","stopped":"已停止","failed":"运行失败","success":"运行完成"}.get(state["state"],state["state"])
                     if self.app_id=='_rotation':name={'prepared':'预检通过','preparing':'读取轮换配置','success':'轮换完成','failed':'轮换未完成','stopped':'轮换已停止'}.get(state['state'],name)
+                    if self.app_id == 'auto_battle':
+                        battle_state = (state.get('single_battle') or {}).get('state')
+                        name = {
+                            ('running', 'waiting'): '等待识别战斗',
+                            ('running', 'fighting'): '正在接管战斗',
+                            ('success', 'victory'): '战斗胜利',
+                            ('failed', 'withdrawn'): '已退出战斗',
+                            ('failed', 'unverified'): '战斗结算未核实',
+                            ('interrupted', 'unverified'): '战斗结算未核实',
+                        }.get((state['state'], battle_state), name)
                     if self.busy and state.get('input',{}).get('background'):
                         name+=' · 临时前台操作' if state['input'].get('foreground_borrowing') else ' · 后台'
                     if state["state"]=="success" and state.get("redemption"):

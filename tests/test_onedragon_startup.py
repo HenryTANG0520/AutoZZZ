@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -13,6 +14,30 @@ class Flag:
     def clear(self):self.value=False
     def is_set(self):return self.value
     def wait(self,seconds):self.waited(seconds);return self.value
+
+
+class WindowAPI:
+    def __init__(self):
+        self.foreground=100
+        self.owners={100:10,200:20}
+        self.requests=[]
+        self.on_probe=lambda _:None
+        self.on_request=lambda:None
+
+    def GetForegroundWindow(self):
+        return self.foreground
+
+    def GetWindowThreadProcessId(self,hwnd,pid):
+        self.on_probe(hwnd)
+        if hwnd not in self.owners:
+            return 0
+        pid._obj.value=self.owners[hwnd]
+        return 1
+
+    def SetForegroundWindow(self,hwnd):
+        self.requests.append(hwnd)
+        self.on_request()
+        return False
 
 
 class StartupTests(unittest.TestCase):
@@ -35,9 +60,22 @@ class StartupTests(unittest.TestCase):
                     inventory=lambda:[],find_window=self.missing,launch=self.launches.append,clock=lambda:self.time)
         values.update(extra);return GameStartup(self.path,**values)
 
+    def new_client(self,*,launch_pid=20,exit_code=None,**extra):
+        process=SimpleNamespace(pid=launch_pid,poll=lambda:exit_code)
+        def launch(path):
+            self.launches.append(path)
+            return process
+        api=WindowAPI()
+        values=dict(launch=launch,window_api=api,inventory=lambda:[self.process] if self.launches else [],
+                    find_window=lambda _:SimpleNamespace(hwnd=200))
+        values.update(extra)
+        return self.start(**values),api
+
     def test_existing_matching_window_never_launches_or_activates(self):
-        result=self.start(inventory=lambda:[self.process],find_window=lambda _:SimpleNamespace(hwnd=200)).run(True)
+        api=WindowAPI()
+        result=self.start(inventory=lambda:[self.process],find_window=lambda _:SimpleNamespace(hwnd=200),window_api=api).run(True)
         self.assertEqual(result,dict(window_handle=200,process_id=20));self.assertFalse(self.launches)
+        self.assertEqual(api.requests,[])
 
     def test_existing_process_without_window_is_waited_without_relaunch(self):
         def window(_):
@@ -55,6 +93,90 @@ class StartupTests(unittest.TestCase):
         startup=self.start(inventory=lambda:[self.process] if self.launches else [],find_window=lambda _:SimpleNamespace(hwnd=200))
         self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
         self.assertEqual(len(self.launches),1)
+
+    def test_actual_launch_session_result_can_authorize_one_foreground_request(self):
+        startup,api=self.new_client(launch=None)
+        def popen(argv,*,cwd,shell):
+            self.assertEqual(cwd,str(self.path.parent))
+            self.assertFalse(shell)
+            self.launches.extend(argv)
+            return SimpleNamespace(pid=20,poll=lambda:None)
+        startup.launch_session.store=SimpleNamespace(lock=nullcontext,active=self.path.parent/'hdr.json')
+        startup.launch_session.popen=popen
+        self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+        self.assertEqual(self.launches,[str(self.path)])
+        self.assertEqual(api.requests,[200])
+
+    def test_refused_foreground_request_is_not_repeated_after_pause(self):
+        def poll():
+            self.poll()
+            if self.ticks==5:self.pause.clear()
+        startup,api=self.new_client(poll_keys=poll)
+        api.on_request=self.pause.set
+        self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+        self.assertIn('已暂停',self.phases)
+        self.assertEqual(api.requests,[200])
+
+    def test_new_process_already_in_foreground_is_left_in_its_current_window(self):
+        startup,api=self.new_client()
+        api.foreground=201
+        api.owners[201]=20
+        self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+        self.assertEqual(api.requests,[])
+
+    def test_other_same_path_process_and_exited_launch_are_never_activated(self):
+        for options in (dict(launch_pid=21),dict(exit_code=0)):
+            with self.subTest(options=options):
+                self.launches.clear()
+                startup,api=self.new_client(**options)
+                self.assertEqual(startup.run(True),dict(window_handle=200,process_id=20))
+                self.assertEqual(api.requests,[])
+
+    def test_hwnd_owned_by_another_process_cannot_be_activated(self):
+        startup,api=self.new_client()
+        api.owners[200]=21
+        startup.run(True)
+        self.assertEqual(api.requests,[])
+
+    def test_inventory_creation_and_path_are_rechecked_before_activation(self):
+        replacements=(dict(self.process,created=456.),dict(self.process,path=str(self.path.parent/'other'/self.path.name)))
+        for replacement in replacements:
+            with self.subTest(replacement=replacement):
+                self.launches.clear()
+                rechecks=[]
+                def inventory():
+                    if not self.launches:
+                        return []
+                    rechecks.append(True)
+                    return [self.process if len(rechecks)==1 else replacement]
+                startup,api=self.new_client(inventory=inventory)
+                startup.run(True)
+                self.assertEqual(len(rechecks),2)
+                self.assertEqual(api.requests,[])
+
+    def test_stop_key_is_polled_again_before_foreground_request(self):
+        def poll():
+            self.poll()
+            if self.ticks==3:self.cancel.set()
+        startup,api=self.new_client(poll_keys=poll)
+        self.assertIsNone(startup.run(True))
+        self.assertEqual(api.requests,[])
+
+    def test_pause_and_stop_after_window_verification_prevent_activation(self):
+        for signal in (self.pause,self.cancel):
+            with self.subTest(signal=signal):
+                self.launches.clear()
+                self.cancel.clear();self.pause.clear()
+                self.ticks=0
+                def poll():
+                    self.poll()
+                    if self.ticks==4:self.cancel.set()
+                startup,api=self.new_client(poll_keys=poll)
+                def notify(hwnd):
+                    if hwnd==200:signal.set()
+                api.on_probe=notify
+                self.assertIsNone(startup.run(True))
+                self.assertEqual(api.requests,[])
 
     def test_different_client_and_duplicate_processes_refuse_launch(self):
         for rows in ([dict(self.process,path=str(self.path.parent/'other/ZenlessZoneZero.exe'))],[self.process,self.process]):

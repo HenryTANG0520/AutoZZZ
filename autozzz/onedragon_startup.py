@@ -1,8 +1,9 @@
-"""登录前仅启动客户端并等待窗口；不点击、不激活窗口、不重复启动。"""
+"""启动客户端、核实窗口，并尝试让本次启动的客户端取得焦点。"""
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
-import subprocess
 import time
 
 from .models import AutomationError
@@ -27,7 +28,7 @@ def launch_client(path):
 
 
 class GameStartup:
-    def __init__(self,path,*,cancelled,paused,poll_keys,elapsed,phase,inventory=None,find_window=None,launch=None,clock=None,attempt=None,options=None,guard=None,hdr_lease=None):
+    def __init__(self,path,*,cancelled,paused,poll_keys,elapsed,phase,inventory=None,find_window=None,launch=None,clock=None,attempt=None,options=None,guard=None,hdr_lease=None,window_api=None):
         self.path=Path(path).resolve()
         self.cancelled,self.paused,self.poll_keys=cancelled,paused,poll_keys
         self.elapsed,self.phase=elapsed,phase
@@ -43,10 +44,60 @@ class GameStartup:
         self.attempt=attempt or self._attempt
         self.launched=False
         self.previous_process=None
+        self._launched_process=None
+        self._focus_checked=False
+        self._window_api=window_api
 
     def _attempt(self,action):
         if self.cancelled.is_set() or self.paused.is_set():return False
         action();return True
+
+    def _matches_path(self,process):
+        return str(Path(process['path']).resolve()).casefold()==str(self.path).casefold()
+
+    @staticmethod
+    def _window_pid(api,hwnd):
+        pid=wintypes.DWORD()
+        if hwnd and api.GetWindowThreadProcessId(hwnd,ctypes.byref(pid)):
+            return pid.value
+        return None
+
+    def _focus_new_client(self,window,identity):
+        process=self._launched_process
+        pid,created=identity
+        poll_process=getattr(process,'poll',None)
+        if self._focus_checked or getattr(process,'pid',None)!=pid or not callable(poll_process):
+            return
+
+        def focus():
+            self.poll_keys()
+            if self.cancelled.is_set() or self.paused.is_set():
+                return
+            self.launch_session.guard()
+            rows=self.inventory()
+            if len(rows)!=1:
+                return
+            row=rows[0]
+            if row['pid']!=pid or row['created']!=created or not self._matches_path(row):
+                return
+            api=self._window_api
+            if api is None:
+                from .windows import user32
+                api=user32
+            hwnd=window.hwnd
+            foreground=api.GetForegroundWindow()
+            if foreground==hwnd or self._window_pid(api,foreground)==pid:
+                self._focus_checked=True
+                return
+            if self._window_pid(api,hwnd)!=pid or poll_process() is not None:
+                return
+            if self.cancelled.is_set() or self.paused.is_set():
+                return
+            self._focus_checked=True
+            # Windows may decline. The normal login gate waits for foreground.
+            api.SetForegroundWindow(hwnd)
+
+        self.attempt(focus)
 
     def run(self,auto_launch):
         try:return self._run(auto_launch)
@@ -67,7 +118,7 @@ class GameStartup:
                 self.phase('已暂停');self.cancelled.wait(.05);previous=self.clock();continue
             processes=self.inventory()
             if self.cancelled.is_set():return None
-            if any(str(Path(row['path']).resolve()).casefold()!=str(self.path).casefold() for row in processes):
+            if any(not self._matches_path(row) for row in processes):
                 raise AutomationError('另一绝区零客户端仍在运行，请先退出，避免 multi game detected。')
             if len(processes)>1:raise AutomationError('检测到多个绝区零进程，请保留要登录的一个客户端。')
             identity=None if not processes else (processes[0]['pid'],processes[0]['created'])
@@ -79,7 +130,7 @@ class GameStartup:
                 if self.paused.is_set():continue
                 def launch():
                     self.launched=True  # 启动结果未知也不自动再次启动。
-                    self.launch(str(self.path))
+                    self._launched_process=self.launch(str(self.path))
                 if not self.attempt(launch):continue
                 self.phase('已启动客户端，等待游戏窗口')
             try:window=self.find_window(str(self.path))
@@ -87,6 +138,9 @@ class GameStartup:
             if self.cancelled.is_set():return None
             if self.paused.is_set():continue
             if window is not None and identity is not None:
+                if auto_launch:self._focus_new_client(window,identity)
+                if self.cancelled.is_set():return None
+                if self.paused.is_set():continue
                 return dict(window_handle=window.hwnd,process_id=identity[0])
             self.phase('等待游戏窗口')
             self.cancelled.wait(.05)

@@ -791,11 +791,12 @@ class OneDragonService:
         return self._execution.start_client_close(timeout_seconds)
 
     def start_application(self,app_id:str,budget:dict|None=None,timeout_seconds:int=600,resource_confirmation:str|None=None,
-                          close_game_on_success:bool=False) -> dict:
+                          close_game_on_success:bool=False,finish_after_battle:bool=False) -> dict:
         self._assert_idle()
         if self._environment_changed: raise RuntimeError("环境或模型已修改，请重新连接工作进程后准备。")
         if self._execution is None:raise RuntimeError("请先初始化运行环境。")
         extra={'close_game_on_success':close_game_on_success} if close_game_on_success is not False else {}
+        if finish_after_battle is not False:extra['finish_after_battle']=finish_after_battle
         return self._execution.start_application(app_id,fixed_entry=True,budget=budget,timeout_seconds=timeout_seconds,resource_confirmation=resource_confirmation,**extra)
 
     @property

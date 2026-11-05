@@ -55,6 +55,59 @@ class Client:
 
 
 class SessionTests(unittest.TestCase):
+    def test_single_battle_is_opt_in_and_does_not_launch_the_game(self):
+        class SingleBattleClient(Client):
+            def submit(self, method, **params):
+                if method == 'execution_status' and self.state == 'running':
+                    self.state = 'success'
+                key = super().submit(method, **params)
+                state = self.requests[key][1]
+                state['single_battle_supported'] = True
+                if state['state'] == 'success':
+                    state['single_battle'] = dict(state='victory')
+                return key
+
+        Client.instances = []
+        events = queue.Queue()
+        with tempfile.TemporaryDirectory() as folder, patch('autozzz.onedragon_session.OneDragonClient', SingleBattleClient):
+            session = RuntimeSession(None, events.put, report_root=Path(folder))
+            try:
+                with patch.object(session, '_enter_game', side_effect=AssertionError('takeover must not launch')) as launch:
+                    session.send('prepare', app_id='auto_battle', server='cn', game_path='game.exe', region='cn')
+                    self.wait_event(events, lambda e: e['type'] == 'state' and e['state']['state'] == 'prepared')
+                    session.send('start', app_id='auto_battle', auto_launch=True, finish_after_battle=True)
+                    self.wait_event(events, lambda e: e['type'] == 'error')
+                    session.send('start', app_id='auto_battle', auto_launch=False, finish_after_battle=True)
+                    final = self.wait_event(events, lambda e: e['type'] == 'state' and e['state']['state'] == 'success')
+                    self.assertEqual(final['state']['single_battle'], dict(state='victory'))
+                    launch.assert_not_called()
+            finally:
+                session.close()
+                session.worker.join(5)
+            starts = [params for method, params in Client.instances[0].calls if method == 'start_application']
+            self.assertEqual(starts, [dict(app_id='auto_battle', finish_after_battle=True)])
+            report = json.loads(next(Path(folder).rglob('report.json')).read_text(encoding='utf-8'))
+            self.assertEqual(report['execution']['single_battle'], dict(state='victory'))
+
+    def test_older_prepared_worker_can_still_start_the_continuous_mode(self):
+        Client.instances = []
+        events = queue.Queue()
+        with tempfile.TemporaryDirectory() as folder, patch('autozzz.onedragon_session.OneDragonClient', Client):
+            session = RuntimeSession(None, events.put, report_root=Path(folder))
+            try:
+                session.send('prepare', app_id='auto_battle', server='cn', game_path='game.exe', region='cn')
+                self.wait_event(events, lambda e: e['type'] == 'state' and e['state']['state'] == 'prepared')
+                session.send('start', app_id='auto_battle', finish_after_battle=True)
+                warning = self.wait_event(events, lambda e: e['type'] == 'error')
+                self.assertIn('当前运行环境不支持', warning['message'])
+                session.send('start', app_id='auto_battle', finish_after_battle=False)
+                self.wait_event(events, lambda e: e['type'] == 'state' and e['state']['state'] == 'running')
+            finally:
+                session.close()
+                session.worker.join(5)
+            starts = [params for method, params in Client.instances[0].calls if method == 'start_application']
+            self.assertEqual(starts, [dict(app_id='auto_battle')])
+
     def test_trace_uses_original_connection_and_is_not_saved_in_run_report(self):
         class TraceClient(Client):
             def submit(self,method,**params):

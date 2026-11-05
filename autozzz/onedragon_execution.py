@@ -9,7 +9,7 @@ import time
 from typing import Any
 import uuid
 
-from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState,validate_runtime_timeout
+from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState, validate_finish_after_battle, validate_runtime_timeout
 from .run_lock import RunLock, profile_lock
 
 
@@ -27,6 +27,7 @@ class OneDragonExecution:
         self.manual_pause=threading.Event()
         self._input_ready=False
         self._f9_down=False
+        self.single_battle_state = None
         self._run_key_events = None
         self._run_key_listener_failed = False
         from .onedragon_environment import load_run_hotkeys
@@ -139,6 +140,7 @@ class OneDragonExecution:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
+            self.single_battle_state = None
             if state=="running":
                 from .windows import user32
                 f9_is_down = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
@@ -484,8 +486,12 @@ class OneDragonExecution:
                     self.preparation_step=''
 
     def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
-                          resource_confirmation: str | None = None,close_game_on_success:bool=False) -> dict:
+                          resource_confirmation: str | None = None,close_game_on_success:bool=False,
+                          finish_after_battle:bool=False) -> dict:
         """通过已准备的配置启动实际上游应用，保留同一进程与任务锁。"""
+        validate_finish_after_battle(app_id, finish_after_battle)
+        if finish_after_battle and self.rotation_guard is not None:
+            raise ValueError('轮换中无法接管当前战斗。')
         if not self.ctx.ready_for_application:
             raise RuntimeError("请先初始化一条龙运行环境。")
         if not self.ctx.run_context.is_app_registered(app_id):
@@ -502,6 +508,7 @@ class OneDragonExecution:
         elif budget is not None:raise ValueError("当前应用不需要战斗预算。")
         self.resource_confirmation.verify(resource_confirmation, self.prepared_hash)
         def run():
+            if finish_after_battle:self.single_battle_state='waiting'
             with self._run_scope():
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
                 self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
@@ -551,7 +558,17 @@ class OneDragonExecution:
                             config = ctx.run_context.get_config("world_patrol", ctx.current_instance_idx, "one_dragon")
                             ctx.auto_battle_context.init_auto_op(config.auto_battle)
                             return WorldPatrolRunRoute(ctx, route, start_idx=descriptor["start_index"])
-                    if factory is None:
+                    if finish_after_battle:
+                        from .onedragon_single_battle import single_battle_operation
+
+                        def record_battle_state(state):
+                            self.single_battle_state = state
+
+                        def takeover(ctx):
+                            return single_battle_operation(ctx, battle_input=self.battle_control, on_state=record_battle_state)
+
+                        self._run_bound_app(app_id, takeover, display_name='接管当前战斗')
+                    elif factory is None:
                         extra={'keep_running_on_success':True} if close_game_on_success else {}
                         close_ready=self._run_bound_app(app_id,**extra)
                     else: self._run_bound_app(app_id, factory)
@@ -599,6 +616,9 @@ class OneDragonExecution:
             if self.control.error:
                 self.error=self.control.error
                 result_state="failed"
+            elif result_state == 'success' and getattr(self, 'single_battle_state', None) not in (None, 'victory'):
+                self.error = '未核实普通战斗胜利结算。'
+                result_state = 'failed'
             elif result_state == 'success' and self.charge_control is not None:
                 pending_error = self.charge_control.pending_result_error()
                 if pending_error:
@@ -677,6 +697,14 @@ class OneDragonExecution:
         with self.lock:
             result = dict(job_id=self.job_id, state=self.state, busy=self.busy,
                           ready=bool(self.ctx.ready_for_application), error=self.error)
+            result['single_battle_supported'] = True
+            single_battle = getattr(self, 'single_battle_state', None)
+            if single_battle is not None:
+                if self.state == 'stopped':
+                    single_battle = 'stopped'
+                elif self.state == 'failed' and single_battle not in ('withdrawn', 'unverified'):
+                    single_battle = 'unverified'
+                result['single_battle'] = dict(state=single_battle)
             result['run_hotkeys'] = dict(getattr(self, 'run_hotkeys', dict(start='F9', stop='F10', warning='')))
             key_events = getattr(self, '_run_key_events', None)
             key_status = key_events.status() if key_events is not None else {}

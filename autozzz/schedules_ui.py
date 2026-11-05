@@ -153,7 +153,11 @@ class SchedulesWindow:
             if not row['bound']:state='系统定义缺失或冲突'
             if p['binding_error']:state=p['binding_error']
             self.plans.insert('', 'end',iid=p['id'],values=(p['name'],label,next(k for k,v in MODES.items() if v==p['mode']),state))
-        for i,row in enumerate(self.history):self.records.insert('','end',iid=str(i),values=(row['name'],row['started_at'],STATES.get(row['state'],row['state'])))
+        for i, row in enumerate(self.history):
+            state = STATES.get(row['state'], row['state'])
+            if row['state'] == 'running' and row.get('phase') in ('等待游戏恢复焦点', '已暂停'):
+                state = row['phase']
+            self.records.insert('', 'end', iid=str(i), values=(row['name'], row['started_at'], state))
         self.status.set('系统计划有 '+str(len(self.catalog['orphaned']))+' 项未在本地登记。' if self.catalog['orphaned'] else '关闭助手后计划仍有效；停用不会终止正在运行的任务。')
 
     def selected(self):

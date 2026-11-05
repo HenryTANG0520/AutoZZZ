@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--account-region", choices=("cn", "cn_b", "us", "eu", "asia", "twhkmo"), help="一条龙账号时区")
     parser.add_argument("--run-timeout", type=int, default=600, help="一条龙运行时限，不小于 30 的整数秒")
     parser.add_argument("--no-auto-launch", action="store_true", help="一条龙直接使用已进入游戏的窗口")
+    parser.add_argument('--finish-after-battle', action='store_true', help='接管当前普通战斗并在结算时停止，仅用于 --onedragon-run auto_battle')
     parser.add_argument('--confirm-resource-actions',action='store_true',help='允许本轮准备清单中的资源操作及第三方插件；操作与消费由配置决定')
     parser.add_argument("--battle-plan", type=Path, default=ROOT / "battle.json", help="独立战斗配置路径")
     parser.add_argument("--battle-strategy", help="覆盖方案中的策略JSON路径，或builtin:策略名")
@@ -56,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
     if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.confirm_resource_actions or args.run_timeout != 600):
         parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
+    if args.finish_after_battle and args.onedragon_run != 'auto_battle':
+        parser.error('--finish-after-battle 仅用于 --onedragon-run auto_battle。')
     if args.scheduled_run:
         if args.schedule_store is None or args.schedule_revision is None:parser.error('--scheduled-run 需要计划资料和配置版本。')
         if args.update_report is not None or args.no_restart:parser.error('程序更新选项不能与定时运行混用。')
@@ -93,13 +96,14 @@ def main(argv: list[str] | None = None) -> int:
             from .config import GAME_PATHS
             if args.server is None:
                 raise ValueError("一条龙命令行运行须明确指定 --server cn 或 global。")
+            extra = {'finish_after_battle': True} if args.finish_after_battle else {}
             result = run_application(args.onedragon_run, server=args.server,
                 game_path=args.game_path or GAME_PATHS[args.server],
                 region=args.account_region or ("cn" if args.server == "cn" else "asia"),
                 allowance=args.energy_limit, battles=args.battle_limit, maximum=args.battle_cost_limit,
                 budget_id=args.budget_id,
-                timeout=args.run_timeout, auto_launch=not args.no_auto_launch,confirm_resources=args.confirm_resource_actions,
-                emit=lambda event: print(json.dumps(event, ensure_ascii=False, default=str), file=sys.stderr, flush=True))
+                timeout=args.run_timeout, auto_launch=not (args.no_auto_launch or args.finish_after_battle),confirm_resources=args.confirm_resource_actions,
+                emit=lambda event: print(json.dumps(event, ensure_ascii=False, default=str), file=sys.stderr, flush=True), **extra)
             print(_json(result))
             return {"success": 0, "stopped": 130}.get(result["state"]["state"], 1)
         except Exception as exc:

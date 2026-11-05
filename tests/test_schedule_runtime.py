@@ -73,6 +73,28 @@ class ScheduledRuntimeTests(unittest.TestCase):
         path=next((self.store.path.parent/'runs').rglob('record.json'));value=json.loads(path.read_text())
         self.assertEqual(value['state'],'failed');self.assertEqual(execute.call_count,1)
 
+    def test_live_record_tracks_focus_wait_without_a_report_path_as_status(self):
+        def execute(plan, review, stop, emit, report_root):
+            record = report_root.parent / 'record.json'
+
+            def phase():
+                return json.loads(record.read_text(encoding='utf-8'))['phase']
+
+            emit(dict(type='state', state=dict(busy=True, preparation_step='登录', control=dict(focus_waiting=True))))
+            self.assertEqual(phase(), '等待游戏恢复焦点')
+            emit(dict(type='report', path='some/report.json'))
+            self.assertEqual(phase(), '等待游戏恢复焦点')
+            emit(dict(type='state', state=dict(busy=True, preparation_step='登录', control={})))
+            self.assertEqual(phase(), '登录')
+            emit(dict(type='focus_wait', waiting=True))
+            self.assertEqual(phase(), '等待游戏恢复焦点')
+            emit(dict(type='paused', paused=True))
+            emit(dict(type='focus_wait', waiting=False))
+            self.assertEqual(phase(), '已暂停')
+            return dict(state='stopped', report='original')
+
+        self.assertEqual(self.run_job(execute)['state'], 'stopped')
+
     def test_legacy_partial_daily_result_keeps_verified_daily_and_original_details(self):
         result=self.run_job(Mock(return_value=dict(state='partial',report=dict(status='partial',daily_verified=True,results=[dict(task='weekly',status='partial')]))))
         value=json.loads(Path(result['record']).read_text())

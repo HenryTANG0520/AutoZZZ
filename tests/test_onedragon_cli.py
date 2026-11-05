@@ -3,7 +3,7 @@ import signal
 import contextlib
 import io
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from autozzz.onedragon_cli import combat_budget, run_application
 
@@ -14,6 +14,19 @@ class NativeCliTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()) as output, self.assertRaises(SystemExit):
             main(['--battle', '--energy-limit', '20'])
         self.assertIn('--onedragon-run', output.getvalue())
+
+    def test_single_battle_flag_reuses_the_standalone_cli_without_auto_launch(self):
+        from autozzz.__main__ import main
+
+        for command in (['--battle'], ['--onedragon-run', 'charge_plan']):
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main([*command, '--finish-after-battle', '--server', 'cn'])
+        with patch('autozzz.onedragon_cli.run_application', return_value=dict(state=dict(state='success'))) as run:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(['--onedragon-run', 'auto_battle', '--finish-after-battle', '--server', 'cn']), 0)
+            self.assertEqual(run.call_args.args, ('auto_battle',))
+            self.assertIs(run.call_args.kwargs['finish_after_battle'], True)
+            self.assertIs(run.call_args.kwargs['auto_launch'], False)
 
     def test_budget_requires_all_three_explicit_limits(self):
         self.assertIsNone(combat_budget(None, None, None))

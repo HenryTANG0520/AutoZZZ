@@ -22,6 +22,7 @@ class RuntimeSession:
         self.stop_requested=threading.Event()
         self.runner=None
         self.run_hotkeys=None
+        self.single_battle_supported=False
         self.phase,self.job_id="",""
         self.mcp_active=False
         self.mcp_event_sequence=0
@@ -140,6 +141,7 @@ class RuntimeSession:
             self.emit(dict(type="rpc_result",tag=params["tag"],result=result))
         elif command=="prepare":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
+            self.single_battle_supported=False
             from .onedragon_runtime import EXECUTABLE_APPLICATIONS
             if params['app_id'] not in EXECUTABLE_APPLICATIONS and params['app_id']!='_login':
                 catalog=self._call(client,'catalog')
@@ -152,6 +154,14 @@ class RuntimeSession:
             self.emit(dict(type="phase",phase="正在初始化"))
         elif command=="start":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
+            from .onedragon_control import validate_finish_after_battle
+
+            finish_after_battle = params.get('finish_after_battle', False)
+            validate_finish_after_battle(params['app_id'], finish_after_battle, auto_launch=params.get('auto_launch', False))
+            if finish_after_battle and not self.single_battle_supported:
+                raise ValueError('当前运行环境不支持结算后停止，请使用随包运行环境或更新 SDK。')
+            if not finish_after_battle:
+                params.pop('finish_after_battle', None)
             finish_action=params.get('finish_action')
             if finish_action is not None:
                 from .onedragon_finish_action import POWER_ACTIONS
@@ -200,6 +210,7 @@ class RuntimeSession:
         if not state["busy"]:
             if state['state']=='prepared':
                 self.run_hotkeys=state.get('run_hotkeys')
+                self.single_battle_supported=state.get('single_battle_supported') is True
             if self.phase=="initializing" and state["state"]=="ready":
                 extra = {"route_debug": self.parameters["route_debug"]} if self.parameters.get("route_debug") is not None else {}
                 result=(self._call(client,"prepare_login",mode=self.parameters["login_mode"]) if self.parameters["app_id"]=="_login"
