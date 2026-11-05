@@ -164,6 +164,22 @@ class PatrolOrderControl:
         self._patch(WorldPatrolApp, "init_world_patrol", self._initialize)
         self._patch(WorldPatrolApp, "run_route", self._run_route)
 
+        local_completion = WorldPatrolApp.__dict__.get("after_operation_done")
+
+        @wraps(WorldPatrolApp.after_operation_done)
+        def settle(operation, result):
+            if (operation is self.operation and result.success
+                    and (self.counts["failed"] or self.counts["skipped"])):
+                # 保留 SDK 原返回供逐路线报告使用，按失败写记录并发送结束通知。
+                result = operation.op_fail(PATROL_INCOMPLETE_ERROR, result.data)
+            if local_completion is not None:
+                return local_completion(operation, result)
+            # 应用组会在运行时安装父类的结算回调。
+            return super(WorldPatrolApp, operation).after_operation_done(result)
+
+        self.originals.append((WorldPatrolApp, "after_operation_done", local_completion))
+        WorldPatrolApp.after_operation_done = settle
+
     def close(self):
         for cls, name, original in reversed(self.originals):
             if original is None:
