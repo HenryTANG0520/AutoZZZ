@@ -12,6 +12,7 @@ from .localization_tk import PresentationVar
 from .localization import application_name,tr
 from . import theme
 from .config import GAME_PATHS,ROOT,Settings
+from .onedragon_patrol_results import ATTENTION, patrol_attention, patrol_counts, patrol_label, patrol_result
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
 
@@ -80,6 +81,7 @@ class ExecutionWindow:
         style.layout('RunTool.TButton',[('Button.padding',{'sticky':'nsew','children':[('Button.label',{'sticky':'nsew'})]})])
         style.configure('RunTool.TButton',padding=(d(10),d(3)),background=theme.PANEL,foreground=theme.MUTED)
         style.map('RunTool.TButton',foreground=[('active',theme.ACCENT),('focus',theme.ACCENT)])
+        style.configure('RunWarning.Hint.TLabel', foreground=theme.WARNING)
         self.trace_button=ttk.Button(header,text='调试追踪…',command=self.show_trace,style='RunTool.TButton')
         self.trace_button.grid(row=0,column=2,sticky='e',padx=(d(14),0))
         self.mcp_button=None
@@ -214,6 +216,7 @@ class ExecutionWindow:
         area.rowconfigure(0,weight=1)
         self.log=tk.Text(area,wrap="word",font=("Microsoft YaHei UI",10),background=theme.FIELD,foreground=theme.TEXT,
                          insertbackground=theme.ACCENT,borderwidth=0,padx=d(12),pady=d(12),state="disabled")
+        self.log.tag_configure("warning", foreground=theme.WARNING)
         if self.rotation_canvas is not None:
             self.log.configure(height=7)
             from .onedragon_forms import enable_scroll
@@ -225,7 +228,8 @@ class ExecutionWindow:
         footer=ttk.Frame(self.window,padding=d(18))
         footer.grid(row=4,column=0,sticky="ew")
         footer.columnconfigure(0,weight=1)
-        theme.wrapped_label(footer,textvariable=self.status,style="Hint.TLabel").grid(row=0,column=0,sticky="ew",pady=(0,d(12)))
+        self.status_label = theme.wrapped_label(footer, textvariable=self.status, style="Hint.TLabel")
+        self.status_label.grid(row=0,column=0,sticky="ew",pady=(0,d(12)))
         self.run_hotkey_hint=theme.wrapped_label(footer,text='',style='Hint.TLabel')
         self.run_hotkey_hint.grid(row=2,column=0,sticky='ew',pady=(d(7),0))
         self.run_hotkey_hint.grid_remove()
@@ -236,7 +240,7 @@ class ExecutionWindow:
         self.pause_button=ttk.Button(actions,text="暂停 F9",command=self.pause)
         self.stop_button=ttk.Button(actions,text="停止 F10",command=self.stop,style="Danger.TButton")
         self.close_button=ttk.Button(actions,text="关闭",command=self.close)
-        self.report_button=ttk.Button(actions,text="报告",command=lambda:ui._open_path(self.last_report))
+        self.report_button=ttk.Button(actions,text="报告",command=lambda:ui._open_report(self.last_report, parent=self.window))
         for button in (self.prepare_button,self.start_button,self.pause_button,self.stop_button,self.report_button,self.close_button):button.pack(side="left",padx=(0,d(8)))
         self.battle_button=None
         if app_id in ('auto_battle','dodge_assistant','charge_plan','notorious_hunt','shiyu_defense','lost_void','withered_domain','world_patrol','commission_assistant','one_dragon','_rotation'):
@@ -340,9 +344,9 @@ class ExecutionWindow:
             for variable,token in self.traces:variable.trace_remove("write",token)
             self.traces.clear()
 
-    def write(self,message):
+    def write(self,message,level=""):
         self.log.configure(state="normal")
-        self.log.insert("end",str(message)+"\n")
+        self.log.insert("end",str(message)+"\n",level)
         if int(self.log.index("end-1c").split(".")[0])>600:self.log.delete("1.0","100.0")
         self.log.see("end")
         self.log.configure(state="disabled")
@@ -568,6 +572,8 @@ class ExecutionWindow:
                 elif kind=="report":
                     from pathlib import Path
                     self.last_report=Path(event["path"])
+                    if not self.ui.closing and self.ui._load_report(self.last_report, patrol_only=True):
+                        self.ui._refresh_controls()
                 elif kind=='trace':
                     payload=event if 'snapshot' in event else self.session.take_trace()
                     if payload is not None and self.trace_window is not None:self.trace_window.update(payload['snapshot'],payload.get('version'))
@@ -588,6 +594,9 @@ class ExecutionWindow:
                 elif kind=="state":
                     state=event["state"]
                     self.last_state=state
+                    patrol = patrol_result(state, self.app_id, route_debug=getattr(self, "route_debug", None) is not None)
+                    patrol_outcome = patrol["outcome"] if patrol else None
+                    rotation_accounts = state.get("rotation", {}).get("accounts", [])
                     if 'run_hotkeys' in state:
                         self.configure_run_shortcuts(state['run_hotkeys'])
                     if any(item.get('kind')=='restore_charge' for item in state.get('resources',{}).get('actions',[])):self.budget_note.grid_remove()
@@ -595,12 +604,15 @@ class ExecutionWindow:
                     if self.trace_window is not None and not self.trace_window.closed:self.trace_window.update_state(state)
                     if self.battle_monitor is not None and self.battle_monitor.window.winfo_exists():self.battle_monitor.update(state.get('battle'))
                     if self.rotation_table is not None:
-                        rows=state.get('rotation',{}).get('accounts',[])
+                        rows=rotation_accounts
                         ids={str(row['idx']) for row in rows}
                         for item in self.rotation_table.get_children():
                             if item not in ids:self.rotation_table.delete(item)
                         for item in rows:
-                            values=(item['name'],{'pending':'等待','running':'进行中','success':'完成','failed':'未完成','stopped':'已停止'}.get(item['state'],item['state']))
+                            label = {'pending':'等待','running':'进行中','success':'完成','failed':'未完成','stopped':'已停止'}.get(item['state'],item['state'])
+                            if item['state'] == 'success' and item.get('patrol_outcome') in ATTENTION:
+                                label = patrol_label(item['patrol_outcome'])
+                            values = item['name'], label
                             if self.rotation_table.exists(str(item['idx'])):self.rotation_table.item(str(item['idx']),values=values)
                             else:self.rotation_table.insert('','end',iid=str(item['idx']),values=values)
                         current=next((row for row in rows if row['idx']==state.get('rotation',{}).get('current')),None)
@@ -626,10 +638,18 @@ class ExecutionWindow:
                     self.mode_selector.configure(values=self.mode_labels)
                     if assistant.get("mode") is not None:self.mode.set(self.mode_labels[assistant["mode"]])
                     for item in state.get("applications",[]):
-                        if self.application_states.get(item["id"])!=item["state"]:
-                            self.application_states[item["id"]]=item["state"]
-                            label={"pending":"等待","running":"运行中","success":"完成","failed":"失败","skipped":"记录已完成","interrupted":"结果未核实"}.get(item["state"],item["state"])
-                            self.write(item["name"]+" · "+label+(" · "+item["detail"] if item.get("detail") else ""))
+                        label = {"pending":"等待","running":"运行中","success":"完成","failed":"失败","skipped":"记录已完成","interrupted":"结果未核实"}.get(item["state"],item["state"])
+                        detail = item.get("detail", "")
+                        signature, level = item["state"], ""
+                        if item["id"] == "world_patrol" and patrol and item["state"] in ("success", "failed"):
+                            label = patrol_label(patrol_outcome)
+                            counts = patrol_counts(patrol)
+                            detail = counts if item["state"] == "success" else " · ".join(filter(None, (detail, counts)))
+                            signature = (state.get("job_id"), item["state"], label, detail)
+                            level = "warning" if patrol_outcome in ATTENTION else ""
+                        if self.application_states.get(item["id"]) != signature:
+                            self.application_states[item["id"]] = signature
+                            self.write(item["name"] + " · " + label + (" · " + detail if detail else ""), level)
                     if state.get("window_handle") is not None:self.ui.overlay_game_handle=state["window_handle"]
                     self.busy=state["busy"]
                     self.bootstrapping=False
@@ -688,6 +708,17 @@ class ExecutionWindow:
                     if state["state"]=="success" and not fights and hunt.get("skipped"):
                         name="计划已跳过"
                         detail=hunt["skipped"][-1]["status"]
+                    terminal = not self.busy and state["state"] in ("success", "failed", "stopped", "interrupted")
+                    attention = patrol_attention([patrol_outcome, *(item.get("patrol_outcome") for item in rotation_accounts)])
+                    if terminal and self.app_id == "world_patrol" and patrol and name == "运行完成":
+                        name = patrol_label(patrol_outcome)
+                    elif terminal and attention:
+                        heading = {"运行完成": "流程结束", "轮换完成": "轮换结束"}.get(name, name)
+                        name = tr(heading) + " · " + patrol_label(attention)
+                    if terminal and patrol and self.app_id != "_rotation" and not detail:
+                        detail = patrol_counts(patrol)
+                    if hasattr(self, "status_label"):
+                        self.status_label.configure(style="RunWarning.Hint.TLabel" if terminal and attention else "Hint.TLabel")
                     self.status.set_status(name,detail[:100] if detail else "")
                     if not self.busy and state["state"] not in ("ready","prepared"):
                         self.prepared=False

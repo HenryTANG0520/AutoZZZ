@@ -4,7 +4,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-OPERATIONS = {"daily": "每日", "reward_only": "仅补领奖", "enter_game": "进入游戏", "check": "窗口检测"}
+from .localization import application_name, tr
+from .onedragon_patrol_results import patrol_label, report_patrol_outcome, report_patrols
+
+OPERATIONS = {"daily": "每日", "reward_only": "仅补领奖", "enter_game": "进入游戏", "check": "窗口检测",
+              "account_rotation": "账号轮换"}
 
 
 def input_readiness(helper_admin: bool, game_admin: bool | None) -> bool | None:
@@ -23,10 +27,14 @@ def report_context(report: dict, path: Path | None = None) -> str:
         when = "时间未记录"
     source = Path(report.get("source") or (path.parent.parent.parent if path else "."))
     kind = "打包版" if "dist" in source.parts else "源码/其他目录"
-    operation = OPERATIONS.get(report.get("operation", ""), "旧记录·操作未记录")
+    operation = OPERATIONS.get(str(report.get("operation", "")), "旧记录·操作未记录")
+    if report.get("operation") == "onedragon":
+        operation = application_name(str(report.get("app_id", "")), tr("原生应用"))
     day = report.get("reset_day") or report.get("game_day")
-    day = "配置推算日 " + day if day and day not in ("unverified", "unverified-global-reset") else "游戏日未核实"
-    return f"上次记录 · {when} · {operation} · {kind} · {day}"
+    day = "配置推算日 " + day if isinstance(day, str) and day and day not in ("unverified", "unverified-global-reset") else "游戏日未核实"
+    context = f"上次记录 · {when} · {operation} · {kind} · {day}"
+    outcome = report_patrol_outcome(report_patrols(report))
+    return f"{context} · {patrol_label(outcome)}" if outcome else context
 
 
 def exit_text(report: dict) -> str:

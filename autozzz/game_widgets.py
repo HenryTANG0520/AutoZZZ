@@ -342,12 +342,12 @@ class InsetPanel(t.Surface):
         p.box((6, 6, p.width-6, p.height-6), 20, fill=t.FIELD, outline="#050505", width=3)
 
 
-def show_task_detail(ui, title, status, detail):
+def show_task_detail(ui, title, status, detail, *, parent=None, warning=False):
     """A bounded, scrollable result sheet: long OCR errors cannot grow the footer."""
     previous = getattr(ui, "detail_window", None)
     if previous is not None and previous.winfo_exists():
         previous.destroy()
-    root, scale = ui.root, ui.ui_scale
+    root, scale = ui.root if parent is None else parent, ui.ui_scale
     d = lambda n: round(n*scale)
     dialog = tk.Toplevel(root)
     ui.detail_window = dialog
@@ -363,7 +363,8 @@ def show_task_detail(ui, title, status, detail):
     dialog.columnconfigure(0, weight=1)
     dialog.rowconfigure(2, weight=1)
     ttk.Label(dialog, text=title, style="CardTitle.TLabel", font=(t.FONT, 17)).grid(row=0, column=0, sticky="w", padx=d(22), pady=(d(20), d(7)))
-    ttk.Label(dialog, text=status, style="Card.TLabel", foreground=t.SUCCESS if status == "完成" else t.MUTED).grid(row=1, column=0, sticky="w", padx=d(22), pady=(0, d(14)))
+    color = t.WARNING if warning else t.SUCCESS if status == "完成" else t.MUTED
+    ttk.Label(dialog, text=status, style="Card.TLabel", foreground=color).grid(row=1, column=0, sticky="w", padx=d(22), pady=(0, d(14)))
     area = ttk.Frame(dialog, style="Card.TFrame")
     area.grid(row=2, column=0, sticky="nsew", padx=d(22))
     text = tk.Text(area, wrap="word", font=("Microsoft YaHei UI", 11), bg=t.BG, fg=t.TEXT,

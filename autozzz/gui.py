@@ -573,16 +573,51 @@ class AutoZZZWindow:
 
     def _discover_report(self) -> None:
         try:
-            reports = list((ROOT / "runs").glob("*/report.json"))
+            runs = ROOT / "runs"
+            reports = [*runs.glob("*/report.json"), *(runs / "onedragon").glob("*/report.json")]
             if reports:
-                self.last_report_file = max(reports, key=lambda path: path.stat().st_mtime)
-                self.last_output_dir = self.last_report_file.parent
-                self._find_screenshot(self.last_output_dir)
-                content = self.last_report_file.read_text(encoding="utf-8")
-                self._replace_text(self.report_text, content)
-                self.history_context.set(report_context(json.loads(content), self.last_report_file))
-        except (OSError, ValueError):
+                self._load_report(max(reports, key=lambda item: item.stat().st_mtime))
+        except OSError:
             pass
+
+    def _load_report(self, path: Path, *, patrol_only=False) -> bool:
+        try:
+            content = path.read_text(encoding="utf-8")
+            report = json.loads(content)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(report, dict):
+            return False
+        from .onedragon_patrol_results import format_patrol_report, report_patrols
+        sections = report_patrols(report)
+        if patrol_only and not sections:
+            return False
+        self.last_report_file, self.last_output_dir = path, path.parent
+        self._find_screenshot(self.last_output_dir)
+        self._replace_text(self.report_text, format_patrol_report(sections, content))
+        self.history_context.set(report_context(report, path))
+        return True
+
+    def _open_report(self, path: Path | None, *, parent=None) -> None:
+        if path is None:
+            return
+        try:
+            content = path.read_text(encoding="utf-8")
+            report = json.loads(content)
+        except (OSError, ValueError):
+            report = None
+        if isinstance(report, dict):
+            from .onedragon_patrol_results import (
+                ATTENTION, format_patrol_report, patrol_label, report_patrol_outcome, report_patrols,
+            )
+            sections = report_patrols(report)
+            if sections:
+                from .game_widgets import show_task_detail
+                outcome = report_patrol_outcome(sections)
+                show_task_detail(self, "运行报告", patrol_label(outcome), format_patrol_report(sections, content),
+                                 parent=parent, warning=outcome in ATTENTION)
+                return
+        self._open_path(path)
 
     def _open_path(self, path: Path | None) -> None:
         if path is None:

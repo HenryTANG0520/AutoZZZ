@@ -141,6 +141,9 @@ class OneDragonExecution:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
             self.single_battle_state = None
+            patrol_control = getattr(self, "patrol_control", None)
+            if patrol_control is not None:
+                patrol_control.reset()
             if state=="running":
                 from .windows import user32
                 f9_is_down = bool(user32.GetAsyncKeyState(0x78) & 0x8000)
@@ -737,6 +740,9 @@ class OneDragonExecution:
             result["prepared_applications"]=[dict(id=key,name=self.ctx.run_context.get_application_name(key)) for key in self.prepared_applications]
             if self.group_control is not None:result["applications"]=self.group_control.status()
             result["daily_interfaces"]=self.daily_control.status()
+            patrol = self.patrol_control.status()
+            if patrol is not None:
+                result["world_patrol"] = patrol
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
             bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
             result["window_handle"]=None if bound is None else bound.hwnd

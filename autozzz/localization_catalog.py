@@ -67,6 +67,24 @@ _WORDS='''快捷手册|Handbook
 重置进度|Reset progress
 重置运行进度|Reset run progress
 今日巡逻：{done:g} / {goal} 轮|Patrols today: {done:g} / {goal} rounds
+巡逻已完成|Patrol completed
+巡逻未完成|Patrol incomplete
+巡逻无需执行|No patrol routes to run
+巡逻失败|Patrol failed
+巡逻已停止|Patrol stopped
+巡逻结果未核实|Patrol result unverified
+巡逻结果未记录|Patrol result not recorded
+跳过（已有完成记录）|Skipped (already recorded)
+通过|Passed
+通过 {completed} · 失败 {failed} · 跳过 {skipped} · 已有完成记录 {already_finished}|Passed {completed} · Failed {failed} · Skipped {skipped} · Already recorded {already_finished}
+SDK 计入轮数 {before} → {after}|SDK counted rounds {before} → {after}
+第 {number} 轮 · {outcome} · {route}|Round {number} · {outcome} · {route}
+另有 {count} 条较早记录，见同目录运行日志。|See the run log in this folder for {count} earlier entries.
+旧报告的逐路线结果见同目录运行日志。|See the run log in this folder for route results in older reports.
+原始报告 JSON|Original report JSON
+原生应用|Native application
+流程结束|Run ended
+轮换结束|Rotation ended
 今日：{daily} / {daily_goal} 次 · 本周：{weekly} / {weekly_goal} 次|Today: {daily} / {daily_goal} runs · This week: {weekly} / {weekly_goal} runs
 重置「{account}」的今日巡逻进度？之后会重新计算本地执行进度。|Reset today's patrol progress for “{account}”? Local run progress will be recalculated.
 重置「{account}」的今日及本周挑战进度？之后会重新计算本地执行进度。|Reset daily and weekly challenge progress for “{account}”? Local run progress will be recalculated.

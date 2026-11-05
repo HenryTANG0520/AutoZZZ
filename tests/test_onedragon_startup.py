@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 import tempfile
-from threading import get_native_id
+from threading import Lock, get_native_id
 from types import SimpleNamespace
 import unittest
 
@@ -136,6 +136,27 @@ class StartupTests(unittest.TestCase):
         self.assertIn('已暂停',self.phases)
         self.assertEqual(api.requests,[200])
         self.assertEqual(api.attachments,[])
+
+    def test_foreground_request_leaves_launch_serialization_available_to_stop(self):
+        launch_lock = Lock()
+
+        def attempt(action):
+            with launch_lock:
+                action()
+                return True
+
+        startup, api = self.new_client(attempt=attempt)
+
+        def request(_hwnd):
+            self.assertFalse(launch_lock.locked())
+            self.cancel.set()
+            return False
+
+        api.on_request = request
+        self.assertIsNone(startup.run(True))
+        self.assertEqual(self.launches, [str(self.path)])
+        self.assertEqual(api.requests, [200])
+        self.assertEqual(api.attachments, [])
 
     def test_scoped_fallback_activates_once_and_detaches_both_threads(self):
         startup,api=self.new_client()

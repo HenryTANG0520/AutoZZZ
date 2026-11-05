@@ -136,7 +136,9 @@ class GameStartup:
                         api.SetForegroundWindow(hwnd)
             # If Windows still declines, the normal login gate waits for focus.
 
-        self.attempt(focus)
+        # User32 may wait on another input queue. Keep this call on the
+        # original worker without holding the lock used by stop and key release.
+        focus()
 
     def run(self,auto_launch):
         try:return self._run(auto_launch)

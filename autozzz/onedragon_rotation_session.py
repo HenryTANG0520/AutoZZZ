@@ -339,6 +339,10 @@ class RotationSession:
                     if result.get('window_identity') != login_window:
                         raise RuntimeError(result.get('error') or '账号应用窗口与登录时不同，停止轮换。')
                     record['state']=result['state'];record['applications']=result.get('applications',[])
+                    from .onedragon_patrol_results import patrol_result
+                    patrol = patrol_result(result, execution_app)
+                    if patrol:
+                        record['patrol_outcome'] = patrol['outcome']
                     from .charge_evidence import collect_charge_evidence
                     try:record['evidence']=collect_charge_evidence(result,self.paths.data,self.report_dir)
                     except (OSError,ValueError) as exc:record['evidence_errors']=[str(exc)]

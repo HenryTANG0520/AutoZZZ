@@ -237,7 +237,7 @@ def _footer(ui):
     ui.setting_controls.append(ui.save_button)
     files = ttk.Frame(actions, style="Footer.TFrame")
     files.grid(row=0,column=4,sticky="e")
-    ui.report_button = ttk.Button(files, text="报告", command=lambda: ui._open_path(ui.last_report_file))
+    ui.report_button = ttk.Button(files, text="报告", command=lambda: ui._open_report(ui.last_report_file))
     ui.screenshot_button = ttk.Button(files, text="截图", command=lambda: ui._open_path(ui.last_screenshot))
     ui.directory_button = ttk.Button(files, text="目录", command=lambda: ui._open_path(ui.last_output_dir))
     for button in (ui.report_button, ui.screenshot_button, ui.directory_button):
