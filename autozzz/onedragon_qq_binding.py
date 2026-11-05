@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from datetime import datetime
+from math import ceil
 import threading
 import time
 import importlib.util
@@ -77,7 +78,8 @@ class GatewayTransport:
                     parts = urlsplit(url)
                     if parts.scheme != "wss" or not parts.hostname or parts.username or parts.password:
                         raise ValueError("QQ 返回的网关地址无效。")
-                    kwargs.update(timeout=min(float(kwargs.get("timeout", 10)), remaining))
+                    # Identify 携带令牌，只发送给已核验的 WSS 地址。
+                    kwargs.update(timeout=min(float(kwargs.get("timeout", 10)), remaining), redirect_limit=0)
                     if transport.proxy:
                         proxy = urlsplit(transport.proxy)
                         kwargs.update(http_proxy_host=proxy.hostname, http_proxy_port=proxy.port or (80 if proxy.scheme == "http" else 1080),
@@ -140,7 +142,12 @@ class QQBinding:
     def status(self, job_id):
         with self.lock:
             if self.job is None or job_id != self.job["job_id"]: raise ValueError("绑定任务编号不匹配，请查询原任务。")
-            return dict(self.job, busy=self.busy, remaining_seconds=max(0, int(self.deadline - time.monotonic())) if self.busy else 0)
+            busy = self.busy
+            remaining = max(0, ceil(self.deadline - time.monotonic())) if busy else 0
+            result = dict(self.job, busy=busy, remaining_seconds=remaining)
+            if remaining == 0 and result["code"]:
+                result.update(code="", detail="匹配码已过期，等待原连接退出…")
+            return result
 
     def start(self, is_group, revision):
         if type(is_group) is not bool: raise ValueError("请选择单聊或群聊绑定。")
@@ -167,7 +174,7 @@ class QQBinding:
                 if urlsplit(proxy).scheme == "https": raise ValueError("QQ 网关绑定不支持 HTTPS 代理，请使用 HTTP 或 SOCKS 代理。")
                 if urlsplit(proxy).scheme.startswith("socks") and any(importlib.util.find_spec(name) is None for name in ("socks", "python_socks")):
                     raise ValueError("当前一条龙环境缺少 SOCKS 依赖，请使用 HTTP 代理。")
-            push._refresh_secrets()
+            push.protect_transient(values["APP_ID"].strip(), values["CLIENT_SECRET"].strip())
             with self.lock:
                 self.cancelled = threading.Event()
                 self.deadline = time.monotonic() + 60
@@ -212,14 +219,20 @@ class QQBinding:
                 push.reload_config()
                 config = push.push_config
                 atomic_apply(config, revision, lambda: config.update_channel_config_value("QQ_BOT", "GROUP_OPENID" if is_group else "OPENID", recipient), self.root)
+                self.job.update(state="success", code="", detail="群聊收件方已保存。" if is_group else "单聊收件方已保存。", saved=True)
                 from one_dragon.base.config.yaml_operator import invalidate_cache
                 invalidate_cache(str(config.file_path))
                 push.reload_config()
-                self.job.update(state="success", code="", detail="群聊收件方已保存。" if is_group else "单聊收件方已保存。", saved=True)
         except Exception as exc:
             with self.lock:
-                state = "cancelled" if self.cancelled.is_set() or isinstance(exc, BindingCancelled) else "timeout" if isinstance(exc, TimeoutError) else "failed"
-                self.job.update(state=state, code="", detail="已取消绑定。" if state == "cancelled" else redact(str(exc), push.secrets), saved=False)
+                detail = redact(str(exc), push.secrets)
+                if self.job["saved"]:
+                    state, detail = "failed", "收件方已保存，刷新配置失败：" + detail
+                else:
+                    state = "cancelled" if self.cancelled.is_set() or isinstance(exc, BindingCancelled) else "timeout" if isinstance(exc, TimeoutError) else "failed"
+                    if state == "cancelled":
+                        detail = "已取消绑定。"
+                self.job.update(state=state, code="", detail=detail)
         finally:
             try: lease.close()
             except Exception as exc:
