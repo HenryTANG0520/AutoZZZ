@@ -152,7 +152,8 @@ class DailyInterfaceControl:
         from one_dragon.base.geometry.rectangle import Rect
         from zzz_od.operation.compendium.combat_simulation import CombatSimulation
         from zzz_od.operation.choose_predefined_team import ChoosePredefinedTeam
-        from zzz_od.application.engagement_reward.engagement_reward_app import EngagementRewardApp
+        from zzz_od.application.city_fund.city_fund_app import CityFundApp
+        from zzz_od.application.engagement_reward import engagement_reward_app
         from zzz_od.operation.map_transport import MapTransport
         from zzz_od.application.coffee.coffee_app import CoffeeApp
         from zzz_od.application.coffee.coffee_config import CoffeeTransportPoint
@@ -160,6 +161,7 @@ class DailyInterfaceControl:
         from zzz_od.application.random_play.random_play_config import RandomPlayTransportPoint
         from zzz_od.application.daily_signin.daily_signin_app import DailySignInApp
 
+        EngagementRewardApp = engagement_reward_app.EngagementRewardApp
         unavailable = {'未找到目标地图区域', '未找到目标传送点'}
 
         def compatible_transport(op, original, point):
@@ -217,20 +219,31 @@ class DailyInterfaceControl:
                 return op.round_success('活跃度已满，四档日常奖励均已领取', data=tiers)
             return op.round_fail('未核实四档日常奖励全部领取', data=tiers)
 
-        def reward_done(op, original):
+        def reward_done(op, _original):
             verification = op.previous_node
             tiers = verification.data or []
-            result = original(op)
-            completed = verification.is_success and result.is_success
             claimed = getattr(op, '_autozzz_reward_claimed', False)
             self.engagement = dict(activity_full=4 in tiers, claimed_current_rewards=claimed,
-                daily_complete=completed, verified_reward_tiers=tiers)
+                daily_complete=verification.is_success, verified_reward_tiers=tiers)
+            result = engagement_reward_app.BackToNormalWorld(op.ctx).execute()
             if verification.is_success:
-                return op.round_success(verification.status) if completed else result
+                if result.success:
+                    return op.round_success(verification.status)
+                return op.round_fail('四档日常奖励已核实，返回大世界失败：'+(result.status or '界面未核实'))
             detail = verification.status or '未核实每日完成'
             if claimed:
                 detail = f'本次已确认奖励领取弹窗。{detail}'
             return op.round_fail(detail)
+
+        def fund_done(op, original):
+            verification = op.previous_node
+            result = original(op)
+            if verification.is_fail and result.is_success:
+                detail = '未核实城募等级奖励'
+                if verification.status:
+                    detail += '：'+verification.status
+                return op.round_fail(detail)
+            return result
 
         def map_area(op, original):
             # 记录每次观察到的区域与滑动方向，便于实机失败时查明地图/账号差异。
@@ -248,6 +261,7 @@ class DailyInterfaceControl:
         self.patch(EngagementRewardApp, 'back_at_first', begin_reward)
         self.patch(EngagementRewardApp, 'check_engagement', check_reward_tiers)
         self.patch(EngagementRewardApp, 'back_afterwards', reward_done)
+        self.patch(CityFundApp, 'back_to_world', fund_done)
         self.patch(MapTransport, 'choose_area', map_area)
         self.patch(CoffeeApp, 'transport', lambda op, original:
             compatible_transport(op, original, CoffeeTransportPoint.POINT_1.value.value))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 from functools import wraps
+from pathlib import Path
 import threading
 
 from .onedragon_control import ExecutionStopped,ObservationExpired
@@ -33,6 +34,40 @@ class GroupRunControl:
         from one_dragon.base.operation.application.group_application import GroupApplication
         from one_dragon.base.operation.one_dragon_app import OneDragonApp
         from one_dragon.base.operation.application_base import Application
+
+        if "coffee" in self.items and "charge_plan" in self.items:
+            from one_dragon.base.config.yaml_operator import YamlOperator
+            from one_dragon.base.operation.application.application_const import DEFAULT_GROUP_ID
+            from one_dragon.utils import os_utils
+            from zzz_od.application.coffee.coffee_app import CoffeeApp
+            from zzz_od.application.coffee.coffee_app_factory import CoffeeAppFactory
+            from zzz_od.application.coffee.coffee_config import CoffeeConfig
+
+            original_config = CoffeeAppFactory.create_config
+
+            @wraps(original_config)
+            def coffee_config(factory, instance_idx, group_id):
+                if factory.ctx is self.ctx and group_id == DEFAULT_GROUP_ID:
+                    account = Path(os_utils.get_work_dir()) / "config" / f"{instance_idx:02d}"
+                    legacy = account / "coffee.yml"
+                    grouped = account / group_id / "coffee.yml"
+                    if not grouped.exists() and legacy.is_file():
+                        # Reading an old config must leave the prepared rotation snapshot intact.
+                        config = CoffeeConfig.__new__(CoffeeConfig)
+                        YamlOperator.__init__(config, str(legacy))
+                        config.file_path = config._write_file_path = str(grouped)
+                        return config
+                return original_config(factory, instance_idx, group_id)
+
+            self.originals.append((CoffeeAppFactory, "create_config", original_config))
+            CoffeeAppFactory.create_config = coffee_config
+
+            def coffee_afterwards(app, original):
+                if app.ctx is self.ctx and app.config.run_charge_plan_afterwards:
+                    return app.round_success("按应用组保存顺序运行体力计划")
+                return original(app)
+
+            self._patch_node(CoffeeApp, "charge_plan_afterwards", coffee_afterwards)
 
         def run_app(group,original):
             idx=group._current_app_idx

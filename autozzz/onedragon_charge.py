@@ -254,7 +254,7 @@ class ChargeBudgetControl:
                 return operation.round_success(ChargePlanApp.STATUS_ROUND_FINISHED)
             return original(operation)
 
-        def challenge_complete(operation,original):
+        def plan_outcome(operation,original):
             previous=operation.previous_node
             if not previous.is_success:
                 self.failures.append(dict(plan_id=operation.current_plan.uid,
@@ -276,7 +276,8 @@ class ChargeBudgetControl:
         self._patch_node(ChooseNextOrFinishAfterBattle,"check_next",repeat)
         self._patch_node(ChooseNextOrFinishAfterBattle,"restore_charge",after_repeat_submit)
         self._patch_node(ChargePlanApp,"find_next_plan",next_plan)
-        self._patch_node(ChargePlanApp,"challenge_complete",challenge_complete)
+        self._patch_node(ChargePlanApp,"challenge_complete",plan_outcome)
+        self._patch_node(ChargePlanApp,"skip_plan_or_finish",plan_outcome)
         self._patch_node(ChargePlanApp,"back_to_world",back_to_world)
         if self.restore_mode!='不使用':
             from .onedragon_restore import RestoreChargeControl
