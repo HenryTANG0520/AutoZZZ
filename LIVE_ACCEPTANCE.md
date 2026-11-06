@@ -1,5 +1,9 @@
 # 实机验收清单
 
+2026-11-06 开发版 `57b72a8` 国服从冷启动进入街区，执行封存入口 `cn-3a7b8034ff29`。第 2 帧在淡出中，程序只等画面恢复；随后从稳定菜单点「更多」，在「菜单-更多功能」找到唯一「训练场」。一共两次点击，无按键遗留、无预算、零电量。按同一窗口身份正常退出客户端和两个 worker，桌面交还 AutoHSR。训练场内和连携待另行验收。证据见 `runs/parallel-20261106/B2-unknown-cold-start-preflight/live/cn-70fb1c5e3e4e/result.json`。
+
+同日 `6b48d44` 的上一轮国服也进入街区。一次菜单点击后遇到 SDK 无法识别的近黑转场，封存提前停止。客户端与 worker 正常退出，电量消耗为 0。后续封存把同一点击后短时未知帧纳入只读等待，并保留下一次点击的明确画面门槛。证据见 `runs/parallel-20261106/B2-fade-cold-start-preflight/live/cn-28a5de92a676/result.json` 和 `runs/parallel-20261106/B2-sealed-menu-unknown-transition/verify/replay-f00f3f673d/report.json`。
+
 2026-11-06 开发版 `434865b` 在 AutoHSR 交接后从关闭状态启动国服并核实街区。菜单入口的第一次点击成功提交，下一帧仍保留原街区 HUD，但整个画面已明显淡出。验收脚本将该帧仍识别为大世界，在 `no_transition` 处提前结束，训练入口继续待验收。原客户端和两个 worker 均正常退出，电量消耗为 0，桌面时段已交还 AutoHSR。证据见 `runs/parallel-20261106/B2-black-cold-start-preflight/live/cn-3685f75fbd0d/result.json` 和 `runs/parallel-20261106/B2-sealed-menu-black-transition/cases/cn-7fb638ee9061/menu.json`。
 
 2026-11-06 开发版 `fd2e84f` 接管原国服窗口，点击进入并核实街区。短暂失焦后同一任务自动继续。独立封存的 B2 入口核实前台和原菜单点击，下一帧是全黑转场，当前验收脚本在未知画面保护处停止。训练场、独立战斗和连携仍待实机。电量消耗为 0，客户端与 worker 正常退出，桌面已交还 AutoHSR。证据见 `runs/cn-b2-attach-774efd111/result.json` 及 `runs/parallel-20261106/B2-training-entry-sealed/cases/cn-06bdf845675c/menu.json`。

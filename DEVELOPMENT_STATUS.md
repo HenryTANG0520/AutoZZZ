@@ -4,13 +4,17 @@
 
 本轮优先推进新版首领交互与音频闪避、原场战斗续接、稳定 SDK 迁移。插件市场订阅和统一更新停在隔离候选，保留了回放、界面检查和变更记录。
 
-开发版 `61f9c51` 让固定 SDK 通过默认输出设备的 WASAPI ID 选择回环。新版 SDK 沿用原录音循环，两版都等旧流关闭后才重新打开。实际两版 SDK 和替身音频流回放确认旧缓冲失效、新缓冲触发原生声音闪避、F10 取消待重启及录音故障进入运行日志。物理声卡和游戏内时序待实测。证据见 `runs/parallel-20261106/B-audio-dodge/central-61f9c51/`。
+开发版 `61f9c51` 让固定 SDK 通过默认输出设备的 WASAPI ID 选择回环。新版 SDK 沿用原录音循环，两版都等旧流关闭后才重新打开。两版的本机物理端点测试各完成两次真实开闭，峰值只有一条活动流，最终退出后为零，录音线程池正常退出。实际 SDK 和替身音频流回放确认旧缓冲失效、新缓冲触发原生声音闪避、F10 取消待重启及录音故障进入运行日志。游戏内触发时序待实测。证据见 `runs/parallel-20261106/B-audio-dodge/central-61f9c51/` 和 `runs/parallel-20261106/B-audio-dodge/physical-endpoint/physical-*.json`。
 
 基塔布鲁和薇斯珀的真实录像均通过新版同帧模板识别。真实区域巡防和恶名狩猎节点的隔离回放覆盖连携、失焦、F10、重复输入及旧截图撤销。输入候选等待本机真图和按键时序，录像中的连续判据分别出现最长 317 和 800 毫秒空洞。原场续接的隔离认领已通过 10 组 Win32 进程回放。两次归档战斗存在同窗口、同队伍、同计时的画面碰撞，续接仍需场内连续证据和单独的终局结算凭证。证据见 `runs/parallel-20261106/B-boss-permit/native-v2/SUMMARY.md` 和 `runs/parallel-20261106/B3-priority-original-resume/replay-b7ab6fd9dac2/result.json`。
 
 开发版 `9392ae8` 提供独立 SDK 管理和旧资料恢复入口。实际 `f80b684` 与 `6008415` worker 回放当前默认、旧默认、旧稳定快照和显式候选，硬中断覆盖恢复切换前和继续切换后。快照按冻结收据更新未修改的默认资源，保留账号、自定义策略和插件资料。发行助手已隔离验证总锁交接；两区服的失败路径证明单区服提交后可提前保存，需要共同的持久门槛和恢复记录。现用固定版本仍为 `f80b684`。证据见 `runs/parallel-20261106/B-stable-sdk-control/SUMMARY.md` 和 `runs/parallel-20261106/B-stable-sdk-release-handoff/SUMMARY.md`。
 
 高难玩法回城按当前页核对返回目标，枯萎之都保留战斗失败结果和原计数规则。两版 SDK 用归档画面复跑。SDK 快照的 Windows 深路径复制新增实际文件回归。`9392ae8` 隔离无界面回归共 1,451 项，1,447 项通过，4 项缺本机历史素材跳过。证据见 `runs/headless-priority-9392ae8/headless.log`。
+
+开发版 `91b3c68` 的跨 pin 更新先封存两个区服的快照和旧发行收据，双方门槛均持久化后才交换安装目录、提交选择。原生助手的五个隔离回放覆盖正常跨 pin、同 pin、首个回执中断和首个选择中断的两种恢复。中央补测验证局部提交后快照和旧资料分别有晚写时，恢复旧发行保留两边文件。另验证空区服保持无资料标记、显式候选保留原指针和六项用户资料摘要。证据见 `runs/parallel-20261106/B-stable-sdk-orchestration/SUMMARY.md` 和 `B-stable-sdk-profile-preservation/result.json`。
+
+`57b72a8` 在「设置 → 程序版本 → 本机更新事务」和 `--program-update-status` 提供持久事务查询。`ba049fd` 的独立版本连接核实发行与区服身份，在旧根标记保留时仍能列出当前版本、归档和恢复入口。真实两版 worker 与私有 Tk 桌面回放通过。`57b72a8` 的隔离无界面回归共 1,458 项，1,454 项通过，4 项因缺历史素材跳过。现有默认仍为固定 `f80b684`，历史安装需先经过含新助手的同 pin 发行。证据见 `runs/headless-priority-57b72a8/headless.log` 和 `runs/parallel-20261106/B-stable-sdk-program-control/SUMMARY.md`。
 
 ## 2026-11-06 新版 SDK 适配与国服训练入口
 
