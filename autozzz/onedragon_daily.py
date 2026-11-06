@@ -91,23 +91,79 @@ class DailyInterfaceControl:
                 state['phase'] = 'verify'
             return op.round_wait('保存并核实怪物卡方案', wait=1)
 
-    def wait_for_team_list(self, op, original):
-        if op.start_at_team_list:
-            return original(op)
+    def _team_list_status(self, op):
         area = self.ctx.screen_loader.get_area('实战模拟室', '预备出战')
         if area is None:
             return op.round_fail('未配置预备编队就绪区域')
-        ready = op.round_by_ocr(op.last_screenshot, '预备出战', area=area, lcs_percent=.75)
+        return op.round_by_ocr(op.last_screenshot, '预备出战', area=area, lcs_percent=1.)
+
+    def wait_for_team_list(self, op, _original):
+        ready = self._team_list_status(op)
+        if ready.is_fail:
+            return ready
         if ready.is_success:
             return op.round_success(op.STATUS_TEAM_LIST_READY, wait=.5)
         # Wait for a new frame after the first accepted click, even if the old button remains visible.
-        if not op.node_clicked:
+        if not op.start_at_team_list and not op.node_clicked:
             opened = op.round_by_find_and_click_area(op.last_screenshot, '实战模拟室', '预备编队')
             if opened.is_success:
                 return op.round_wait(opened.status, wait=.5)
         return op.round_retry(ready.status, wait=.5)
 
+    def confirm_team(self, op, _original):
+        from zzz_od.screen_area.screen_normal_world import ScreenNormalWorldEnum
+
+        area = self.ctx.screen_loader.get_area('实战模拟室', '预备出战')
+        if area is None:
+            return op.round_fail('未配置预备编队就绪区域')
+        # The enabled list button is white. The shared deployment ROI also contains
+        # 出战 on the parent screen, and the list text stays dim during transitions.
+        confirmed = op.round_by_ocr_and_click(
+            op.last_screenshot, '预备出战', area=area, lcs_percent=1.,
+            color_range=[[180, 180, 180], [255, 255, 255]], pre_delay=0,
+            success_wait=.5, retry_wait=.5,
+        )
+        if not confirmed.is_success:
+            return confirmed
+        self.ctx.controller.mouse_move(ScreenNormalWorldEnum.UID.value.center)
+        return op.round_success(confirmed.status, wait=.5)
+
+    def _has_active_team_markers(self, op, ocr):
+        import cv2
+        import numpy as np
+        from one_dragon.utils import cv2_utils
+
+        loader = self.ctx.screen_loader
+        left = loader.get_area('编队选择', '选择标记左')
+        right = loader.get_area('编队选择', '选择标记右')
+        if left is None or right is None:
+            return False
+        for text, matches in ocr.items():
+            label = text.replace(' ', '').upper()
+            numbered = label.startswith('TEAM') and label[4:].isdigit()
+            if not (label.endswith('SELECT') or op._is_selected_text(label) or numbered):
+                continue
+            for match in matches:
+                if not any(op._is_match_result_in_rect(match, area.rect) for area in (left, right)):
+                    continue
+                crop = cv2_utils.crop_image_only(op.last_screenshot, match.rect)
+                if crop.size == 0:
+                    continue
+                median, high = np.percentile(cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY), (50, 90))
+                # During a page fade the letters can still be recognized at low contrast.
+                if high - median >= 115:
+                    return True
+        return False
+
     def choose_team(self, op, original):
+        ready = self._team_list_status(op)
+        if ready.is_fail:
+            return ready
+        if not ready.is_success:
+            return op.round_retry(ready.status, wait=.5)
+        ocr = self.ctx.ocr.run_ocr(op.last_screenshot)
+        if not self._has_active_team_markers(op, ocr):
+            return op.round_retry('等待预备编队卡片显示', wait=.5)
         # 防卫战仍使用上游的多队评分；普通刷本严格按用户保存的真实名称。
         if op.is_shiyu_defense or op.current_target_idx >= len(op.target_team_idx_list):
             return original(op)
@@ -121,7 +177,6 @@ class DailyInterfaceControl:
         state['rounds'] += 1
         if state['rounds'] > 24:
             return op.round_fail('未能按名称核实预编队伍：'+state['name'])
-        ocr = self.ctx.ocr.run_ocr(op.last_screenshot)
         slots = []
         matches = []
         for index in range(op.TEAM_SLOT_COUNT):
@@ -274,6 +329,7 @@ class DailyInterfaceControl:
         self.patch(CombatSimulation, 'click_card', enter_cards)
         self.patch(ChoosePredefinedTeam, 'check_screen', self.wait_for_team_list)
         self.patch(ChoosePredefinedTeam, 'choose_team', self.choose_team)
+        self.patch(ChoosePredefinedTeam, 'click_confirm', self.confirm_team)
         self.patch(EngagementRewardApp, 'check_reward', reward_result)
         self.patch(EngagementRewardApp, 'back_at_first', begin_reward)
         self.patch(EngagementRewardApp, 'check_engagement', check_reward_tiers)

@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
@@ -6,7 +7,7 @@ from autozzz.onedragon_daily import DailyInterfaceControl
 
 
 def result(kind, status=None, **kwargs):
-    return NS(kind=kind, status=status, is_success=kind=='success')
+    return NS(kind=kind, status=status, is_success=kind=='success', is_fail=kind=='fail')
 
 
 class DailyInterfaceTests(unittest.TestCase):
@@ -70,7 +71,7 @@ class DailyInterfaceTests(unittest.TestCase):
         self.ctx.screen_loader = NS(get_area=lambda *_: ready_area)
 
         def read(frame, text, *, area, lcs_percent):
-            self.assertEqual((text, area, lcs_percent), ('预备出战', ready_area, .75))
+            self.assertEqual((text, area, lcs_percent), ('预备出战', ready_area, 1.))
             return result('success' if frame == 'list' else 'retry')
 
         def click(frame, screen, name):
@@ -88,16 +89,54 @@ class DailyInterfaceTests(unittest.TestCase):
         self.assertEqual([item.kind for item in observed], ['wait', 'retry', 'retry', 'success'])
         self.assertEqual(observed[-1].status, 'ready')
         self.assertEqual(self.clicks, ['预备编队'])
+        op.start_at_team_list = True
+        op.node_clicked = False
+        op.last_screenshot = 'entry'
+        self.assertEqual(self.adapter.wait_for_team_list(op, None).kind, 'retry')
+        self.assertEqual(self.clicks, ['预备编队'])
+
+    def test_team_confirmation_requires_the_enabled_list_button_before_any_input(self):
+        area = object()
+        self.ctx.screen_loader = NS(get_area=lambda *_: area)
+        self.ctx.controller.mouse_move = self.clicks.append
+        screen_module = NS(ScreenNormalWorldEnum=NS(UID=NS(value=NS(center='uid'))))
+
+        def read_and_click(frame, text, **options):
+            self.assertEqual((text, options['area'], options['lcs_percent']), ('预备出战', area, 1.))
+            self.assertEqual(options['color_range'], [[180, 180, 180], [255, 255, 255]])
+            self.assertEqual(options['pre_delay'], 0)
+            if frame != 'selected list':
+                return result('retry')
+            self.clicks.append(text)
+            return result('success', text)
+
+        op = self.operation(round_by_ocr_and_click=read_and_click)
+        with patch.dict(sys.modules, {'zzz_od.screen_area.screen_normal_world': screen_module}):
+            for frame in ('plain deploy', 'fading list', 'selected list'):
+                op.last_screenshot = frame
+                self.assertEqual(self.adapter.confirm_team(op, None).is_success, frame == 'selected list')
+        self.assertEqual(self.clicks, ['预备出战', 'uid'])
 
     def team(self,names):
         self.names=names;self.selected=False;self.scrolls=[]
+        self.ctx.screen_loader = NS(get_area=lambda *_: object())
+        self.markers = self.enterContext(patch.object(self.adapter, '_has_active_team_markers', return_value=True))
         return self.operation(is_shiyu_defense=False,current_target_idx=0,target_team_idx_list=[2],
+            round_by_ocr=lambda *_, **__:result('success'),
             TEAM_SLOT_COUNT=6,_get_team_slot_rect_by_idx=lambda i:NS(index=i,center=NS(y=i*150)),
             _find_team_name=lambda _,rect:(self.names[rect.index] if rect.index<len(self.names) else None,None),
             _find_select_button=lambda _,rect:NS(center=NS(y=rect.index*150)),
             _find_selected_button=lambda *_:None,
             _is_team_selected=lambda _:self.selected,
             _scroll_team_list=self.scrolls.append)
+
+    def test_team_list_without_active_markers_never_selects_or_scrolls(self):
+        op = self.team(['坏女人'])
+        self.markers.return_value = False
+        self.assertEqual(self.adapter.choose_team(op, None).kind, 'retry')
+        self.names.clear()
+        self.assertEqual(self.adapter.choose_team(op, None).kind, 'retry')
+        self.assertFalse(self.clicks or self.scrolls)
 
     def test_name_wins_over_stale_index_and_requires_selected_feedback(self):
         op=self.team(['其他',' 坏 女 人 ','错误序号2'])
