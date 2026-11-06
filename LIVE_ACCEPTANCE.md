@@ -1,5 +1,7 @@
 # 实机验收清单
 
+2026-11-06 国服续接验收 `cn-858e6774c665488a` 从冷启动进入街区，绑定原客户端并核实管理员单次授权。原助手在 worker 登记前收到通信断开。该轮计划运行数为 0，账本没有待核对预留，任务锁已释放。原场续接实机仍待验证。随后用户将前台切到国际服。证据见 `runs/parallel-20261106/B3-priority-original-resume/B3-source-live-handoff-preflight/cases/cn-858e6774c665488a/result.json`。
+
 2026-11-06 开发版 `57b72a8` 国服从冷启动进入街区，执行封存入口 `cn-3a7b8034ff29`。第 2 帧在淡出中，程序只等画面恢复；随后从稳定菜单点「更多」，在「菜单-更多功能」找到唯一「训练场」。一共两次点击，无按键遗留、无预算、零电量。按同一窗口身份正常退出客户端和两个 worker，桌面交还 AutoHSR。训练场内和连携待另行验收。证据见 `runs/parallel-20261106/B2-unknown-cold-start-preflight/live/cn-70fb1c5e3e4e/result.json`。
 
 同日 `6b48d44` 的上一轮国服也进入街区。一次菜单点击后遇到 SDK 无法识别的近黑转场，封存提前停止。客户端与 worker 正常退出，电量消耗为 0。后续封存把同一点击后短时未知帧纳入只读等待，并保留下一次点击的明确画面门槛。证据见 `runs/parallel-20261106/B2-fade-cold-start-preflight/live/cn-28a5de92a676/result.json` 和 `runs/parallel-20261106/B2-sealed-menu-unknown-transition/verify/replay-f00f3f673d/report.json`。

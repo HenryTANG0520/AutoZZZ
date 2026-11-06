@@ -16,6 +16,8 @@
 
 `57b72a8` 在「设置 → 程序版本 → 本机更新事务」和 `--program-update-status` 提供持久事务查询。`ba049fd` 的独立版本连接核实发行与区服身份，在旧根标记保留时仍能列出当前版本、归档和恢复入口。真实两版 worker 与私有 Tk 桌面回放通过。`57b72a8` 的隔离无界面回归共 1,458 项，1,454 项通过，4 项因缺历史素材跳过。现有默认仍为固定 `f80b684`，历史安装需先经过含新助手的同 pin 发行。证据见 `runs/headless-priority-57b72a8/headless.log` 和 `runs/parallel-20261106/B-stable-sdk-program-control/SUMMARY.md`。
 
+开发版 `70cde5f` 接入源码显式入口 `--source-recovery` 的原工作进程保活、认领与合作停止，以及区域巡防同场计时观察。合并快照通过 10 个真实 Win32 进程回放，覆盖普通、未经可信启动、换目录、已有任务关闭、认领、认领者失联和账本变更。后续隔离复核已补保活角色和版本管理连接的请求边界。`9c3cdc9` 同代码快照无界面回归共 1,464 项，1,460 项通过，4 项因缺历史素材跳过。证据见 `runs/parallel-20261106/B3-priority-original-resume/replay-271272e985d4/result.json`、`runs/parallel-20261106/B3-update-role-audit/SUMMARY.md` 和 `runs/headless-priority-9c3cdc9/headless.log`。
+
 ## 2026-11-06 新版 SDK 适配与国服训练入口
 
 预备编队以完整「预备出战」和同帧卡片标记核实列表。最终确认只匹配已启用的亮字按钮。固定 `f80b684` 和官方 `6008415` 的 84 张归档帧判定一致，30 个稳定列表进入查队，19 个已选帧请求确认。普通出战、渐入和渐出帧未触发选队、滚动或确认。两版实际节点图分别通过按名选队和式舆双选回放。证据见 `runs/parallel-20261106/B-team-list-stability-replay/FINAL.md`。
