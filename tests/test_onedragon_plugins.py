@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import queue
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from autozzz.onedragon_plugins import PluginStore,PluginManager,metadata,leaf,digest_tree
 from autozzz.onedragon_plugins_ui import PluginSession
 from autozzz.onedragon_runtime import RequestPending
+from autozzz.onedragon_settings import has_settings
 
 
 class StoreTests(unittest.TestCase):
@@ -21,6 +23,78 @@ class StoreTests(unittest.TestCase):
         (folder/'demo_const.py').write_text("APP_ID='demo'\nAPP_NAME='演示'\nPLUGIN_VERSION='2.0'\nraise AssertionError('must not import')",encoding='utf-8');return folder
     def test_listing_parses_static_metadata_without_executing_plugin(self):
         self.plugin();row=self.store.catalog()['plugins'][0];self.assertEqual(row['app_name'],'演示');self.assertFalse(row['enabled']);self.assertFalse(self.store.state.exists())
+
+    def test_manifest_overrides_display_metadata_without_replacing_application_identity(self):
+        folder = self.plugin()
+        (folder / 'plugin.json').write_text(json.dumps({
+            'id': 'market-id', 'name': 'Market name', 'version': '3.0',
+            'author': {'name': 'Manifest author'}, 'homepage': 'https://example.invalid/project',
+            'summary': 'Manifest description',
+        }), encoding='utf-8')
+        row = self.store.catalog()['plugins'][0]
+        self.assertEqual((row['app_id'], row['app_name'], row['version']), ('demo', '演示', '3.0'))
+        self.assertEqual((row['author'], row['homepage'], row['description']),
+                         ('Manifest author', 'https://example.invalid/project', 'Manifest description'))
+        self.assertFalse(row['enabled'])
+
+    def test_unusable_manifest_keeps_legacy_version(self):
+        manifest = self.plugin() / 'plugin.json'
+        for raw in (b'{', b'[]', b'\xff', b'{"version": 3}', b'{"version": "unreleased"}',
+                    b'{"version": "3.0"}' + b' ' * (64 * 1024)):
+            with self.subTest(size=len(raw)):
+                manifest.write_bytes(raw)
+                self.assertEqual(self.store.catalog()['plugins'][0]['version'], '2.0')
+
+    def test_fixed_factory_names_require_native_sdk_support_and_remain_unique(self):
+        folder = self.plugin()
+        (folder / 'demo_factory.py').rename(folder / 'factory.py')
+        (folder / 'demo_const.py').rename(folder / 'const.py')
+        self.assertTrue(self.store.catalog()['plugins'][0]['error'])
+        modern = PluginStore(self.root, fixed_names=True)
+        self.assertEqual(modern.catalog()['plugins'][0]['app_id'], 'demo')
+        (folder / 'extra_factory.py').write_text('raise AssertionError("must not import")', encoding='utf-8')
+        self.assertIn('一个', modern.catalog()['plugins'][0]['error'])
+
+    def test_fixed_setting_name_is_exposed_on_the_matching_native_contract(self):
+        folder = self.plugin()
+        (folder / 'app_setting.py').touch()
+        info = NS(plugin_dir=folder)
+        with patch('autozzz.onedragon_settings.find_spec', return_value=None):
+            self.assertFalse(has_settings(info))
+        with patch('autozzz.onedragon_settings.find_spec', return_value=object()):
+            self.assertTrue(has_settings(info))
+        (folder / 'demo_app_setting.py').touch()
+        with patch('autozzz.onedragon_settings.find_spec', side_effect=AssertionError('legacy is supported')):
+            self.assertTrue(has_settings(info))
+
+    def test_manifest_downgrade_requires_confirmation_before_archiving_or_installing(self):
+        folder = self.plugin()
+        manifest = folder / 'plugin.json'
+        original = b'{"version": "3.0"}'
+        manifest.write_bytes(original)
+        # The real SDK importer is covered by the native replay. Here exercise
+        # the bridge's review token and explicit confirmation with a preview row.
+        importer = NS(fixed_names=True, preview_plugins_from_zip=lambda _: [
+            NS(plugin_name='demo', version='2.0', author=None),
+        ])
+        source = self.root.parent / (self.root.name + '-plugin-source.zip')
+        source.write_bytes(b'preview fixture')
+        self.addCleanup(source.unlink, missing_ok=True)
+        with patch('autozzz.onedragon_plugins.importer_for', return_value=importer), patch(
+            'autozzz.onedragon_plugins.RunLock', side_effect=nullcontext,
+        ), patch('autozzz.onedragon_plugins.profile_lock', side_effect=lambda _: nullcontext()):
+            manager = PluginManager(self.root)
+            self.addCleanup(manager.close)
+            manager.preview(source, 'zip')
+            manager.worker.join(5)
+            review = manager.status()['result']
+            self.assertEqual(review['plugins'][0]['old_version'], '3.0')
+            self.assertTrue(review['plugins'][0]['downgrade'])
+            manager.install(review['token'], ['demo'], ['demo'], review['revision'])
+            manager.worker.join(5)
+            self.assertIn('降级', manager.status()['error'])
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertFalse(manager.archives.exists())
     def test_revision_tracks_package_changes_and_loading_preferences_but_not_python_cache(self):
         folder=self.plugin();before=self.store.revision();cache=folder/'__pycache__';cache.mkdir();(cache/'generated.pyc').write_bytes(b'generated')
         self.assertEqual(self.store.revision(),before);(folder/'data.txt').write_text('new');self.assertNotEqual(self.store.revision(),before)

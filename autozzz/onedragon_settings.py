@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from importlib.util import find_spec
 import os
 from pathlib import Path
 import subprocess
@@ -18,7 +19,19 @@ def settings_revision(ctx):
 
 def has_settings(info):
     directory=getattr(info,'plugin_dir',None)
-    return directory is not None and any(path.is_file() for path in Path(directory).glob('*_app_setting.py'))
+    if directory is None:
+        return False
+    directory = Path(directory)
+    if any(path.is_file() for path in directory.glob('*_app_setting.py')):
+        return True
+    if not (directory / 'app_setting.py').is_file():
+        return False
+    # The native scanner has no capability flag. The official manifest API
+    # identifies the SDK contract that includes native fixed-name settings.
+    try:
+        return find_spec('one_dragon.base.operation.application.plugin_manifest') is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def validate_target(ctx,app_id,instance_idx,revision,group_id='one_dragon'):

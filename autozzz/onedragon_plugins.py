@@ -13,9 +13,19 @@ import uuid
 from contextlib import nullcontext
 from datetime import datetime
 
+from packaging.version import InvalidVersion, Version
+
 from .run_lock import profile_lock,RunLock
 
 STATE='autozzz/plugin-state.json'
+MANIFEST_FILE = 'plugin.json'
+MAX_CONST_BYTES = 512 * 1024
+MAX_MANIFEST_BYTES = 64 * 1024
+CONST_FIELDS = {
+    'app_id': 'APP_ID', 'app_name': 'APP_NAME', 'version': 'PLUGIN_VERSION',
+    'author': 'PLUGIN_AUTHOR', 'homepage': 'PLUGIN_HOMEPAGE',
+    'description': 'PLUGIN_DESCRIPTION',
+}
 
 
 def leaf(name):
@@ -61,26 +71,97 @@ def digest_tree(root,code_only=False):
     return result.hexdigest()
 
 
-def metadata(folder):
-    folder=Path(folder);factories=list(folder.glob('*_factory.py'));constants=list(folder.glob('*_const.py'))
+def _constant_metadata(raw):
+    if len(raw) > MAX_CONST_BYTES:
+        raise ValueError('插件常量文件过大。')
+    values = {}
+    for node in ast.parse(raw.decode('utf-8-sig')).body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    values[target.id] = node.value.value
+    return {field: values[key][:4096] for field, key in CONST_FIELDS.items()
+            if type(values.get(key)) is str}
+
+
+def _manifest_metadata(raw):
+    if not raw or len(raw) > MAX_MANIFEST_BYTES:
+        return {}
+    try:
+        manifest = json.loads(raw.decode('utf-8-sig'))
+    except (ValueError, RecursionError):
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    author = manifest.get('author')
+    fields = (
+        ('version', manifest.get('version'), 32, False),
+        ('author', author.get('name') if isinstance(author, dict) else None, 200, True),
+        ('homepage', manifest.get('homepage'), 200, False),
+        ('description', manifest.get('summary'), 500, True),
+    )
+    result = {}
+    for field, value, limit, truncate in fields:
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if not value or any(ord(char) < 32 and char not in '\n\t' for char in value):
+            continue
+        if len(value) > limit and not truncate:
+            continue
+        if field == 'homepage' and not value.lower().startswith('https://'):
+            continue
+        result[field] = value[:limit]
+    return result
+
+
+def _metadata_from_bytes(constants, manifest):
+    legacy = _constant_metadata(constants)
+    current = _manifest_metadata(manifest)
+    if legacy.get('version') and current.get('version'):
+        try:
+            Version(current['version'])
+        except InvalidVersion:
+            current.pop('version')
+    return legacy | current
+
+
+def _manifest_bytes(folder):
+    path = owned(folder / MANIFEST_FILE, folder)
+    try:
+        with path.open('rb') as stream:
+            return stream.read(MAX_MANIFEST_BYTES + 1)
+    except OSError:
+        return b''
+
+
+def _directory_metadata(folder, const_file):
+    with owned(const_file, folder).open('rb') as stream:
+        return _metadata_from_bytes(stream.read(MAX_CONST_BYTES + 1), _manifest_bytes(folder))
+
+
+def metadata(folder, *, fixed_names=False):
+    folder=Path(folder)
     result=dict(name=folder.name,app_id='',app_name=folder.name,version='',author='',homepage='',description='',error='')
     try:
-        if len(factories)!=1 or len(constants)!=1:raise ValueError('插件根目录须各有一个 *_factory.py 与 *_const.py。')
-        path=owned(constants[0],folder)
-        if path.stat().st_size>512*1024:raise ValueError('插件常量文件过大。')
-        values={}
-        for node in ast.parse(path.read_text(encoding='utf-8-sig')).body:
-            if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant):
-                for target in node.targets:
-                    if isinstance(target,ast.Name):values[target.id]=node.value.value
-        for field,key in (('app_id','APP_ID'),('app_name','APP_NAME'),('version','PLUGIN_VERSION'),('author','PLUGIN_AUTHOR'),('homepage','PLUGIN_HOMEPAGE'),('description','PLUGIN_DESCRIPTION')):
-            if type(values.get(key))is str:result[field]=values[key][:4096]
+        files = [path for path in folder.iterdir() if path.is_file()]
+        factories = [path for path in files if path.name.endswith('_factory.py')
+                     or fixed_names and path.name == 'factory.py']
+        constants = [path for path in files if path.name.endswith('_const.py')
+                     or fixed_names and path.name == 'const.py']
+        if len(factories) != 1 or len(constants) != 1:
+            names = 'factory.py 与 const.py（兼容旧后缀）' if fixed_names else '*_factory.py 与 *_const.py'
+            raise ValueError(f'插件根目录须各有一个 {names}。')
+        owned(factories[0], folder)
+        result.update(_directory_metadata(folder, constants[0]))
     except (OSError,ValueError,SyntaxError,RecursionError) as exc:result['error']=str(exc)
     return result
 
 
 class PluginStore:
-    def __init__(self,root):self.root=Path(root).resolve();self.plugins=self.root/'plugins';self.state=self.root/STATE
+    def __init__(self,root,*,fixed_names=False):
+        self.root=Path(root).resolve();self.plugins=self.root/'plugins';self.state=self.root/STATE
+        self.fixed_names=fixed_names
 
     def read(self):
         owned(self.plugins,self.root);owned(self.state,self.root)
@@ -115,15 +196,36 @@ class PluginStore:
                 try:
                     leaf(path.name);owned(path,self.plugins)
                     if not path.is_dir():continue
-                    row=metadata(path);row.update(enabled=self.enabled(path.name),path=str(path));rows.append(row)
+                    row=metadata(path,fixed_names=self.fixed_names);row.update(enabled=self.enabled(path.name),path=str(path));rows.append(row)
                 except ValueError as exc:rows.append(dict(name=path.name,app_name=path.name,enabled=False,error=str(exc),path='',version='',author='',homepage='',description='',app_id=''))
         return dict(plugins=rows,revision=self.revision(),generation=state['generation'],directory=str(self.plugins))
 
 
 def importer_for(root):
-    from one_dragon.base.operation.application.plugin_import_service import PluginImportService
+    from one_dragon.base.operation.application.plugin_import_service import PluginImportService, PluginPreviewInfo
+    from one_dragon.utils import plugin_module_loader
     root=Path(root).resolve()
     class Importer(PluginImportService):
+        fixed_names = (hasattr(plugin_module_loader, 'is_factory_file')
+                       and hasattr(plugin_module_loader, 'is_const_file'))
+
+        def _preview_zip_layout(self, archive, layout):
+            # The SDK decides the package roots. Read only members of the selected root.
+            with archive.open(layout.preview_const_info) as stream:
+                constants = stream.read(MAX_CONST_BYTES + 1)
+            manifest = b''
+            for member, relative in layout.members:
+                if relative.as_posix().casefold() == MANIFEST_FILE and not member.is_dir():
+                    with archive.open(member) as stream:
+                        manifest = stream.read(MAX_MANIFEST_BYTES + 1)
+                    break
+            values = _metadata_from_bytes(constants, manifest)
+            return PluginPreviewInfo(layout.plugin_dir_name, values.get('version'), values.get('author'))
+
+        def _preview_directory_layout(self, layout):
+            values = _directory_metadata(layout.source_dir, layout.preview_const_path)
+            return PluginPreviewInfo(layout.plugin_dir_name, values.get('version'), values.get('author'))
+
         @property
         def plugins_dir(self):return owned(root/'plugins',root)
         def _get_target_dir(self,name):
@@ -138,7 +240,8 @@ def importer_for(root):
 
 class PluginManager:
     def __init__(self,root):
-        self.root=Path(root).resolve();self.store=PluginStore(root);self.importer=importer_for(root)
+        self.root=Path(root).resolve();self.importer=importer_for(root)
+        self.store=PluginStore(root,fixed_names=self.importer.fixed_names)
         self.lock=threading.RLock();self.worker=None;self.state='idle';self.job='';self.result=None;self.error='';self.closed=False
         self.review=None;self.review_root=self.root/'autozzz/plugin-imports';self.archives=self.root/'autozzz/plugin-archives'
 
@@ -193,7 +296,6 @@ class PluginManager:
                 leaf(preview.plugin_name);old=existing.get(preview.plugin_name.casefold())
                 downgrade=False
                 if old and old['version'] and preview.version:
-                    from packaging.version import Version,InvalidVersion
                     try:downgrade=Version(preview.version)<Version(old['version'])
                     except InvalidVersion:pass
                 rows.append(dict(name=preview.plugin_name,version=preview.version or '',author=preview.author or '',exists=old is not None,old_version=old['version'] if old else '',downgrade=downgrade))
@@ -248,7 +350,7 @@ class PluginManager:
             if not path.is_dir():raise ValueError('插件不存在。')
             values=self.store.read()['enabled'];values=[item for item in values if item.casefold()!=name.casefold()]
             if enabled:
-                if metadata(path)['error']:raise ValueError('插件结构无效，不能启用。')
+                if metadata(path,fixed_names=self.store.fixed_names)['error']:raise ValueError('插件结构无效，不能启用。')
                 values.append(name)
             self.store.save(values);return self.store.catalog()
 

@@ -152,6 +152,46 @@ class SDKUpgradeTests(unittest.TestCase):
         self.assertEqual((target/'config/default.sample.yml').read_bytes(),b'new default');self.assertEqual((target/'assets/custom/raw.png').read_bytes(),b'user PNG')
         self.assertEqual(data_state(self.data),before);self.assertIn('config/default.sample.yml',report['refreshed_defaults'])
 
+    def test_snapshot_carries_plugin_data_bytes_and_refuses_stale_plugin_data(self):
+        name = 'plugin_data/demo/缓存/record.bin'
+        raw = b'\x00\xff\r\nplugin data'
+        self.put(self.data / name, raw)
+        self.put(self.data / 'autozzz/plugin-state.json', b'explicit execution authorization')
+        self.put(self.data / 'autozzz/plugin-archives/old/record.json', b'old archive')
+        before = data_state(self.data)
+        self.assertEqual(before[name], hashlib.sha256(raw).hexdigest())
+        self.put(self.data / name, raw + b'changed after review')
+        target = self.root / 'plugin_data_snapshot'
+        with self.assertRaisesRegex(ValueError, '资料在审核后发生变化'):
+            snapshot_data(self.data, target, self.stable_source, self.stable_source,
+                          self.revision, 1, threading.Event(), before)
+        self.assertFalse(target.exists())
+        before = data_state(self.data)
+        snapshot_data(self.data, target, self.stable_source, self.stable_source,
+                      self.revision, 1, threading.Event(), before)
+        self.assertEqual((target / name).read_bytes(), raw + b'changed after review')
+        self.assertEqual(data_state(self.data), before)
+        self.assertFalse((target / 'autozzz/plugin-state.json').exists())
+        self.assertFalse((target / 'autozzz/plugin-archives').exists())
+
+    def test_sdk_rollback_carries_current_plugin_data_to_new_stable_profile(self):
+        name = 'plugin_data/demo/latest.bin'
+        self.put(self.data / name, b'old stable bytes')
+        raw = b'\x00\xffnew bytes written while candidate is active'
+        self.put(self.snapshot / name, raw)
+        atomic_json(selection_path(self.data), self.selection())
+        with patch.object(RuntimePaths, 'verify'), patch.object(
+            self.manager, '_handshake', return_value=dict(revision=UPSTREAM_REVISION, pid=1),
+        ):
+            self.manager.rollback(self.manager._selection_hash(), True)
+            result = self.finish()
+        self.assertEqual(result['state'], 'success', result)
+        selected = self.resolve()
+        self.assertEqual(selected.kind, 'stable')
+        self.assertEqual((selected.data / name).read_bytes(), raw)
+        self.assertEqual((self.snapshot / name).read_bytes(), raw)
+        self.assertEqual((self.data / name).read_bytes(), b'old stable bytes')
+
     def test_pending_profile_edits_are_not_discarded_by_build(self):
         atomic_json(self.data/'config/autozzz-map-transaction.json',dict(id='1'*32,manifest_hash='unknown'))
         target=self.root/'blocked_snapshot';self.assertTrue(pending_edits(self.data))

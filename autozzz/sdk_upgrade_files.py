@@ -9,7 +9,7 @@ import uuid
 from .onedragon_bundle import digest,tree_files,relative_name,filesystem_path
 from .runtime_selection import plain,tree_hash
 
-DATA_PARTS=('config','assets','plugins','autozzz/dependencies')
+DATA_PARTS=('config','assets','plugins','plugin_data','autozzz/dependencies')
 
 
 def atomic_bytes(path,raw):
