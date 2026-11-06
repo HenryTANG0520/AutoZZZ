@@ -1,6 +1,7 @@
 """程序版本、完整包下载和实际 EXE 预检；替换由独立交接助手完成。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -10,12 +11,13 @@ import threading
 import time
 import uuid
 
-from .onedragon_bundle import digest
-from .onedragon_environment import EnvironmentStore,validate_environment
-from .onedragon_notify import redact
+from .onedragon_bundle import digest,filesystem_path
+from .onedragon_environment import EnvironmentStore,validate_environment,validate_resource_environment
+from .onedragon_notify import credential_fragments,redact
 from .program_package import read_manifest,extract_package,verify_package
 from .program_update import ProgramUpdate,verify_preflight
 from .run_lock import profile_lock
+from .runtime_selection import plain,read_json
 
 REPOSITORY='HenryTANG0520/AutoZZZ'
 ASSET='AutoZZZ-windows-x64.zip'
@@ -45,6 +47,8 @@ def release_rows(items,channel='stable'):
 class ProgramUpdates:
     def __init__(self,service):
         self.service=service;self.root=Path(getattr(service,'product_root',None) or service.source.parent.parent);self.worker=None;self.job=None
+        self.control_profile = getattr(service, '_program_control_profile', None)
+        self.network_secrets = ()
         self.cancelled=threading.Event();self.signal={};self.lock=threading.RLock();self.releases=[];self.revision=''
         self.channel=None;self.page=1;self.has_more=False;self.unavailable_reason=''
 
@@ -67,17 +71,22 @@ class ProgramUpdates:
             page=self.page,has_more=self.has_more,unavailable_reason=self.unavailable_reason)
 
     def _start(self,kind,operation):
-        self.service._assert_idle();self.service.ctx
+        self.service._assert_idle()
+        if self.control_profile is None:
+            self.service.ctx
         with self.lock:
             if self.busy:raise RuntimeError('版本操作仍在进行，请查询原任务。')
+            self.network_secrets = ()
             self.cancelled.clear();self.signal={};self.job=dict(job_id=uuid.uuid4().hex,kind=kind,state='working',detail='正在处理…',progress=0.,result=None)
             def run():
                 try:
-                    with profile_lock(self.service.data):result=operation()
+                    with profile_lock(self.service.data):
+                        if self.control_profile is not None:
+                            self._prepare_control_workspace()
+                        result=operation()
                     with self.lock:self.job.update(state='success',result=result,detail='更新包已验证，关闭程序后即可安装。' if kind in ('download','import','restore') else '版本检查完成。')
                 except Exception as exc:
-                    secrets=getattr(getattr(getattr(self.service,'_ctx',None),'push_service',None),'secrets',())
-                    with self.lock:self.job.update(state='cancelled' if isinstance(exc,InterruptedError) else 'failed',detail=redact(str(exc),secrets))
+                    with self.lock:self.job.update(state='cancelled' if isinstance(exc,InterruptedError) else 'failed',detail=self._redact(exc))
             self.worker=threading.Thread(target=run,name='AutoZZZ-Program-Update',daemon=False);self.worker.start()
             return self.status(self.job['job_id'])
 
@@ -91,7 +100,63 @@ class ProgramUpdates:
             self.status(job_id);self.cancelled.set();self.signal['signal']='cancel'
             return self.status(job_id)
 
+    def _workspace(self):
+        path = self.service.data/'autozzz/program-updates'
+        return plain(path) if self.control_profile is not None else path
+
+    def _prepare_control_workspace(self):
+        from one_dragon.utils import os_utils
+        from .runtime_generation import RuntimeGeneration
+
+        RuntimeGeneration(self.service.stable_data, self.service.runtime_guard.generation).check_current()
+        workspace = self._workspace()
+        workspace.mkdir(parents=True, exist_ok=True)
+        os_utils.set_work_dir(workspace)
+
+    def _redact(self, message):
+        push = getattr(getattr(self.service, '_ctx', None), 'push_service', None)
+        return redact(message, (*self.network_secrets, *getattr(push, 'secrets', ())))
+
+    def _read_control_environment(self):
+        from one_dragon.envs.env_config import EnvConfig
+        from one_dragon.envs.repo_config import RepoConfig
+        from .onedragon_runtime import PROTOCOL_VERSION, RuntimePaths
+
+        selected = RuntimePaths.discover(self.root, self.control_profile).selection
+        data = selected.data if selected is not None else self.service.data
+        with (nullcontext() if data == self.service.data else profile_lock(data)):
+            if selected is not None and read_json(data/'autozzz-runtime.json', 4096) != dict(revision=selected.revision, protocol=PROTOCOL_VERSION):
+                raise ValueError('所选区服资料与 SDK 标记不符。')
+            repo = plain(data/'config/repository.yml')
+            if not filesystem_path(repo).exists():
+                repo = plain(self.service.source/'config/repository.yml')
+            env = plain(data/'config/env.yml')
+            for path in (repo, env):
+                file = filesystem_path(path)
+                if file.exists() and (not file.is_file() or file.stat().st_size > 1024**2):
+                    raise ValueError('程序下载环境资料无效或过大。')
+
+            class ReadOnly:
+                def _get_yaml_file_paths(self):
+                    return str(filesystem_path(self.config_path)), None, None
+
+                def _get_write_path(self):
+                    return None
+
+            class ReleaseRepo(ReadOnly, RepoConfig):
+                config_path = repo
+
+            class ReleaseEnv(ReadOnly, EnvConfig):
+                config_path = env
+
+            return ReleaseEnv(ReleaseRepo())
+
     def _network(self):
+        if self.control_profile is not None:
+            env = self._read_control_environment()
+            self.network_secrets = credential_fragments((env.personal_proxy, env.gh_proxy_url))
+            validate_resource_environment(env, env.repo_config)
+            return env
         env=EnvironmentStore(self.service).config('_environment');validate_environment(env,self.service.ctx.repo_config)
         self.service.ctx.push_service.protect_transient(env.personal_proxy,env.gh_proxy_url)
         return env
@@ -149,7 +214,7 @@ class ProgramUpdates:
 
     def import_package(self,path):
         def operation():
-            folder=self.service.data/'autozzz/program-updates'/self.job['job_id'];folder.mkdir(parents=True)
+            folder=self._workspace()/self.job['job_id'];folder.mkdir(parents=True)
             extract_package(Path(path),folder/'extracted',self.cancelled.is_set)
             return self._prepare(folder/'extracted/AutoZZZ')
         return self._start('import',operation)
@@ -160,11 +225,11 @@ class ProgramUpdates:
         if release is None:raise ValueError('所选版本不存在，请重新检查。')
         def operation():
             from one_dragon.base.web.common_downloader import CommonDownloader,CommonDownloaderParam
-            env=self._network();folder=self.service.data/'autozzz/program-updates'/self.job['job_id'];folder.mkdir(parents=True)
+            env=self._network();folder=self._workspace()/self.job['job_id'];folder.mkdir(parents=True)
             param=CommonDownloaderParam(str(folder),'program.zip',dict(github=release['url']))
             def progress(value):
                 if max(value.downloaded_bytes,value.total_bytes)>4*1024**3:self.signal['signal']='cancel';raise ValueError('下载包超过 4 GB。')
-                with self.lock:self.job.update(detail=redact(value.message,self.service.ctx.push_service.secrets),progress=max(0.,min(1.,value.progress)))
+                with self.lock:self.job.update(detail=self._redact(value.message),progress=max(0.,min(1.,value.progress)))
             downloaded=CommonDownloader(param).download(source_order=env.get_resource_source_order(),proxy_url=env.personal_proxy if env.is_personal_proxy else None,
                 ghproxy_url=env.gh_proxy_url if env.is_gh_proxy else None,skip_if_existed=False,progress_signal=self.signal,status_callback=progress,fallback_on_slow=env.is_resource_source_auto)
             if self.cancelled.is_set():raise InterruptedError('已取消程序下载。')

@@ -51,6 +51,7 @@ class RuntimePaths:
     generation: str | None = None
     management_only: bool = False
     sdk_control: bool = False
+    program_control: bool = False
 
     @classmethod
     def discover(cls, root: Path, profile: str = "cn", *, use_selection: bool = True) -> RuntimePaths:
@@ -81,6 +82,10 @@ class RuntimePaths:
     def discover_sdk_control(cls, root: Path, profile: str = "cn") -> RuntimePaths:
         return replace(cls.discover(root, profile, use_selection=False), sdk_control=True)
 
+    @classmethod
+    def discover_program_control(cls, root: Path, profile: str = "cn") -> RuntimePaths:
+        return replace(cls.discover(root, profile, use_selection=False), program_control=True)
+
     @property
     def bridge_root(self):
         return self.bridge if self.bridge is not None else self.bundle/'bridge' if self.bundle is not None else Path(__file__).resolve().parent.parent
@@ -97,11 +102,16 @@ class RuntimePaths:
             '--selection-generation',self.generation if self.generation is not None else selection_generation(self.stable_data or self.data)]
         if self.management_only:arguments.append('--management-only')
         if self.sdk_control:arguments.append('--sdk-control')
+        if self.program_control:arguments.append('--program-control')
         if self.selection is not None and self.selection.identity_file is not None:
             arguments+=['--runtime-identity',str(self.selection.identity_file),'--runtime-identity-digest',self.selection.identity_digest]
         return arguments
 
     def verify(self) -> None:
+        if self.program_control and (self.sdk_control or not self.management_only or self.selection is not None
+                                     or self.revision != UPSTREAM_REVISION or self.generation is None
+                                     or self.stable_data is None or self.data.resolve() != self.stable_data.resolve()):
+            raise RuntimeUnavailable('程序版本连接必须使用固定发行及本区服控制目录。')
         if self.sdk_control and (not self.management_only or self.selection is not None or self.revision!=UPSTREAM_REVISION
                                  or self.stable_data is None or self.data.resolve()!=self.stable_data.resolve()):
             raise RuntimeUnavailable('SDK 控制连接必须使用当前稳定执行包及本区服控制目录。')
@@ -151,7 +161,7 @@ class RuntimePaths:
     def prepare(self) -> None:
         """只复制版本控制中的资源；已有用户文件不覆盖。"""
         self.verify()
-        if self.sdk_control:return  # Control RPCs inspect profiles without initializing them.
+        if self.sdk_control or self.program_control:return  # Control RPCs do not initialize profile resources.
         if self.selection is not None:
             try:self.selection.prepare()
             except (OSError,ValueError) as exc:raise RuntimeUnavailable(str(exc)) from exc
@@ -283,6 +293,9 @@ class OneDragonClient:
         if hello.get("protocol") != PROTOCOL_VERSION or hello.get("revision") != self.paths.revision:
             self.close()
             raise RuntimeUnavailable("一条龙通信协议或源码版本不一致。")
+        if self.paths.program_control and (hello.get('program_control') is not True or hello.get('task_lease') is not False):
+            self.close()
+            raise RuntimeUnavailable('工作进程未确认独立程序版本连接。')
         if self.run_lease is not None and hello.get("task_lease") is not True:
             self.close()
             raise RuntimeUnavailable("工作进程未确认轮换任务锁，不能开始执行。")

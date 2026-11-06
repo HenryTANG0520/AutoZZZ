@@ -74,6 +74,26 @@ class RuntimeGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '请通过 SDK 控制连接'):
             validate_worker_request(service, 'sdk_migrate_stable')
 
+    def test_program_control_has_a_disjoint_request_allowlist(self):
+        from autozzz.runtime_generation import PROGRAM_UPDATE_METHODS
+
+        guard = RuntimeGeneration(self.data, '-', True)
+        service = NS(runtime_guard=guard, _rotation_sealed=False, _rotation_guard=None)
+        for method in {'hello'} | PROGRAM_UPDATE_METHODS:
+            validate_worker_request(service, method, program_control=True)
+        for method in ('catalog', 'configuration', 'configuration_save', 'start_application',
+                       'execution_status', 'stop_execution', 'sdk_catalog', 'sdk_prepare_stable', 'mcp_start'):
+            with self.subTest(method=method), self.assertRaisesRegex(RuntimeError, '仅提供程序更新操作'):
+                validate_worker_request(service, method, program_control=True)
+
+    def test_program_control_prepare_skips_old_profile_initialization(self):
+        paths = RuntimePaths.discover_program_control(self.data, 'cn')
+        self.assertIn('--program-control', paths.identity_arguments())
+        self.assertNotIn('--sdk-control', paths.identity_arguments())
+        with patch.object(RuntimePaths, 'verify') as verify:
+            paths.prepare()
+        verify.assert_called_once_with()
+
     def test_real_launch_arguments_pin_generation_and_candidate_data(self):
         paths=RuntimePaths(self.data/'source',self.data/'python.exe',self.data/'profile',stable_data=self.data,generation='-')
         self.switch();args=paths.identity_arguments()

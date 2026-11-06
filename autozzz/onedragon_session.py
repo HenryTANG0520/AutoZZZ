@@ -360,8 +360,9 @@ class RuntimeSession:
                             except Exception as exc:
                                 self.emit(dict(type='log',message='MCP收尾事件未完成：'+str(exc)));break
                             if self.phase:self.closing.wait(.02)
-                    try:self._call(client,"stop_execution")
-                    except Exception as exc:self.emit(dict(type="log",message=str(exc)))
+                    if not getattr(self.paths,'program_control',False):
+                        try:self._call(client,"stop_execution")
+                        except Exception as exc:self.emit(dict(type="log",message=str(exc)))
                 while True:
                     try:
                         client.close(timeout=5)

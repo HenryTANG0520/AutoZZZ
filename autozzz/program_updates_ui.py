@@ -51,7 +51,7 @@ class ProgramUpdatesWindow:
         self.cancel_button=ttk.Button(actions,text='取消',command=self.cancel);self.cancel_button.grid(row=0,column=2,padx=d(6))
         self.apply_button=ttk.Button(actions,text='关闭并安装',command=self.apply,style='Accent.TButton');self.apply_button.grid(row=0,column=3,padx=d(6))
         ttk.Button(actions,text='关闭',command=self.close).grid(row=0,column=4,padx=(d(6),0))
-        self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile,use_selection=False),self.events.put);self.worker=self.session.worker
+        self.session=RuntimeSession(RuntimePaths.discover_program_control(ROOT,profile),self.events.put);self.worker=self.session.worker
         self.window.protocol('WM_DELETE_WINDOW',self.close);self.buttons();self.window.after(80,self.poll)
 
     def buttons(self):

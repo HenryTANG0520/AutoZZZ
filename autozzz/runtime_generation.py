@@ -13,6 +13,11 @@ SDK_CONTROL_METHODS = frozenset({
     'sdk_prepare_tool','sdk_migrate_stable','sdk_prepare_stable',
 })
 
+PROGRAM_UPDATE_METHODS = frozenset({
+    'program_catalog', 'program_check', 'program_download', 'program_import',
+    'program_restore', 'program_status', 'program_cancel',
+})
+
 
 def selection_generation(stable_data: Path) -> str:
     path = Path(stable_data) / 'autozzz' / 'sdk-selection.json'
@@ -49,9 +54,7 @@ class RuntimeGeneration:
                       'mcp_status', 'mcp_revoke', 'mcp_action_disable', 'mcp_edit_disable'}:
             return
         if self.management_only:
-            if method in SDK_CONTROL_METHODS or method in {'catalog', 'configuration', 'describe_configuration', 'policies', 'policy_validate',
-                          'program_catalog', 'program_check', 'program_download', 'program_import',
-                          'program_restore', 'program_status', 'program_cancel',
+            if method in SDK_CONTROL_METHODS or method in PROGRAM_UPDATE_METHODS or method in {'catalog', 'configuration', 'describe_configuration', 'policies', 'policy_validate',
                           'environment_tools_catalog', 'environment_tools_start', 'environment_tools_status',
                           'environment_tools_cancel', 'environment_tools_apply',
                           'global_capture_status', 'global_capture_capture','game_hdr_status','game_hdr_recover','game_launch_options'}:

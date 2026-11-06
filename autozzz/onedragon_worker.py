@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 from .onedragon_runtime import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, UPSTREAM_REVISION, RuntimePaths
-from .runtime_generation import SDK_CONTROL_METHODS
+from .runtime_generation import PROGRAM_UPDATE_METHODS, SDK_CONTROL_METHODS
 
 
 def close_service(service):
@@ -45,19 +45,27 @@ def add_runtime_identity_arguments(parser):
     parser.add_argument('--management-only',action='store_true')
 
 
-def verify_sdk_control(args):
+def verify_stable_control(args, *, program=False):
+    name = '程序版本' if program else 'SDK'
     if (not args.management_only or args.runtime_identity is not None or args.stable_data is None
-            or args.product_root is None or args.data.resolve()!=args.stable_data.resolve()):
-        raise ValueError('SDK 控制连接必须使用当前稳定执行包及本区服控制目录。')
+            or args.product_root is None or args.data.resolve()!=args.stable_data.resolve()
+            or program and args.selection_generation is None):
+        raise ValueError(name+' 控制连接必须使用当前稳定执行包及本区服控制目录。')
+    discover = RuntimePaths.discover_program_control if program else RuntimePaths.discover_sdk_control
+    bridge = Path(__file__).resolve().parent.parent
     for profile in ('cn','global'):
-        paths=RuntimePaths.discover_sdk_control(args.product_root,profile)
+        paths=discover(args.product_root,profile)
         if (args.data.resolve()==paths.data.resolve() and args.source.resolve()==paths.source.resolve()
                 and Path(sys.executable).resolve()==paths.python.resolve()):
-            return
-    raise ValueError('SDK 控制连接的源码、解释器或区服目录与稳定发行不符。')
+            if program and (bridge != paths.bridge_root.resolve() or paths.bundle is None and bridge != paths.product_root):
+                break
+            return profile
+    raise ValueError(name+' 控制连接的源码、解释器或区服目录与稳定发行不符。')
 
 
-def validate_worker_request(service,method,*,sdk_control=False):
+def validate_worker_request(service,method,*,sdk_control=False,program_control=False):
+    if program_control and method != 'hello' and method not in PROGRAM_UPDATE_METHODS:
+        raise RuntimeError('程序版本控制连接仅提供程序更新操作。')
     if sdk_control and method!='hello' and method not in SDK_CONTROL_METHODS:
         raise RuntimeError('SDK 控制连接仅提供 SDK 管理与源码操作。')
     update_control=sdk_control and getattr(service,'_sdk_control_lease',None) is not None
@@ -85,7 +93,9 @@ def main() -> int:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
     add_runtime_identity_arguments(parser)
-    parser.add_argument('--sdk-control',action='store_true')
+    controls=parser.add_mutually_exclusive_group()
+    controls.add_argument('--sdk-control',action='store_true')
+    controls.add_argument('--program-control',action='store_true')
     args = parser.parse_args()
     output = sys.stdout
     sys.stdout = sys.stderr
@@ -94,15 +104,20 @@ def main() -> int:
     try:
         if sys.version_info[:2] != (3, 11):
             raise RuntimeError("一条龙必须使用独立的 Python 3.11 环境。")
-        if args.sdk_control:verify_sdk_control(args)
+        program_profile=None
+        if args.sdk_control:verify_stable_control(args)
+        if args.program_control:program_profile=verify_stable_control(args,program=True)
         actual_revision=verify_worker_identity(args)
         from .onedragon_service import METHODS, OneDragonService
-        from .task_lease import JoinedRunLease
+        from .task_lease import JoinedRunLease, LEASE_ENV
+        if args.program_control and LEASE_ENV in os.environ:
+            raise ValueError('程序版本控制连接不能借用运行任务锁。')
         run_lease=JoinedRunLease.from_environment(program_update=args.sdk_control)
         service = OneDragonService(args.source, args.data,run_lease=run_lease,
             runtime_revision=actual_revision,stable_data=args.stable_data,product_root=args.product_root,
             runtime_generation=args.selection_generation,management_only=args.management_only)
         if args.sdk_control:service._sdk_control_lease=run_lease
+        if args.program_control:service._program_control_profile=program_profile
         while True:
             line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1)
             if not line:
@@ -118,10 +133,11 @@ def main() -> int:
                 if not isinstance(request_id, str) or not isinstance(request["params"], dict):
                     raise ValueError("请求编号和参数无效。")
                 method = request["method"]
-                validate_worker_request(service,method,sdk_control=args.sdk_control)
+                validate_worker_request(service,method,sdk_control=args.sdk_control,program_control=args.program_control)
                 if method == "hello":
                     result = dict(protocol=PROTOCOL_VERSION, revision=actual_revision,
                                   python=sys.version.split()[0], pid=os.getpid(), input_enabled=False,task_lease=run_lease is not None)
+                    if args.program_control:result['program_control']=True
                 elif method in METHODS:
                     if method=='mcp_stop':result=getattr(service,method)(**request['params'])
                     else:

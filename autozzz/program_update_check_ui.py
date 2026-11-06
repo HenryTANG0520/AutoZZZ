@@ -45,7 +45,7 @@ class StartupUpdates:
             self.status.set('版本窗口已打开；请在该窗口检查。');return
         try:
             profile='global' if self.ui.server.get()=='国际服' else 'cn'
-            self.checker=MetadataCheck(RuntimePaths.discover(ROOT,profile),self.preferences.channel,self.events.put)
+            self.checker=MetadataCheck(RuntimePaths.discover_program_control(ROOT,profile),self.preferences.channel,self.events.put)
             self.status.set('正在检查版本信息…')
         except Exception as exc:self.status.set('检查更新不可用：'+str(exc))
         self.buttons()

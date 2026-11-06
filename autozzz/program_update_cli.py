@@ -19,7 +19,7 @@ def run_update(package,report,*,server='cn',restart=True,client_factory=OneDrago
     if (ROOT/'.git').exists():raise ValueError('源码目录不能原地替换为便携包。')
     report=Path(report).resolve();report.parent.mkdir(parents=True,exist_ok=True)
     with report.open('x',encoding='utf-8') as stream:stream.write('{}')
-    stop=threading.Event();client=client_factory(RuntimePaths.discover(ROOT,server));handoff=None;ready=False
+    stop=threading.Event();client=client_factory(RuntimePaths.discover_program_control(ROOT,server));handoff=None;ready=False
     previous=signal.signal(signal.SIGINT,lambda *_:stop.set())
     def save(**value):write_json(report,value);return value
     def call(method,**params):

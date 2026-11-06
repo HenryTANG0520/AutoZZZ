@@ -106,20 +106,25 @@ def validate_url(value, *, proxy=False):
         raise ValueError("代理格式为 协议://主机:端口。" if proxy else "GitHub 代理须为完整 HTTP(S) 地址。") from None
 
 
-def validate_environment(config, repo):
-    from one_dragon.envs.env_config import ProxyTypeEnum, ScreenshotMethodEnum
+def validate_resource_environment(config, repo):
+    from one_dragon.envs.env_config import ProxyTypeEnum
     if config.proxy_type not in {item.value.value for item in ProxyTypeEnum}:
         raise ValueError("代理类型无效。")
-    for key in ("auto_fetch_gh_proxy_url", "is_debug",'copy_screenshot'):
-        if type(getattr(config, key)) is not bool: raise ValueError("环境开关类型无效。")
     if config.personal_proxy: validate_url(config.personal_proxy, proxy=True)
     if config.gh_proxy_url: validate_url(config.gh_proxy_url)
     if config.is_personal_proxy and not config.personal_proxy: raise ValueError("请输入个人代理地址。")
     if config.is_gh_proxy and not config.gh_proxy_url: raise ValueError("请输入 GitHub 代理地址。")
-    if config.screenshot_method not in {item.value.value for item in ScreenshotMethodEnum}:
-        raise ValueError("截图方式无效。")
     if config.resource_source not in {item.value for item in repo.resource_source_options}:
         raise ValueError("资源下载源无效。")
+
+
+def validate_environment(config, repo):
+    from one_dragon.envs.env_config import ScreenshotMethodEnum
+    validate_resource_environment(config, repo)
+    for key in ("auto_fetch_gh_proxy_url", "is_debug",'copy_screenshot'):
+        if type(getattr(config, key)) is not bool: raise ValueError("环境开关类型无效。")
+    if config.screenshot_method not in {item.value.value for item in ScreenshotMethodEnum}:
+        raise ValueError("截图方式无效。")
     if getattr(config,'pip_source',repo.get_source_default('pip_source')) not in {item.value for item in repo.get_source_values('pip_source')}:
         raise ValueError('Python 依赖下载源无效。')
     from .global_capture import validate_capture_hotkey
