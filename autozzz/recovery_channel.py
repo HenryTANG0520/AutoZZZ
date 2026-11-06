@@ -131,7 +131,7 @@ class RecoveryClient:
 class RecoveryServer:
     """Ephemeral endpoint. The monitor owns its lifetime and the original execution."""
 
-    def __init__(self, scope, deadline, *, available, snapshot, handoff, resume=None):
+    def __init__(self, scope, deadline, *, available, snapshot, handoff, resume=None, on_claim=None):
         self.stop_requested = threading.Event()
         self._closing = threading.Event()
         self._revoke_lock = threading.Lock()
@@ -140,6 +140,7 @@ class RecoveryServer:
         self._handoff = handoff
         self._claimant = None
         self._resume = resume
+        self._on_claim = on_claim
         self._resume_used = self._resume_started = self._stop_accepted = False
         identity = current_recovery_identity()
         self._descriptor = RecoveryDescriptor(
@@ -216,6 +217,7 @@ class RecoveryServer:
         method = request.get('method')
         peer = connection.peer
         stop = False
+        claim_at = None
         try:
             if (set(request) != _REQUEST_KEYS or type(request['version']) is not int or request['version'] != _VERSION
                     or type(method) is not str or method not in _METHODS or request['generation'] != descriptor.generation
@@ -252,6 +254,8 @@ class RecoveryServer:
                     raise RecoveryRejected('recovery_unavailable')
                 if method == 'claim':
                     self._claimant = connection.retain_peer()
+                    if self._on_claim is not None:
+                        claim_at = time.perf_counter()
                 if method == 'stop_current':
                     self._claimant.assert_alive()
                     self._stop_accepted = True
@@ -266,6 +270,11 @@ class RecoveryServer:
                     state = 'resumed'
                 else:
                     state = 'awaiting_claim' if self._claimant is None else 'claimed'
+            if claim_at is not None:
+                try:
+                    self._on_claim(claim_at)
+                except Exception:
+                    pass  # Read-only diagnostics cannot revoke an authenticated claim.
             if method == 'resume_current':
                 graph_visit = snapshot.get('graph_visit')
                 if type(graph_visit) is not dict or graph_visit.get('state') != 'original':

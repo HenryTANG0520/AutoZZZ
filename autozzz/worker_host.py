@@ -326,6 +326,7 @@ class WorkerHost:
                         available=lambda: self._recovery_available(service, execution, worker),
                         snapshot=execution.recovery_snapshot,
                         handoff=self._handoff,
+                        on_claim=getattr(execution, 'record_recovery_claim', None),
                     )
                 except (ImportError, OSError, RuntimeError, ValueError):
                     return

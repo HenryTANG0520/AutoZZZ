@@ -39,6 +39,30 @@ class BattleClockWitnessTests(unittest.TestCase):
         self.assertFalse(observation.continue_frame(frame(.39, 318), victory=True))
         self.assertEqual(observation.failure, 'battle_terminal_unproven')
 
+    def test_diagnostic_observes_only_accepted_samples_and_preserves_the_observation(self):
+        identity = WindowIdentity(1, 2, 3, 4, (0, 0, 1920, 1080))
+        anchor = CapturedFrame(identity, 600, 0., .01)
+        accepted = CapturedFrame(identity, 610, .1, .11)
+        reset = CapturedFrame(identity, 400, .2, .21)
+        frames = iter((accepted, reset))
+        events = []
+        now = .01
+
+        def diagnose(frame, elapsed):
+            events.append((frame, elapsed))
+            raise RuntimeError('Diagnostic unavailable')
+
+        observation = RecoveryObservation(
+            anchor, lambda: next(frames), None, lambda: True, clock=lambda: now,
+            elapsed_clock=lambda frame: frame.image, on_sample=diagnose,
+        )
+        now = .12
+        self.assertEqual(observation.sample(), 'pending')
+        now = .22
+        self.assertEqual(observation.sample(), 'failed')
+        self.assertEqual(observation.failure, 'battle_clock_discontinuity')
+        self.assertEqual(events, [(accepted, 610)])
+
     def test_too_fast_and_frozen_clock_are_rejected(self):
         fast = BattleClockWitness(.5)
         self.assertIsNone(fast.observe(400, 0., .02))

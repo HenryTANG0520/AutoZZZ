@@ -79,7 +79,8 @@ class RecoveryObservation:
     def __init__(self, anchor: CapturedFrame, capture: Callable[[], CapturedFrame],
                  evidence: Callable[[CapturedFrame], EncounterEvidence], frozen: Callable[[], bool],
                  *, max_gap: float = MAX_GAP_SECONDS, clock: Callable[[], float] = time.perf_counter,
-                 elapsed_clock: Callable[[CapturedFrame], int | None] | None = None):
+                 elapsed_clock: Callable[[CapturedFrame], int | None] | None = None,
+                 on_sample: Callable[[CapturedFrame, int], None] | None = None):
         if type(max_gap) not in (int, float) or not 0 < max_gap <= MAX_GAP_SECONDS:
             raise ValueError('恢复观察间隔须大于零且不超过 0.5 秒。')
         self._capture, self._evidence, self._frozen = capture, evidence, frozen
@@ -96,6 +97,7 @@ class RecoveryObservation:
         self._encounter = None
         self._last_times = None
         self._elapsed = elapsed_clock
+        self._on_sample = on_sample
         self._clock_witness = None
         if elapsed_clock is not None:
             from .recovery_battle_clock import BattleClockWitness
@@ -203,22 +205,26 @@ class RecoveryObservation:
         return witness.authority, witness.instance_id
 
     def _check_elapsed(self, frame):
-        problem = self._clock_witness.observe(self._elapsed(frame), frame.started_at, frame.finished_at)
+        elapsed = self._elapsed(frame)
+        problem = self._clock_witness.observe(elapsed, frame.started_at, frame.finished_at)
         if problem is not None:
             raise ObservationRejected(problem)
+        return elapsed
 
     def _consume(self, frame: CapturedFrame, *, first_resumed: bool = False,
-                 victory: bool = False, repeat: bool = False) -> None:
+                 victory: bool = False, repeat: bool = False) -> int | None:
         self._check_frame(frame, first_resumed=first_resumed, repeat=repeat)
+        elapsed = None
         if self._clock_witness is not None:
             if victory:
                 raise ObservationRejected('battle_terminal_unproven')
-            self._check_elapsed(frame)
+            elapsed = self._check_elapsed(frame)
         elif self._read_evidence(frame, phase='victory' if victory else 'battle') != self._encounter:
             raise ObservationRejected('encounter_changed')
         self._check_frozen()
         self._check_current_window()
         self._check_recent(frame.finished_at)
+        return elapsed
 
     def sample(self) -> str:
         if not self._sample_lock.acquire(blocking=False):
@@ -232,11 +238,17 @@ class RecoveryObservation:
                 self._check_frozen()
                 self._check_recent(self._last_times[1])
                 frame = self._capture()
-                self._consume(frame)
+                elapsed = self._consume(frame)
                 with self._lock:
-                    if self._failure is None:
+                    accepted = self._failure is None
+                    if accepted:
                         self._last_times = frame.started_at, frame.finished_at
                         self._sample_count += 1
+                if accepted and elapsed is not None and self._on_sample is not None:
+                    try:
+                        self._on_sample(frame, elapsed)
+                    except Exception:
+                        pass  # Read-only diagnostics cannot change the original observation result.
             except ObservationRejected as exc:
                 self.invalidate(exc.reason)
             except Exception:

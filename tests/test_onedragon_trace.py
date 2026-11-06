@@ -1,11 +1,13 @@
 from collections import deque
 from contextvars import ContextVar
+from functools import wraps
 import json
 import threading
 import time
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock,patch
+from weakref import WeakKeyDictionary
 
 from autozzz.onedragon_control import ExecutionControl,WindowState
 from autozzz.onedragon_trace import TraceRuntime,KINDS,plain_debug
@@ -197,6 +199,37 @@ class BossTimingFailureTests(unittest.TestCase):
             self.assertIs(self.timing._input(guarded_input,action),result)
         guarded_input.assert_called_once()
         action.assert_called_once_with()
+
+    def test_round_tracks_budget_wrapped_native_node_and_rejects_stale_or_foreign_nodes(self):
+        class Route:
+            def auto_battle(self):
+                pass
+
+        operation=Route()
+        operation.ctx=object()
+        operation._current_node_start_time=0
+        original=Route.auto_battle
+        timing=self.timing
+        timing.routes={Route:original}
+        timing.runtime=NS(ctx=operation.ctx,lock=threading.RLock())
+        timing.visits=WeakKeyDictionary()
+        timing.visit_count=0
+        native=lambda _:timing.round.get()
+
+        @wraps(original)
+        def guarded(operation):
+            return original(operation)
+
+        with patch.object(Route,'auto_battle',guarded):
+            operation._current_node=NS(op_method=guarded)
+            self.assertIs(timing._round(native,operation).operation(),operation)
+            operation._current_node=NS(op_method=original)
+            self.assertIsNone(timing._round(native,operation))
+        with patch.object(Route,'auto_battle',native):
+            operation._current_node=NS(op_method=native)
+            self.assertIsNone(timing._round(native,operation))
+        operation._current_node=NS(op_method=original)
+        self.assertIs(timing._round(native,operation).operation(),operation)
 
 
 class SubscriptionTests(unittest.TestCase):

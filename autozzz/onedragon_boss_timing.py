@@ -5,6 +5,7 @@ from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
+from inspect import unwrap
 from threading import get_ident
 from time import perf_counter
 from weakref import WeakKeyDictionary, ref
@@ -45,7 +46,7 @@ class BossTimingTrace:
         self.runtime, self.guard, self.control = runtime, guard, guard.control
         self.item = TimelineTraceItem
         self.executor = OperationExecutor
-        self.routes = {route: route.auto_battle for route in (AreaPatrol, NotoriousHunt)}
+        self.routes = {route: unwrap(route.auto_battle) for route in (AreaPatrol, NotoriousHunt)}
         self.atom_kinds = {AtomicWait: 'wait', AtomicBtnCommon: 'button', AtomicSetState: 'set_state'}
         self.round = ContextVar('autozzz_boss_timing_round', default=None)
         self.task = ContextVar('autozzz_boss_timing_task', default=None)
@@ -107,7 +108,8 @@ class BossTimingTrace:
             route = type(operation)
             node = operation._current_node
             if (operation.ctx is self.runtime.ctx and route in self.routes and node is not None
-                    and node.op_method is self.routes[route]):
+                    and node.op_method is route.auto_battle
+                    and unwrap(node.op_method) is self.routes[route]):
                 with self.runtime.lock:
                     start = operation._current_node_start_time
                     visit = self.visits.get(operation)

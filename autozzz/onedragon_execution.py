@@ -92,6 +92,7 @@ class OneDragonExecution:
         self._recovery_point: _BattleRecoveryPoint | None = None
         self._host_loss_status: dict | None = None
         self._recovery_source = self._recovery_frame = self._recovery_observer = None
+        self._recovery_trajectory = None
         self._recovery_observation_stop = threading.Event()
         self._recovery_window_changed = threading.Event()
         self._continuation: _BattleContinuation | None = None
@@ -312,6 +313,21 @@ class OneDragonExecution:
                 permit_version=self.battle_control.permit_version, observed_at=time.monotonic() - capture_age,
                 graph_visit=visit,
             )
+            trajectory = getattr(self, '_recovery_trajectory', None)
+            if trajectory is not None and visit is not None and type(operation) is AreaPatrol:
+                frame = self._tracked_frame(screen, screenshot_time)
+                if frame is not None:
+                    trajectory.original(self._trajectory_scope(self._recovery_point), receipt, frame)
+
+    def _trajectory_scope(self, point):
+        try:
+            account = self.ctx.game_account_config
+            connection = (self.ctx.current_instance_idx, account.game_path, account.game_region, account.game_language)
+            if self.connection == connection:
+                return ((self.worker, account, point.slot, point.future, point.operation, point.graph_visit, point.binding),
+                        (connection, point.job_id, point.reservation, point.ledger_revision))
+        except (AttributeError, ValueError):
+            return None
 
     def _same_recovery_run(self, point):
         window = getattr(self.ctx.controller, 'game_win', None)
@@ -422,24 +438,35 @@ class OneDragonExecution:
         point = self._recovery_point
         anchor = None if point is None else self._tracked_frame(point.frame, point.frame_time)
         source = self._recovery_source
+        trajectory = getattr(self, '_recovery_trajectory', None)
         if (anchor is None or source is None or not self._recovery_graph_matches(point)
                 or anchor.identity.pid != point.process_id
                 or anchor.identity.hwnd != point.binding.hwnd):
+            if trajectory is not None:
+                trajectory.reject('trajectory_native_graph_or_anchor_unverified')
             return
         elapsed_clock = None
+        on_sample = None
         if type(point.operation) is AreaPatrol:
             from .recovery_battle_clock import read_patrol_elapsed
             elapsed_clock = lambda frame: read_patrol_elapsed(self.ctx, frame.image, frame.finished_at)
+            if trajectory is not None:
+                trajectory.frozen(self._trajectory_scope(point), self.control.epoch, anchor)
+                on_sample = lambda frame, elapsed: trajectory.sample(self._trajectory_scope(point), frame, elapsed)
         observer = RecoveryObservation(anchor, source, native_encounter_evidence, self._observation_scope,
-                                       elapsed_clock=elapsed_clock)
+                                       elapsed_clock=elapsed_clock, on_sample=on_sample)
         self._recovery_observer = observer
         if observer.failure is not None:
+            if on_sample is not None:
+                trajectory.reject(observer.failure)
             return
 
         def sample():
             while not self._recovery_observation_stop.is_set() and time.monotonic() < deadline:
                 state = observer.sample()
                 if state == 'failed':
+                    if on_sample is not None:
+                        trajectory.reject(observer.failure)
                     if not self._recovery_observation_stop.is_set() and self.control.recovery_continuing:
                         self._fail_recovery_continuation()
                     return
@@ -451,6 +478,14 @@ class OneDragonExecution:
 
     def end_recovery_observation(self):
         self._recovery_observation_stop.set()
+        trajectory = getattr(self, '_recovery_trajectory', None)
+        if trajectory is not None:
+            trajectory.close()
+
+    def record_recovery_claim(self, at):
+        trajectory = getattr(self, '_recovery_trajectory', None)
+        if trajectory is not None:
+            trajectory.claim(at)
 
     def _fail_recovery_continuation(self):
         self.cancelled.set()
@@ -560,6 +595,9 @@ class OneDragonExecution:
             continuity = dict(state='unverified', reason=observer.failure)
         else:
             continuity = dict(state='sampling')
+        trajectory = getattr(self, '_recovery_trajectory', None)
+        if trajectory is not None and observer is not None and observer.clock_only:
+            continuity['trajectory_diagnostic'] = trajectory.status(self._trajectory_scope(point))
         return dict(status, control=dict(state='recovery_blocked', recovery_blocked=True),
                     graph_visit=graph_visit, continuity=continuity)
 
@@ -1102,6 +1140,8 @@ class OneDragonExecution:
                                 and self.rotation_guard is None):
                             self.battle_control.on_normal_frame = self._remember_recoverable_battle
                             if getattr(self._recovery_host, 'continuity_enabled', False) is True:
+                                from .recovery_trajectory import AreaPatrolTrajectory
+                                self._recovery_trajectory = AreaPatrolTrajectory()
                                 self._recovery_source = self._recovery_frame = self._recovery_observer = None
                                 self._recovery_observation_stop.clear()
                                 self._recovery_window_changed.clear()
@@ -1151,6 +1191,7 @@ class OneDragonExecution:
                             self.control.capture_observer = None
                             self.control.recovery_window_invalid = None
                             self._recovery_point = None
+                            self._recovery_trajectory = None
                     if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
                     if self.group_control is not None:self.group_control.close()
