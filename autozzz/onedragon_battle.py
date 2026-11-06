@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from collections import deque
+from copy import copy
 from dataclasses import dataclass
 from functools import wraps
 import json
 import threading
 from typing import Any
 
+from .onedragon_battle_hud import attack_hud_scope, observe_attack_hud, scoped_attack_hud
 from .onedragon_control import ObservationExpired,ExecutionStopped
 
 _battle_input: ContextVar[bool] = ContextVar("autozzz_battle_input",default=False)
@@ -231,6 +233,62 @@ class BattleInputControl:
         self.originals.append((cls,name,getattr(cls,name)))
         setattr(cls,name,method)
 
+    def _observe_hud(self, battle, screen, captured_at):
+        self.control.checkpoint(require_frame=True)
+        try:
+            return observe_attack_hud(battle, screen, captured_at)
+        except Exception:
+            self._frame_permit('battle_hud_unverified')
+            raise
+
+    def _guard_native_hud_round(self, operation, original, wait_for_next_frame, *,
+                                preserve_end=True, false_only=False):
+        battle = self.ctx.auto_battle_context
+        if preserve_end and battle.last_check_end_result is not None:
+            self._frame_permit('battle_end_confirmed')
+            return original(operation)
+
+        screen, captured_at = operation.last_screenshot, operation.last_screenshot_time
+        hud = self._observe_hud(battle, screen, captured_at)
+        with attack_hud_scope(hud):
+            if not hud.blocks_ordinary or (false_only and hud.in_battle):
+                return original(operation)
+            # Retain native HUD updates and ordinary input revocation while
+            # withholding this frame from the operation's transition probes.
+            battle.check_battle_state(screen, captured_at)
+        return wait_for_next_frame(operation)
+
+    def _patch_shiyu_hud_rounds(self):
+        from zzz_od.application.shiyu_defense.shiyu_defense_battle import ShiyuDefenseBattle
+        from zzz_od.operation.battle.shiyu_defense import ShiyuDefenseBattleOp
+
+        def patch_round(cls, wait_for_next_frame):
+            original = cls.auto_battle
+
+            @wraps(original)
+            def guarded(operation):
+                if operation.ctx is not self.ctx:
+                    return original(operation)
+                return self._guard_native_hud_round(operation, original, wait_for_next_frame, false_only=True)
+
+            node = copy(original.operation_node_annotation)
+            node.op_method = guarded
+            guarded.operation_node_annotation = node
+            self._patch(cls, 'auto_battle', guarded)
+
+        def wait_app_battle(operation):
+            operation.find_interact_btn_times = 0
+            operation.no_countdown_start_time = None
+            return operation.round_wait(wait=self.ctx.battle_assistant_config.screenshot_interval)
+
+        def wait_reusable_battle(operation):
+            operation._find_interact_btn_times = 0
+            operation._no_countdown_start_time = None
+            return operation.round_wait(wait=self.ctx.battle_assistant_config.screenshot_interval)
+
+        patch_round(ShiyuDefenseBattle, wait_app_battle)
+        patch_round(ShiyuDefenseBattleOp, wait_reusable_battle)
+
     def install(self) -> None:
         from one_dragon.base.conditional_operation.operation_executor import OperationExecutor
         from one_dragon.base.conditional_operation import operation_executor as executor_source
@@ -398,10 +456,9 @@ class BattleInputControl:
         def guarded_check(battle,screen,screenshot_time,check_battle_end_normal_result=False,
                           check_battle_end_hollow_result=False,check_battle_end_defense_result=False,
                           check_distance=False,sync=False,*,chain_prompt=_UNOBSERVED):
-            owner.control.checkpoint(require_frame=True)
-            in_battle = battle.is_normal_attack_btn_available(screen)
+            hud = owner._observe_hud(battle, screen, screenshot_time)
             chain = None
-            if not in_battle:
+            if not hud.in_battle and not hud.blocks_ordinary:
                 chain = (owner.observe_chain_frame(battle, screen, screenshot_time)
                          if chain_prompt is _UNOBSERVED else chain_prompt)
                 # 结束结果同步确认，避免异步检查窗口中仍然发普攻。
@@ -413,7 +470,9 @@ class BattleInputControl:
                 owner._frame_permit('battle_end_confirmed')
                 if battle.auto_op is not None:battle.auto_op.stop_running()
                 return False
-            if in_battle:
+            if hud.blocks_ordinary:
+                version = owner._frame_permit('battle_hud_disabled')
+            elif hud.in_battle:
                 version = owner._frame_permit('battle_visible')
             elif chain is not None:
                 chain_key = tuple((portrait.side, portrait.agent.agent_name) for portrait in chain.portraits)
@@ -423,10 +482,31 @@ class BattleInputControl:
             scope = _permit_scope.set(version)
             frame = _chain_frame.set((battle, screen, screenshot_time, chain) if chain is not None else None)
             try:
-                return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
+                with attack_hud_scope(hud):
+                    return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
             finally:
                 _chain_frame.reset(frame)
                 _permit_scope.reset(scope)
+
+        normal_attack = AutoBattleContext.is_normal_attack_btn_available
+
+        @wraps(normal_attack)
+        def guarded_normal_attack(battle, screen):
+            hud = scoped_attack_hud(battle, screen)
+            return hud.normal_available if hud is not None else normal_attack(battle, screen)
+
+        if callable(getattr(AutoBattleContext, '_match_btn_ban_gray', None)) and hasattr(AutoBattleContext, 'check_btn_ban'):
+            check_btn_ban = AutoBattleContext.check_btn_ban
+
+            @wraps(check_btn_ban)
+            def guarded_btn_ban(battle, screen, ban_check_list):
+                hud = scoped_attack_hud(battle, screen)
+                if hud is not None:
+                    return hud.disabled_buttons(ban_check_list)
+                return check_btn_ban(battle, screen, ban_check_list)
+
+            self._patch(AutoBattleContext, 'check_btn_ban', guarded_btn_ban)
+            self._patch_shiyu_hud_rounds()
 
         self._patch(OperationExecutor,"_run",guarded_execute)
         self._patch(OperationExecutor,'run_async',guarded_submit)
@@ -434,6 +514,7 @@ class BattleInputControl:
         self._patch(ConditionalOperator,'_trigger_scene',guarded_trigger)
         self._patch(AutoBattleOperator,"operate_periodically",guarded_periodic)
         self._patch(AutoBattleContext,"check_battle_state",guarded_check)
+        self._patch(AutoBattleContext, 'is_normal_attack_btn_available', guarded_normal_attack)
         self._patch(AutoBattleContext,'check_chain_attack',guarded_chain_check)
         self._patch(AutoBattleContext,'_check_chain_attack_in_parallel',guarded_chain_recognition)
         self._patch(AutoBattleContext,'_match_chain_agent_in',guarded_chain_match)

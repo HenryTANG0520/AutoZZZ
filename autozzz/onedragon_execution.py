@@ -618,7 +618,7 @@ class OneDragonExecution:
                     applications = self.prepared_applications if app_id == "one_dragon" else (app_id,)
                     if "lost_void" in applications:
                         from .onedragon_lost_void import preserve_failed_exit
-                        adapters.enter_context(preserve_failed_exit(self.ctx))
+                        adapters.enter_context(preserve_failed_exit(self.ctx, battle_control=self.battle_control))
                     if "shiyu_defense" in applications:
                         from .onedragon_shiyu import preserve_battle_failure
                         adapters.enter_context(preserve_battle_failure(self.ctx))

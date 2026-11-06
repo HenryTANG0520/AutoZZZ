@@ -1,7 +1,7 @@
 """Preserve Lost Void clear, retreat, and reward results across SDK cleanup."""
 from contextlib import ExitStack, contextmanager
 import copy
-from functools import wraps
+from functools import partial, wraps
 
 
 _RESULT_SCREEN = "迷失之地-挑战结果"
@@ -101,8 +101,32 @@ def _patch_node(stack, ctx, cls, name, handler=None, *, incoming=None):
     wrapped.operation_node_annotation = node
     if incoming is not None:
         wrapped.operation_edge_annotation = [*original.operation_edge_annotation, incoming]
-    stack.callback(setattr, cls, name, original)
+    if name in vars(cls):
+        stack.callback(setattr, cls, name, original)
+    else:
+        stack.callback(delattr, cls, name)
     setattr(cls, name, wrapped)
+
+
+def _guard_disabled_hud(stack, battle_control, run_level):
+    ctx = battle_control.ctx
+    if not callable(getattr(type(ctx.auto_battle_context), '_match_btn_ban_gray', None)):
+        return
+    from zzz_od.operation.battle.lost_void import LostVoidBattleOp
+
+    def wait_level(operation):
+        operation.not_in_battle_times = 0
+        operation.agent_dead_times = 0
+        return operation.round_wait(wait_round_time=ctx.battle_assistant_config.screenshot_interval)
+
+    def wait_reusable(operation):
+        operation._no_in_battle_times = 0
+        operation._agent_dead_times = 0
+        return operation.round_wait(wait=ctx.battle_assistant_config.screenshot_interval)
+
+    guard = battle_control._guard_native_hud_round
+    _patch_node(stack, ctx, run_level, 'in_battle', partial(guard, wait_for_next_frame=wait_level, preserve_end=False))
+    _patch_node(stack, ctx, LostVoidBattleOp, 'auto_battle', partial(guard, wait_for_next_frame=wait_reusable))
 
 
 def _defer_completion(operation, original, fields):
@@ -127,7 +151,7 @@ def _defer_completion(operation, original, fields):
 
 
 @contextmanager
-def preserve_failed_exit(ctx):
+def preserve_failed_exit(ctx, *, battle_control=None):
     """Install the Lost Void outcome adapters for the duration of a run."""
     from one_dragon.base.operation.operation_edge import OperationEdgeDesc
     from one_dragon.utils.log_utils import log
@@ -194,6 +218,8 @@ def preserve_failed_exit(ctx):
         return result
 
     with ExitStack() as stack:
+        if battle_control is not None:
+            _guard_disabled_hud(stack, battle_control, LostVoidRunLevel)
         _patch_node(stack, ctx, LostVoidRunLevel, "handle_fail_exit", finish_exit)
         _patch_node(stack, ctx, LostVoidRunLevel, "handle_challenge_result_finish", settle)
         _patch_node(stack, ctx, LostVoidApp, "init_for_lost_void", initialize)

@@ -14,6 +14,7 @@ from one_dragon.utils.i18_utils import gt
 from zzz_od.application.battle_assistant.auto_battle.auto_battle_const import APP_ID
 from zzz_od.application.battle_assistant.battle_assistant_input_mode import apply_battle_assistant_input_mode
 
+from .onedragon_battle_hud import attack_hud_scope, observe_attack_hud
 from .onedragon_gamepad import release_controller_inputs
 
 
@@ -137,13 +138,21 @@ class SingleBattleApplication(Application):
     @operation_node(name='识别当前战斗', mute=True)
     def watch_battle(self):
         self.control.checkpoint(require_frame=True)
-        hud = self.battle.is_normal_attack_btn_available(self.last_screenshot)
+        try:
+            attack_hud = observe_attack_hud(self.battle, self.last_screenshot, self.last_screenshot_time)
+        except Exception:
+            self._suspend()
+            raise
+        hud = attack_hud.in_battle or attack_hud.blocks_ordinary
         chain = None
         if not hud and self._entered_battle:
             chain = self.battle_input.observe_chain_frame(self.battle, self.last_screenshot, self.last_screenshot_time)
         # The chain probe also rules out overlapping menus and result labels.
         interrupted = self._suspend() if not hud and chain is None else False
-        state, result_seen = ('fighting', False) if chain is not None else self._screen_observation(hud)
+        if attack_hud.blocks_ordinary and not (attack_hud.in_battle or self._entered_battle):
+            state, result_seen = 'waiting', False
+        else:
+            state, result_seen = ('fighting', False) if chain is not None else self._screen_observation(hud)
         self.control.checkpoint(require_frame=True)
 
         if state == 'fighting':
@@ -152,8 +161,9 @@ class SingleBattleApplication(Application):
                 self._suspend()
                 return self._unverified()
             self._start_from_frame()
-            self.battle.check_battle_state(self.last_screenshot, self.last_screenshot_time,
-                                           check_battle_end_normal_result=chain is None, chain_prompt=chain)
+            with attack_hud_scope(attack_hud):
+                self.battle.check_battle_state(self.last_screenshot, self.last_screenshot_time,
+                                               check_battle_end_normal_result=chain is None, chain_prompt=chain)
             self.control.checkpoint(require_frame=True)
             self._wait_started = None
             self._publish('fighting')
