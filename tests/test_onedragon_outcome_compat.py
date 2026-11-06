@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 import sys
 from types import SimpleNamespace as NS
@@ -130,6 +130,35 @@ class LostVoidCompatibilityTests(unittest.TestCase):
 
 
 class ShiyuCompatibilityTests(unittest.TestCase):
+    def test_report_alias_requires_unobscured_progress_in_the_current_frame(self):
+        names = ("战报", "剧变节点进度", "前次行动最佳记录", "领取奖励-界面", "下一步")
+        areas = {name: NS(rect=name, color_range=None) for name in names}
+        loader = NS(get_area=lambda screen, name: areas[name], is_screen_active=lambda screen: True)
+        ctx = NS(screen_loader=loader, run_context=NS(current_app_id="shiyu_defense"))
+        ctx.ocr_service = NS(get_ocr_result_list=lambda *, image, rect, **_: [
+            NS(data=value) for value in image.get(rect, ())
+        ])
+        original = Mock(side_effect=lambda _ctx, screen, area, _crop=True: area.rect in screen.get("visible", ()))
+        utils = NS(find_area_in_screen=original, FindAreaResultEnum=NS(TRUE=True, FALSE=False))
+        cases = (
+            ({"剧变节点进度": ["剧变节点", "3/5"]}, True),
+            ({"剧变节点进度": ["剧变节点：4/5"]}, True),
+            ({"剧变节点进度": ["3/5"]}, False),
+            ({"剧变节点进度": ["剧变节点：3/5", "4/5"]}, False),
+            ({"剧变节点进度": ["剧变节点：6/5"]}, False),
+            ({"剧变节点进度": ["剧变节点：3/5"], "visible": ["领取奖励-界面"]}, False),
+        )
+        with patch.dict(sys.modules, {"one_dragon.base.screen": NS(screen_utils=utils)}), ExitStack() as stack:
+            shiyu._patch_report_anchor(stack, ctx)
+            for frame, expected in cases:
+                with self.subTest(frame=frame):
+                    frame = {"战报": ["前哨档案"], **frame}
+                    self.assertEqual(utils.find_area_in_screen(ctx, frame, areas["战报"]), expected)
+            ctx.run_context.current_app_id = "charge_plan"
+            self.assertFalse(utils.find_area_in_screen(ctx, {"战报": ["前哨档案"],
+                "剧变节点进度": ["剧变节点：3/5"]}, areas["战报"]))
+        self.assertIs(utils.find_area_in_screen, original)
+
     def test_first_node_requires_progress_until_a_selection_is_accepted(self):
         with shiyu_app() as app:
             read_progress = app.ctx.ocr.crop_and_run_ocr

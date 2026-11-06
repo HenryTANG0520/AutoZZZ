@@ -33,6 +33,52 @@ def _progress_pair(reads):
     return pairs.pop() if len(pairs) == 1 else None
 
 
+def _valid_progress(pair):
+    current, total = pair
+    return 0 < total <= 10 and current <= total
+
+
+def _patch_report_anchor(stack, owner):
+    if getattr(owner, "ocr_service", None) is None:
+        return
+    from one_dragon.base.screen import screen_utils
+
+    original = screen_utils.find_area_in_screen
+    found = screen_utils.FindAreaResultEnum.TRUE
+    missing = screen_utils.FindAreaResultEnum.FALSE
+    loader = owner.screen_loader
+
+    def read_text(screen, area):
+        return {item.data.strip() for item in owner.ocr_service.get_ocr_result_list(
+            image=screen, rect=area.rect, color_range=area.color_range, crop_first=True)}
+
+    @wraps(original)
+    def match(ctx, screen, area, crop_first=True):
+        result = original(ctx, screen, area, crop_first)
+        if (result != missing or ctx is not owner or ctx.run_context.current_app_id != "shiyu_defense"
+                or not loader.is_screen_active(_SCREEN) or area is not loader.get_area(_SCREEN, "战报")):
+            return result
+        if "前哨档案" not in read_text(screen, area):
+            return result
+        progress_area = loader.get_area(_SCREEN, "剧变节点进度")
+        if progress_area is None:
+            return result
+        progress = read_text(screen, progress_area)
+        pair = _progress_pair(progress)
+        has_label = "剧变节点" in progress or any(
+            text.startswith("剧变节点") and _PROGRESS.fullmatch(text) for text in progress
+        )
+        if not has_label or pair is None or not _valid_progress(pair):
+            return result
+        for name in ("前次行动最佳记录", "领取奖励-界面", "下一步"):
+            if original(ctx, screen, loader.get_area(_SCREEN, name)) != missing:
+                return result
+        return found
+
+    stack.callback(setattr, screen_utils, "find_area_in_screen", original)
+    screen_utils.find_area_in_screen = match
+
+
 def _clear_pending_reward(record):
     if _PENDING_REWARD_DAY in record.data:
         record.data.pop(_PENDING_REWARD_DAY)
@@ -80,7 +126,7 @@ def preserve_battle_failure(ctx: ZContext) -> Iterator[None]:
             if pair is None:
                 return app.round_retry(_PROGRESS_UNVERIFIED, wait=1)
             current, total = pair
-            confirmed = 0 < total <= 10 and current <= total
+            confirmed = _valid_progress(pair)
             if not confirmed and not record.critical_history:
                 return app.round_retry(_PROGRESS_UNVERIFIED, wait=1)
             if confirmed:
@@ -168,6 +214,7 @@ def preserve_battle_failure(ctx: ZContext) -> Iterator[None]:
         return result
 
     with ExitStack() as stack:
+        _patch_report_anchor(stack, ctx)
         cls = ShiyuDefenseApp
         _patch_node(stack, ctx, cls, "choose_node_idx", choose_node)
         _patch_node(stack, ctx, cls, "to_next_node", next_node)
