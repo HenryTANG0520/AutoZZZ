@@ -130,7 +130,10 @@ class ApplicationRequirements:
                     if type(config.predefined_team_idx)is not int or not 0<=config.predefined_team_idx<len(teams):raise ValueError("预编队伍位置无效。")
                 self.scripts.append(dict(kind="key_sim",name="真拿命验收",app_id=app_id))
             elif app_id == "operation_debug":
-                self.scripts.append(dict(kind="operation_template",name=self.store.get(app_id).operation_template))
+                config = self.store.get(app_id)
+                if type(config.repeat_enabled) is not bool:
+                    raise ValueError("循环调试开关须为布尔值。")
+                self.scripts.append(dict(kind="operation_template", name=config.operation_template, repeat=config.repeat_enabled))
             elif app_id == "notorious_hunt":
                 from zzz_od.application.charge_plan.charge_plan_config import ChargePlanConfig
                 config = self.store.get(app_id)
@@ -221,10 +224,13 @@ class ApplicationRequirements:
 
         # 先核实所有策略文件，避免下载完模型才发现队伍指向无效策略。
         self.validate_policy_files()
-        from .onedragon_scripts import compile_key_sim,compile_operation_template
+        from .onedragon_scripts import capture_operation_template, compile_key_sim
         for script in self.scripts:
             def compile(script=script):
-                operations=compile_key_sim(self.ctx,script["name"],script["app_id"]) if script["kind"]=="key_sim" else compile_operation_template(self.ctx,script["name"])
+                if script["kind"] == "key_sim":
+                    operations = compile_key_sim(self.ctx, script["name"], script["app_id"])
+                else:
+                    operations, script["revision"] = capture_operation_template(self.ctx, script["name"])
                 try:script["operations"]=len(operations)
                 finally:
                     for operation in operations:operation.dispose()

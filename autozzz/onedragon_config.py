@@ -177,8 +177,11 @@ class ConfigurationStore:
         if name in ("auto_battle", "auto_battle_config"):
             field["options"] = [dict(label=p["name"], value=p["name"]) for p in self.service.policies()]
             field["kind"] = "enum"
-        if name in ("dodge_config", "dodge_assistant_config", "operation_template", "route_list", "challenge_config"):
-            folder = {"dodge_config": "dodge", "dodge_assistant_config": "dodge", "operation_template": "auto_battle_operation",
+        if name == "operation_template":
+            from .onedragon_scripts import operation_template_choices
+            field.update(kind="enum", options=operation_template_choices())
+        if name in ("dodge_config", "dodge_assistant_config", "route_list", "challenge_config"):
+            folder = {"dodge_config": "dodge", "dodge_assistant_config": "dodge",
                       "route_list": "world_patrol_route_list", "challenge_config": "lost_void_challenge" if app_id == "lost_void" else "hollow_zero_challenge"}[name]
             names = sorted({p.name.removesuffix(".yml").removesuffix(".sample") for p in (self.root/"config"/folder).glob("*.yml")})
             field.update(kind="enum", options=[dict(label=n, value=n) for n in names])

@@ -310,14 +310,17 @@ class OneDragonExecution:
     def configuration_digest(self) -> str:
         digest=hashlib.sha256()
         from .onedragon_plugins import PluginStore
+        from .onedragon_scripts import read_operation_template_file
         digest.update(PluginStore(self.data).revision().encode('ascii'))
         paths = list((self.data/"config").rglob("*.yml"))
+        template_root = self.data / "config" / "auto_battle_operation"
         maps = self.data/"assets/game_data/world_patrol"
         paths.extend(path for path in maps.rglob("*") if path.is_file() and path.suffix in (".png", ".yml"))
         for path in sorted(paths):
             if path.relative_to(self.data).as_posix()=='config/pip.yml':continue
             digest.update(str(path.relative_to(self.data)).encode("utf-8"))
-            digest.update(path.read_bytes())
+            content = read_operation_template_file(template_root, path)[1] if path.is_relative_to(template_root) else path.read_bytes()
+            digest.update(content)
         return digest.hexdigest()
 
     def prepare_route_debug(self, descriptor: dict, expected_digest: str) -> dict:
@@ -590,6 +593,11 @@ class OneDragonExecution:
                 if self.prepared_hash!=self.configuration_digest():raise ValueError("配置已变化，请重新准备应用。")
                 self.resource_confirmation.consume(resource_confirmation, self.prepared_hash)
                 self.script_control.reset()
+                debug = next((item for item in self.prepared_requirements.get("scripts", ())
+                              if item["kind"] == "operation_template"), None)
+                if debug is not None:
+                    self.script_control.debug_template = (debug["name"], debug["repeat"], debug["revision"])
+                    adapters.callback(setattr, self.script_control, "debug_template", None)
                 self.redemption_control.reset()
                 self.login_control.reset()
                 self.daily_control.reset()
@@ -696,7 +704,9 @@ class OneDragonExecution:
                     or rows[0]['created']!=expected_window['process_created'] or not window.identity_valid()):
                     window.clear_binding()
                     raise RuntimeError('启动后游戏进程身份已变化，未发送登录输入。')
-        if hasattr(self.ctx.controller,'begin_input_policy'):self.ctx.controller.begin_input_policy(app_id)
+        if hasattr(self.ctx.controller, 'begin_input_policy'):
+            policy_app = None if app_id == 'operation_debug' and op_factory is not None else app_id
+            self.ctx.controller.begin_input_policy(policy_app)
         with self.lock:
             self.control.reset()
             self._input_ready=True

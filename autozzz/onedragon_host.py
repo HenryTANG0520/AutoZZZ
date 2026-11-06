@@ -315,7 +315,10 @@ class ManagedController(ZPcController):
         return self.background_mode or getattr(self,'_background_requested',False)
 
     def begin_input_policy(self,app_id):
-        requested=self.ctx.battle_assistant_config.background_mode if app_id in ('auto_battle','dodge_assistant') else self.game_config.background_mode
+        if app_id in ('auto_battle', 'dodge_assistant', 'operation_debug'):
+            requested = self.ctx.battle_assistant_config.background_mode
+        else:
+            requested = self.game_config.background_mode
         if type(requested)is not bool:raise ValueError('后台开关须为布尔值。')
         background_mouse_policy(self.game_config)
         self._task_policy_active=True;self._foreground_required=False;self._background_requested=requested

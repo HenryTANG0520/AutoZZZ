@@ -5,7 +5,9 @@ import copy
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps,update_wrapper
+import hashlib
 import math
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -59,26 +61,134 @@ def compile_key_sim(ctx: Any, name: str, app_id: str) -> list[Any]:
     return operations
 
 
-def compile_operation_template(ctx: Any, name: str) -> list[Any]:
+def _operation_template_root() -> Path:
+    from one_dragon.utils import os_utils
+
+    root = Path(os_utils.get_work_dir()).resolve() / "config" / "auto_battle_operation"
+    if root.resolve() != root:
+        raise ValueError("指令模板目录不能重定向到其他位置。")
+    return root
+
+
+def _operation_template_path(root: Path, name: str) -> Path:
     from .onedragon_service import OneDragonService
     from one_dragon.base.conditional_operation.loader import ConditionalOperatorLoader
+
+    for part in name.split("/") if isinstance(name, str) else (name,):
+        OneDragonService._name(part)
+    path = Path(ConditionalOperatorLoader.get_yaml_file_path([root.name], name, False))
+    if not path.resolve().is_relative_to(root):
+        raise ValueError("指令模板路径超出模板目录。")
+    return path
+
+
+def read_operation_template_file(root: Path, path: Path) -> tuple[Path, bytes]:
+    """Read the same Win32 handle whose final pathname was checked."""
+    import _winapi
+    import ctypes as C
+    from ctypes import wintypes as W
+    import msvcrt
+    import os
+
+    from .onedragon_bundle import filesystem_path
+
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError("指令模板路径超出模板目录。")
+    native = filesystem_path(resolved)
+    # FILE_SHARE_READ excludes in-place writers and replacement while the bytes are read.
+    handle = _winapi.CreateFile(str(native), _winapi.GENERIC_READ, 1, 0, _winapi.OPEN_EXISTING, 0, 0)
+    try:
+        final_path = C.windll.kernel32.GetFinalPathNameByHandleW
+        final_path.argtypes = [W.HANDLE, W.LPWSTR, W.DWORD, W.DWORD]
+        final_path.restype = W.DWORD
+        buffer = C.create_unicode_buffer(32768)
+        size = final_path(handle, buffer, len(buffer), 0)
+        if not 0 < size < len(buffer) or Path(buffer.value) != native:
+            raise ValueError("无法核实打开的指令模板路径，可能已被重定向。")
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        handle = None  # Ownership transferred to the descriptor.
+        with os.fdopen(fd, "rb") as stream:
+            return resolved, stream.read()
+    finally:
+        if handle is not None:
+            _winapi.CloseHandle(handle)
+
+
+def operation_template_choices() -> list[dict]:
+    from zzz_od.application.battle_assistant.operation_template_config import get_operation_template_config_list
+
+    root = _operation_template_root()
+    options = []
+    for item in get_operation_template_config_list():
+        try:
+            _operation_template_path(root, item.value)
+        except (ValueError, OSError, RuntimeError):
+            continue
+        options.append(dict(label=item.label, value=item.value))
+    return options
+
+
+def compile_operation_template(ctx: Any, name: str) -> list[Any]:
+    return capture_operation_template(ctx, name)[0]
+
+
+def capture_operation_template(ctx: Any, name: str) -> tuple[list[Any], str]:
     from one_dragon.base.conditional_operation.operation_def import OperationDef
-    OneDragonService._name(name)
-    data = ConditionalOperatorLoader.load_yaml_config(["auto_battle_operation"], name, False)
-    raw = data.get("operations", [])
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("指令模板不存在或没有指令：" + name)
-    loader = ConditionalOperatorLoader(["auto_battle_operation"], name, ["auto_battle_operation"], ["auto_battle_state_handler"], False)
+    from one_dragon.utils import yaml_utils
+
+    root = _operation_template_root()
+    digest = hashlib.sha256()
+    templates = {}
+    file_bytes = {}
+
+    def definitions(template, active):
+        # 固定 SDK 的递归加载没有路径回调。每个引用复用本次捕获的文件版本。
+        if not isinstance(template, str):
+            raise ValueError("指令模板名称必须为文本。")
+        if template not in templates:
+            chosen = _operation_template_path(root, template)
+            resolved, content = read_operation_template_file(root, chosen)
+            if resolved in file_bytes and file_bytes[resolved] != content:
+                raise ValueError("读取引用期间指令模板发生变化，请重新准备。")
+            file_bytes[resolved] = content
+            for value in (template.encode("utf-8"), chosen.relative_to(root).as_posix().encode("utf-8"),
+                          resolved.relative_to(root).as_posix().encode("utf-8"), content):
+                digest.update(len(value).to_bytes(8, "big"))
+                digest.update(value)
+            data = yaml_utils.safe_load(content.decode("utf-8"))
+            if data is None:
+                data = {}
+            if not isinstance(data, dict):
+                raise ValueError("指令模板 YAML 顶层必须是映射：" + template)
+            templates[template] = (resolved, data.get("operations", []))
+        path, raw = templates[template]
+        if path in active:
+            raise ValueError("指令模板循环引用 " + template)
+        if not isinstance(raw, list) or (not raw and not active):
+            raise ValueError("指令模板不存在或没有指令：" + template)
+        active.add(path)
+        try:
+            for item in raw:
+                if not isinstance(item, dict):
+                    raise ValueError("模板指令必须为映射。")
+                definition = OperationDef(item)
+                if definition.operation_template is None:
+                    yield definition
+                else:
+                    yield from definitions(definition.operation_template, active)
+        finally:
+            active.remove(path)
+
     operations = []
-    for item in raw:
-        if not isinstance(item, dict):raise ValueError("模板指令必须为映射。")
-        for definition in loader.load_template_for_operation(OperationDef(item), set()):
-            validate_definition(definition)
-            operation = ctx.auto_battle_context.atomic_op_factory.get_atomic_op(definition)
-            validate_atomic(operation)
-            operations.append(operation)
-    if not operations:raise ValueError("展开后的指令模板为空。")
-    return operations
+    for definition in definitions(name, set()):
+        validate_definition(definition)
+        operation = ctx.auto_battle_context.atomic_op_factory.get_atomic_op(definition)
+        validate_atomic(operation)
+        operations.append(operation)
+    if not operations:
+        raise ValueError("展开后的指令模板为空。")
+    return operations, digest.hexdigest()
 
 
 @dataclass
@@ -93,6 +203,7 @@ class ScriptPlaybackControl:
         self.control = control
         self.originals: list[tuple[Any, str, Any]] = []
         self.progress: dict = {}
+        self.debug_template: tuple[str, bool, str] | None = None
 
     def patch(self, target: Any, name: str, replacement: Any) -> None:
         original = getattr(target, name)
@@ -106,6 +217,7 @@ class ScriptPlaybackControl:
 
     def reset(self) -> None:
         self.progress = {}
+        self.debug_template = None
 
     def wait(self, seconds: float) -> None:
         if not self.control.hold(seconds):self.control.checkpoint(require_frame=True)
@@ -166,6 +278,7 @@ class ScriptPlaybackControl:
         from zzz_od.auto_battle.atomic_op.wait import AtomicWait
         from zzz_od.operation.key_sim_runner import KeySimRunner
         from zzz_od.application.devtools.operation_debug.operation_debug_app import OperationDebugApp
+        from one_dragon.utils.log_utils import log
         owner = self
         original_time = btn_common.time
         class ScopedTime:
@@ -180,18 +293,42 @@ class ScriptPlaybackControl:
             if _playing.get() is owner:return owner.wait(operation.wait_seconds)
             return original_wait(operation)
         self.patch(AtomicWait, "execute", wait)
-        for cls, name in ((KeySimRunner, "load_config"), (OperationDebugApp, "load_op")):
-            original = getattr(cls, name)
-            def loader(operation, original=original):
-                result = original(operation)
-                if result.is_success:operation._autozzz_program = ProgramState()
-                return result
-            self.patch(cls, name, loader)
+        original_load_key_sim = KeySimRunner.load_config
+
+        def load_key_sim(operation):
+            result = original_load_key_sim(operation)
+            if result.is_success:
+                operation._autozzz_program = ProgramState()
+            return result
+
+        def load_debug(operation):
+            if owner.debug_template is None:
+                return operation.round_fail("指令模板未准备，请重新准备应用。")
+            name, repeat, revision = owner.debug_template
+            try:
+                config = operation._get_config()
+                if config.operation_template != name or config.repeat_enabled is not repeat:
+                    return operation.round_fail("指令调试配置已变化，请重新准备应用。")
+                ops, current = capture_operation_template(operation.ctx, name)
+                if current != revision:
+                    return operation.round_fail("指令模板已变化，请重新准备应用。")
+            except Exception:
+                log.error("指令模板加载失败", exc_info=True)
+                return operation.round_fail("无法核实已准备的指令模板，请重新准备应用。")
+            operation.ops = ops
+            operation.op_idx = 0
+            operation._autozzz_repeat = repeat
+            operation._autozzz_program = ProgramState()
+            return operation.round_success()
+
+        self.patch(KeySimRunner, "load_config", load_key_sim)
+        self.patch(OperationDebugApp, "load_op", load_debug)
         def key_step(operation):return owner.execute(operation, False)
-        def debug_step(operation):return owner.execute(operation, operation._get_config().repeat_enabled)
+        def debug_step(operation):return owner.execute(operation, operation._autozzz_repeat)
         self.patch(KeySimRunner, "run_key_sim", key_step)
         self.patch(OperationDebugApp, "run_operations", debug_step)
 
     def close(self) -> None:
+        self.debug_template = None
         for target, name, original in reversed(self.originals):setattr(target, name, original)
         self.originals.clear()
