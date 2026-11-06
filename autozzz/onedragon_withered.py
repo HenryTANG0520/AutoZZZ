@@ -27,6 +27,7 @@ class WitheredExitControl:
         setattr(cls, name, wrapped)
 
     def install(self):
+        from one_dragon.base.screen import screen_utils
         from zzz_od.hollow_zero.hollow_battle import HollowBattle
         from zzz_od.hollow_zero.hollow_exit_by_menu import HollowExitByMenu
         from zzz_od.hollow_zero.hollow_runner import HollowRunner
@@ -48,15 +49,21 @@ class WitheredExitControl:
             reason = self._exit_reason.get()
             if not reason:
                 return original(runner)
-            # Reuse the SDK's exit cleanup. The shared button carries no victory evidence.
-            result = HollowExitByMenu.click_finish(runner)
-            if result.is_success:
-                # The SDK counts entries on confirmed return, including voluntary exits.
-                self.control.checkpoint(require_frame=True)
-                runner.run_record.add_daily_times()
-                return runner.round_fail(f"枯萎之都战斗退出（{reason}），已返回街区。")
-            result.status = f"枯萎之都战斗退出（{reason}），未确认返回街区。"
-            return result
+            frame = runner.last_screenshot
+            unconfirmed = f"枯萎之都战斗退出（{reason}），未确认返回街区。"
+            # The Matrix entry also has a Street button in the shared exit area.
+            if screen_utils.is_target_screen(self.ctx, frame, "迷失之地-矩阵行动"):
+                return runner.round_retry(unconfirmed, wait=1)
+            if not screen_utils.is_target_screen(self.ctx, frame, "大世界-普通"):
+                # Reuse the SDK's exit cleanup. The shared button carries no victory evidence.
+                result = HollowExitByMenu.click_finish(runner)
+                if not result.is_success:
+                    result.status = unconfirmed
+                    return result
+            # The SDK counts entries on confirmed return, including voluntary exits.
+            self.control.checkpoint(require_frame=True)
+            runner.run_record.add_daily_times()
+            return runner.round_fail(f"枯萎之都战斗退出（{reason}），已返回街区。")
 
         self._patch(HollowRunner, "execute", run_hollow)
         self._patch(HollowBattle, "move_fail", begin_failed_exit)

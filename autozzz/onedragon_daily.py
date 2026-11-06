@@ -341,6 +341,48 @@ class DailyInterfaceControl:
         self.patch(RandomPlayApp, 'transport', lambda op, original:
             compatible_transport(op, original, RandomPlayTransportPoint.POINT_1.value.value))
         self.patch(DailySignInApp, 'run_sub_app', compatible_signin)
+        self._install_exact_back_region()
+
+    def _install_exact_back_region(self):
+        # This SDK uses a partial match here. The official fix already reads complete labels.
+        if getattr(self.ctx, 'autozzz_runtime_revision', None) != 'f80b68456306d2afb97be72436dcda27f2ed6b59':
+            return
+        from one_dragon.utils import str_utils
+        from one_dragon.utils.i18_utils import gt
+        from zzz_od.operation.back_to_normal_world import BackToNormalWorld
+
+        def check_screen(op, original):
+            if type(op) is not BackToNormalWorld:
+                return original(op)
+            helper = 'round_by_find_and_click_area'
+            native_click = op.round_by_find_and_click_area
+            had_override = helper in vars(op)
+
+            def click_area(*args, **kwargs):
+                if (kwargs or len(args) != 3 or args[0] is not op.last_screenshot
+                        or args[1:] != ('画面-通用', '左上角-区域')):
+                    return native_click(*args, **kwargs)
+                image, screen_name, area_name = args
+                area = op.ctx.screen_loader.get_area(screen_name, area_name)
+                if area is not None:
+                    labels = {gt(word, 'game') for word in ('街区', '勘域', '区域')}
+                    for match in op.ctx.ocr_service.get_ocr_result_list(image=image, rect=area.rect):
+                        if str_utils.remove_whitespace(match.data) in labels:
+                            if op.ctx.controller.click(match.center, pc_alt=area.pc_alt):
+                                return op.round_success(area_name)
+                return op.round_retry()
+
+            # Keep the native node and its branch order. This override lives on this call's operation.
+            setattr(op, helper, click_area)
+            try:
+                return original(op)
+            finally:
+                if had_override:
+                    setattr(op, helper, native_click)
+                else:
+                    delattr(op, helper)
+
+        self.patch(BackToNormalWorld, 'check_screen_and_run', check_screen)
 
     def reset(self):
         self.fallbacks.clear()
