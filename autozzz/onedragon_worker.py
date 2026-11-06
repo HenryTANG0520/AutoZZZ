@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 
+from .onedragon_bundle import BUNDLE_DIRECTORY, use_verified_site_packages
 from .onedragon_runtime import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, UPSTREAM_REVISION, RuntimePaths
 from .runtime_generation import PROGRAM_UPDATE_METHODS, SDK_CONTROL_METHODS
 
@@ -30,14 +31,22 @@ def close_service(service):
 
 
 def verify_worker_identity(args):
+    """Verify the runtime before configuring its existing dependency path."""
     if args.runtime_identity is None:
         if args.runtime_identity_digest is not None or args.runtime_revision!=UPSTREAM_REVISION:
             raise ValueError('非固定SDK需要已验证的候选身份。')
+        if args.product_root is not None:
+            bundle = args.product_root.resolve() / BUNDLE_DIRECTORY
+            if (args.source.resolve() == bundle / 'source'
+                    and Path(sys.executable).resolve() == bundle / 'python/python.exe'
+                    and Path(__file__).resolve().parent.parent == bundle / 'bridge'):
+                use_verified_site_packages(bundle / 'python')
         return UPSTREAM_REVISION
     from .runtime_selection import verify_identity
     result=verify_identity(args.runtime_identity,args.runtime_identity_digest,source=args.source,
         python=Path(sys.executable),bridge=Path(__file__).resolve().parent.parent,
         revision=args.runtime_revision,protocol=PROTOCOL_VERSION)
+    use_verified_site_packages(args.runtime_identity.resolve().parent / 'env')
     return result['revision']
 
 

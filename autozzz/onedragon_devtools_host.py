@@ -202,7 +202,6 @@ def main():
         from .task_lease import JoinedRunLease
         lease=JoinedRunLease.from_environment()
         if lease is None:raise RuntimeError('开发工具缺少任务锁。')
-        sys.path.insert(0,str(args.source.resolve()/'src'))
         revision=verify_worker_identity(args)
         return run(args.source,args.data,args.profile,emit,lease,runtime_revision=revision,
             stable_data=args.stable_data,product_root=args.product_root,runtime_generation=args.selection_generation,management_only=args.management_only)

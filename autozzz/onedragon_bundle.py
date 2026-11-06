@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import sys
 
 MANIFEST_NAME = 'autozzz-bundle.json'
 BUNDLE_DIRECTORY = 'onedragon'
@@ -24,6 +25,21 @@ def filesystem_path(path: Path) -> Path:
         return path
     value=str(path)
     return Path('\\\\?\\UNC\\'+value[2:] if value.startswith('\\\\') else '\\\\?\\'+value)
+
+
+def use_verified_site_packages(python_root: Path) -> None:
+    """Use the extended spelling of the already configured local dependency directory."""
+    if os.name != 'nt':
+        return
+    prefix = filesystem_path(python_root)
+    if filesystem_path(Path(sys.prefix).resolve()) != prefix:
+        raise BundleError('解释器依赖目录与已核验运行时不符。')
+    site = prefix / 'Lib/site-packages'
+    for index, entry in enumerate(sys.path):
+        if isinstance(entry, str):
+            path = Path(entry)
+            if path.is_absolute() and filesystem_path(path) == site:
+                sys.path[index] = str(site)
 
 
 def digest(path: Path) -> str:

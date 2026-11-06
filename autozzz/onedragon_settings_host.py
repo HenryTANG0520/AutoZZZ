@@ -86,12 +86,12 @@ def run(source,data,target,emit,lease,after_show=None,*,runtime_revision=None,st
     from .onedragon_settings import validate_target
     app=QApplication.instance() or QApplication(['AutoZZZ'])
     app.setQuitOnLastWindowClosed(True)
-    from .native_preferences import apply_native_preferences
-    apply_native_preferences()
     service=OneDragonService(Path(source),Path(data),run_lease=lease,runtime_revision=runtime_revision,
         stable_data=stable_data,product_root=product_root,runtime_generation=runtime_generation,management_only=management_only)
     with profile_lock(data):
         try:
+            from .native_preferences import apply_native_preferences
+            apply_native_preferences()
             ctx=service._create_context()
             if not isinstance(target,dict) or set(target)!={'app_id','instance_idx','revision','group_id'}:raise ValueError('专用设置目标无效。')
             validate_target(ctx,**target)
@@ -137,8 +137,6 @@ def main():
         from .task_lease import JoinedRunLease
         lease=JoinedRunLease.from_environment()
         if lease is None:raise RuntimeError('专用设置缺少任务锁。')
-        # 先设置来源，Qt 模块和原生设置类才可导入。
-        sys.path.insert(0,str(args.source.resolve()/'src'))
         revision=verify_worker_identity(args)
         return run(args.source,args.data,json.loads(args.target),emit,lease,runtime_revision=revision,
             stable_data=args.stable_data,product_root=args.product_root,runtime_generation=args.selection_generation,management_only=args.management_only)

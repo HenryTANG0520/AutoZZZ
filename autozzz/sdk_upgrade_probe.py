@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from .onedragon_bundle import filesystem_path
+from .onedragon_bundle import filesystem_path, use_verified_site_packages
 
 
 def probe(identity,checksum,data):
@@ -13,6 +13,7 @@ def probe(identity,checksum,data):
     metadata=read_json(identity);root=identity.parent
     verify_identity(identity,checksum,source=root/'source',python=Path(sys.executable),bridge=Path(__file__).resolve().parent.parent,
         revision=metadata['revision'],protocol=metadata['protocol'],require_compatible=False)
+    use_verified_site_packages(root / 'env')
     runtime_root=filesystem_path(root)
     sys.path.insert(0,str(runtime_root/'source/src'))
     from one_dragon.utils import os_utils
