@@ -9,6 +9,10 @@ _REWARD_ICONS = ("奖励-零号业绩", "奖励-丁尼")
 _CAP_FIELDS = ("eval_point_complete", "period_reward_complete")
 _STABLE_REWARDS = "最终结算奖励栏已核实"
 _INCOMPLETE_REWARDS = "最终结算奖励栏观察不完整"
+_DAILY_LIMIT = "已达到迷失之地日上限"
+_CHECK_BOUNTY_AT_CAP = "日上限后核实悬赏"
+_TRAVEL_FOR_BOUNTY_AT_CAP = "日上限后前往悬赏"
+_ENTRY_SCREENS = ("迷失之地-入口-周期", "迷失之地-入口-常规")
 
 
 def _reward_area(level, name):
@@ -65,9 +69,13 @@ def _observe_settlement(level):
         if level.round_by_find_area(frame, _RESULT_SCREEN, _REWARD_ICONS[0]).is_success:
             level.reward_eval_found = True
             return "已识别零号业绩奖励"
-        if level.round_by_find_area(frame, _RESULT_SCREEN, _REWARD_ICONS[1]).is_success:
+        money_visible = level.round_by_find_area(frame, _RESULT_SCREEN, _REWARD_ICONS[1]).is_success
+        if money_visible:
             level.reward_dn_found = True
-        slots = _reward_slots(level, frame, eval_area)
+        labels = _reward_slots(level, frame, eval_area)
+        # An occupied slot without a recognized reward cannot establish either cap.
+        if labels is not None and labels.count("EMPTY") == 8 - int(money_visible):
+            slots = labels
 
     count, previous_at, previous_slots = getattr(level, "_autozzz_reward_sample", (0, 0, None))
     observed_at = level.last_screenshot_time
@@ -79,18 +87,20 @@ def _observe_settlement(level):
     return None
 
 
-def _patch_node(stack, ctx, cls, name, handler):
+def _patch_node(stack, ctx, cls, name, handler=None, *, incoming=None):
     original = getattr(cls, name)
 
     @wraps(original)
     def wrapped(operation):
-        if operation.ctx is ctx:
+        if handler is not None and operation.ctx is ctx:
             return handler(operation, original)
         return original(operation)
 
     node = copy.copy(original.operation_node_annotation)
     node.op_method = wrapped
     wrapped.operation_node_annotation = node
+    if incoming is not None:
+        wrapped.operation_edge_annotation = [*original.operation_edge_annotation, incoming]
     stack.callback(setattr, cls, name, original)
     setattr(cls, name, wrapped)
 
@@ -119,6 +129,7 @@ def _defer_completion(operation, original, fields):
 @contextmanager
 def preserve_failed_exit(ctx):
     """Install the Lost Void outcome adapters for the duration of a run."""
+    from one_dragon.base.operation.operation_edge import OperationEdgeDesc
     from one_dragon.utils.log_utils import log
     from zzz_od.application.hollow_zero.lost_void.lost_void_app import LostVoidApp
     from zzz_od.application.hollow_zero.lost_void.operation.lost_void_run_level import LostVoidRunLevel
@@ -148,8 +159,23 @@ def preserve_failed_exit(ctx):
             log.info("迷失之地奖励结算：%s", proof)
         return result
 
+    def initialize(app, original):
+        record = app.run_record
+        if (app.config.is_bounty_commission_mode and not record.bounty_commission_complete
+                and 0 < app.config.daily_plan_times <= record.daily_run_times):
+            # At the deployment cap, inspect the bounty without entering the battle path.
+            screen = app.check_and_update_current_screen(
+                app.last_screenshot, screen_name_list=list(_ENTRY_SCREENS))
+            status = _CHECK_BOUNTY_AT_CAP if screen in _ENTRY_SCREENS else _TRAVEL_FOR_BOUNTY_AT_CAP
+            return app.round_success(status)
+        return original(app)
+
     def check_progress(app, original):
-        return _defer_completion(app, original, ("bounty_commission_complete",))
+        result = _defer_completion(app, original, ("bounty_commission_complete",))
+        if (result.is_success and result.status in (LostVoidApp.STATUS_AGAIN, LostVoidApp.STATUS_AGAIN_MATRIX)
+                and app.run_record.is_finished_by_day):
+            return app.round_success(_DAILY_LIMIT)
+        return result
 
     def claim(app, original):
         result = original(app)
@@ -170,7 +196,12 @@ def preserve_failed_exit(ctx):
     with ExitStack() as stack:
         _patch_node(stack, ctx, LostVoidRunLevel, "handle_fail_exit", finish_exit)
         _patch_node(stack, ctx, LostVoidRunLevel, "handle_challenge_result_finish", settle)
-        _patch_node(stack, ctx, LostVoidApp, "check_bounty_commission_before", check_progress)
+        _patch_node(stack, ctx, LostVoidApp, "init_for_lost_void", initialize)
+        _patch_node(stack, ctx, LostVoidApp, "tp_to_lost_void",
+                    incoming=OperationEdgeDesc("初始化加载", status=_TRAVEL_FOR_BOUNTY_AT_CAP))
+        _patch_node(stack, ctx, LostVoidApp, "check_bounty_commission_before", check_progress,
+                    incoming=OperationEdgeDesc("初始化加载", status=_CHECK_BOUNTY_AT_CAP))
         _patch_node(stack, ctx, LostVoidApp, "claim_all", claim)
-        _patch_node(stack, ctx, LostVoidApp, "back_at_last", return_after_claim)
+        _patch_node(stack, ctx, LostVoidApp, "back_at_last", return_after_claim,
+                    incoming=OperationEdgeDesc("识别悬赏委托完成进度", status=_DAILY_LIMIT))
         yield
