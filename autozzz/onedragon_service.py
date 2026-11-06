@@ -11,6 +11,8 @@ from enum import Enum
 from typing import Any
 import uuid
 
+from .runtime_generation import SDK_CONTROL_METHODS
+
 
 def plain(value: Any) -> Any:
     if value is None or type(value) in (str, int, float, bool):
@@ -848,6 +850,8 @@ class OneDragonService:
     def sdk_rollback(self,selection_revision,confirmed=False):return self.sdk_upgrade.rollback(selection_revision,confirmed)
     def sdk_activation_review(self):return self.sdk_upgrade.activation_review()
     def sdk_recover_activation(self,journal_digest,choice='before',confirmed=False):return self.sdk_upgrade.recover_activation(journal_digest,choice,confirmed)
+    def sdk_migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False):
+        return self.sdk_upgrade.migrate_stable(old_revision,old_defaults_digest,selection_revision,confirmed)
     def sdk_prepare_tool(self):return self.sdk_upgrade.prepare_tool()
     def sdk_status(self,job_id=None):return self.sdk_upgrade.status(job_id)
     def sdk_cancel(self):return self.sdk_upgrade.cancel()
@@ -984,8 +988,6 @@ METHODS.add('schedule_review')
 METHODS.update({'agent_template_catalog','agent_template_open','agent_template_import','agent_template_side','agent_template_save','agent_template_remove',
                 'agent_template_restore','agent_template_recover','agent_template_preferences','agent_template_preferences_save','agent_template_capture','agent_template_view'})
 METHODS.update({'gamepad_catalog','gamepad_install_start','gamepad_install_status','gamepad_install_cancel'})
-METHODS.update({'source_catalog','source_start','source_status','source_cancel'})
-METHODS.update({'sdk_catalog','sdk_review','sdk_build','sdk_refresh','sdk_activate','sdk_rollback',
-                'sdk_activation_review','sdk_recover_activation','sdk_prepare_tool','sdk_status','sdk_cancel'})
+METHODS.update(SDK_CONTROL_METHODS)
 METHODS.update({'mcp_start','mcp_status','mcp_grant','mcp_revoke','mcp_stop','policy_remove','policy_restore'})
 METHODS.update({'mcp_edit_enable','mcp_edit_disable','mcp_edit_restore','environment_tools_catalog','environment_tools_start','environment_tools_status','environment_tools_cancel','environment_tools_apply'})

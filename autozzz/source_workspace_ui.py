@@ -54,7 +54,7 @@ class SourceBranchesWindow:
             except RequestPending:continue
 
     def work(self):
-        client=OneDragonClient(RuntimePaths.discover(ROOT,self.profile,use_selection=False))
+        client=OneDragonClient(RuntimePaths.discover_sdk_control(ROOT,self.profile))
         try:
             try:client.start()
             except RequestPending:

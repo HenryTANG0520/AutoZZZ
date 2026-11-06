@@ -121,9 +121,11 @@ def referenced_archives(root,pending):
     return result
 
 
-def snapshot_data(source,target,new_source,old_source,revision,protocol,cancelled,expected,*,allow_pending=False):
-    """Carry user overrides; refresh only unchanged built-in resources and add new defaults."""
-    source,target,new_source,old_source=map(plain,(source,target,new_source,old_source))
+def snapshot_data(source,target,new_source,old_source,revision,protocol,cancelled,expected,*,
+                  allow_pending=False,old_defaults=None):
+    """Carry user overrides and refresh defaults using verified old resource bytes or hashes."""
+    source,target,new_source=map(plain,(source,target,new_source))
+    if old_defaults is None:old_source=plain(old_source)
     if target.exists():raise ValueError('SDK资料快照已存在，未覆盖。')
     before=data_state(source)
     if before!=expected:raise ValueError('当前账号资料在审核后发生变化，请重新审核SDK候选。')
@@ -133,17 +135,21 @@ def snapshot_data(source,target,new_source,old_source,revision,protocol,cancelle
     archive_hashes={name:digest(path)for name,path in carried.items()}
     target.mkdir(parents=True);copy_files(source,target,before,cancelled)
     if carried:copy_files(source,target,carried,cancelled)
-    old_resources=resource_files(old_source);new_resources=resource_files(new_source)
+    new_resources=resource_files(new_source)
+    if old_defaults is None:
+        old_resources=resource_files(old_source)
+        old_defaults={name:digest(old_resources[name]) for name in old_resources.keys() & new_resources.keys() & before.keys()}
     changed=[];preserved=[]
     for name,origin in new_resources.items():
         if issues:continue  # Pending transaction versions must remain byte-for-byte unchanged.
         destination=filesystem_path(plain(target/name));exists=destination.exists()
-        unchanged_builtin=name in old_resources and name in before and before[name]==digest(old_resources[name])
+        old_digest=old_defaults.get(name)
+        unchanged_builtin=old_digest is not None and before.get(name)==old_digest
         if not exists or unchanged_builtin:
             if not exists or digest(origin)!=before.get(name):
                 destination.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copyfile(filesystem_path(origin),destination);changed.append(name)
-        elif name in old_resources and digest(origin)!=digest(old_resources[name]):preserved.append(name)
+        elif old_digest is not None and digest(origin)!=old_digest:preserved.append(name)
     # Obsolete defaults remain as user-reviewable material; no automatic deletion of user assets.
     if data_state(source)!=before or any(digest(source/name)!=checksum for name,checksum in archive_hashes.items()):raise ValueError('资料快照期间原账号或待恢复归档发生变化，已保留未激活候选。')
     atomic_json(target/'autozzz-runtime.json',dict(revision=revision,protocol=protocol))

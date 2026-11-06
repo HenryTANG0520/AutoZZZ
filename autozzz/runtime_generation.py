@@ -6,6 +6,14 @@ from pathlib import Path
 import re
 
 
+SDK_CONTROL_METHODS = frozenset({
+    'source_catalog','source_start','source_status','source_cancel',
+    'sdk_catalog','sdk_review','sdk_build','sdk_refresh','sdk_status','sdk_cancel',
+    'sdk_activate','sdk_rollback','sdk_activation_review','sdk_recover_activation',
+    'sdk_prepare_tool','sdk_migrate_stable',
+})
+
+
 def selection_generation(stable_data: Path) -> str:
     path = Path(stable_data) / 'autozzz' / 'sdk-selection.json'
     try:
@@ -41,10 +49,7 @@ class RuntimeGeneration:
                       'mcp_status', 'mcp_revoke', 'mcp_action_disable', 'mcp_edit_disable'}:
             return
         if self.management_only:
-            if method in {'catalog', 'configuration', 'describe_configuration', 'policies', 'policy_validate',
-                          'source_catalog', 'source_start', 'source_status', 'source_cancel',
-                          'sdk_catalog', 'sdk_review', 'sdk_build', 'sdk_refresh', 'sdk_status', 'sdk_cancel', 'sdk_activate', 'sdk_rollback',
-                          'sdk_activation_review', 'sdk_recover_activation', 'sdk_prepare_tool',
+            if method in SDK_CONTROL_METHODS or method in {'catalog', 'configuration', 'describe_configuration', 'policies', 'policy_validate',
                           'program_catalog', 'program_check', 'program_download', 'program_import',
                           'program_restore', 'program_status', 'program_cancel',
                           'environment_tools_catalog', 'environment_tools_start', 'environment_tools_status',

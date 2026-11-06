@@ -11,6 +11,7 @@ from unittest.mock import patch
 from autozzz.onedragon_runtime import RuntimePaths,UPSTREAM_REVISION
 from autozzz.onedragon_bundle import filesystem_path
 from autozzz.runtime_selection import (bridge_fingerprint,candidate_selection,digest,resolve_selection,runtime_files,selection_path,tree_hash,verify_identity)
+from autozzz.sdk_stable_migration import receipt_path
 from autozzz.sdk_upgrade import SDKUpgradeManager
 from autozzz.sdk_upgrade_files import atomic_json,data_state,pending_edits,snapshot_data,unpack_archive
 import threading
@@ -119,6 +120,51 @@ class SDKUpgradeTests(unittest.TestCase):
             self.manager.activate(self.candidate_id,'-',True);state=self.finish()
         self.assertEqual(state['state'],'failed');self.assertFalse(selection_path(self.data).exists())
         self.assertEqual((self.snapshot/'config/account.yml').read_bytes(),b'outside editor changed target')
+
+    def old_stable_receipt(self):
+        revision = 'e' * 40
+        files = {'config/default.sample.yml': hashlib.sha256(b'old default').hexdigest()}
+        receipt = receipt_path(self.data, revision)
+        atomic_json(receipt, dict(format=1, revision=revision, protocol=1, files=files,
+                                  origin=dict(kind='verified_git_checkout_bytes', identity='f' * 40),
+                                  resource_identity=tree_hash(files)))
+        atomic_json(self.data / 'autozzz-runtime.json', dict(revision=revision, protocol=1))
+        self.put(self.data / 'config/default.sample.yml', b'old default')
+        self.put(self.stable_source / 'config/default.sample.yml', b'new default')
+        return revision, digest(receipt)
+
+    def test_stable_migration_updates_old_defaults_in_a_new_snapshot(self):
+        revision, receipt = self.old_stable_receipt()
+        original_data = data_state(self.data)
+        with patch.object(self.paths.__class__, 'verify'), patch.object(
+                self.manager, '_handshake', return_value=dict(revision=UPSTREAM_REVISION, pid=1)):
+            self.manager.migrate_stable(revision, receipt, '-', True)
+            state = self.finish()
+
+        self.assertEqual(state['state'], 'success', state)
+        selected = self.resolve()
+        self.assertEqual(selected.kind, 'stable')
+        self.assertEqual((selected.data / 'config/default.sample.yml').read_bytes(), b'new default')
+        self.assertEqual((selected.data / 'config/account.yml').read_bytes(), b'user account stays private')
+        self.assertEqual(data_state(self.data), original_data)
+        self.assertEqual(json.loads((self.data / 'autozzz-runtime.json').read_bytes())['revision'], revision)
+
+    def test_stable_migration_rolls_back_if_old_profile_changes_during_restart(self):
+        revision, receipt = self.old_stable_receipt()
+
+        def handshake(selected, **_):
+            if self.manager.activation_journal.exists():
+                self.put(self.data / 'config/account.yml', b'new edit from outside')
+            return dict(revision=selected.revision, pid=1)
+
+        with patch.object(self.paths.__class__, 'verify'), patch.object(self.manager, '_handshake', side_effect=handshake):
+            self.manager.migrate_stable(revision, receipt, '-', True)
+            state = self.finish()
+
+        self.assertEqual(state['state'], 'failed', state)
+        self.assertIn('旧稳定 SDK 资料在迁移期间变化', state['error'])
+        self.assertFalse(selection_path(self.data).exists())
+        self.assertEqual((self.data / 'config/account.yml').read_bytes(), b'new edit from outside')
 
     def test_fast_selection_never_hashes_candidate_directories_but_full_verify_does(self):
         atomic_json(selection_path(self.data),self.selection())

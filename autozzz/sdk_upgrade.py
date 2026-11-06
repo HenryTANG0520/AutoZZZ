@@ -16,11 +16,13 @@ import time
 import tomllib
 import uuid
 
-from .onedragon_bundle import digest,tree_files
+from .onedragon_bundle import digest,filesystem_path,tree_files
+from .onedragon_runtime import PROTOCOL_VERSION
 from .run_lock import RunLock,profile_lock
 from .runtime_selection import (FORMAT,RuntimeSelection,bridge_files,bridge_fingerprint,candidate_root,candidate_selection,
     commit,identifier,plain,read_json,resolve_selection,runtime_files,selection_path,snapshot_path,store_root,tree_hash,verify_identity)
 from .sdk_upgrade_files import (atomic_bytes,atomic_json,copy_base_python,copy_files,data_state,pending_edits,resource_files,snapshot_data,unpack_archive)
+from .sdk_stable_migration import frozen_defaults,sha256_token
 from .sdk_upgrade_tools import prepare_uv,verified_uv,UV_VERSION
 
 
@@ -55,13 +57,19 @@ class SDKUpgradeManager:
 
     def _current(self):
         """Data remains reachable from the stable control plane even if candidate code is broken."""
+        if self.activation_journal.exists():raise ValueError('先核对并恢复上次SDK切换。')
         path=selection_path(self.data)
-        if not path.exists():return self.data,self.paths.source
+        if not path.exists():
+            self._check_stable_marker(self.data,optional=True)
+            return self.data,self.paths.source
         value=read_json(path,8192)
         if (type(value)is not dict or value.get('format')!=1 or value.get('kind')not in ('candidate','stable')):
             raise ValueError('SDK选择记录无效，未猜测账号资料位置。')
         data=snapshot_path(self.data,value.get('data_id'))
-        if value['kind']=='stable':return data,self.paths.source
+        if value['kind']=='stable':
+            if value.get('revision')!=self.paths.revision:raise ValueError('原稳定 SDK 资料需要先迁移。')
+            self._check_stable_marker(data)
+            return data,self.paths.source
         root=candidate_root(self.data,value.get('candidate_id'))
         try:
             verify_identity(root/'runtime.json',value.get('identity_digest'),source=root/'source',python=root/'env/Scripts/python.exe',bridge=root/'bridge',
@@ -69,6 +77,12 @@ class SDKUpgradeManager:
             source=root/'source'
         except (OSError,ValueError):source=self.paths.source
         return data,source
+
+    def _check_stable_marker(self,data,*,optional=False):
+        marker=plain(data/'autozzz-runtime.json')
+        if optional and not marker.exists():return
+        if read_json(marker,4096)!=dict(revision=self.paths.revision,protocol=PROTOCOL_VERSION):
+            raise ValueError('原稳定 SDK 资料需要先迁移。')
 
     def catalog(self):
         candidates=[];directory=plain(self.root/'candidates')
@@ -84,7 +98,10 @@ class SDKUpgradeManager:
         try:
             active=resolve_selection(self.data,stable_source=self.paths.source,stable_python=self.paths.python,stable_bridge=self.paths.bridge_root,
                 stable_bundle=self.paths.bundle,stable_revision=self.paths.revision,protocol=1)
-            if active is not None:selection=dict(kind=active.kind,candidate_id=active.candidate_id,revision=active.revision,data=str(active.data))
+            if active is None:self._check_stable_marker(self.data,optional=True)
+            else:
+                selection=dict(kind=active.kind,candidate_id=active.candidate_id,revision=active.revision,data=str(active.data))
+                if active.kind=='stable':self._check_stable_marker(active.data)
         except (ValueError,OSError)as exc:error=str(exc)
         try:uv=str(verified_uv())
         except ValueError:uv=None
@@ -317,21 +334,25 @@ class SDKUpgradeManager:
         if journal['before_text']is None:path.unlink(missing_ok=True)
         else:atomic_bytes(path,journal['before_text'].encode())
 
-    def _switch(self,selected,new_record,expected_revision):
+    def _switch(self,selected,new_record,expected_revision,*,stable_migration=None):
         if self.activation_journal.exists():raise ValueError('先核对并恢复上次SDK切换。')
         if self._selection_hash()!=expected_revision:raise ValueError('所选SDK已变化，请刷新后再操作。')
         if self.cancelled.is_set():raise InterruptedError('切换前已取消，未改动SDK选择。')
-        path=selection_path(self.data);before_text=path.read_text(encoding='utf-8')if path.exists()else None
+        path=selection_path(self.data);before_text=filesystem_path(path).read_bytes().decode('utf-8')if path.exists()else None
         after_hash=hashlib.sha256(self._payload(new_record)).hexdigest()
         journal=dict(format=1,id=uuid.uuid4().hex,before_text=before_text,before_hash=expected_revision,after=new_record,after_hash=after_hash,
             after_data_hash=tree_hash(data_state(selected.data)),state='prepared')
+        if stable_migration is not None:journal['stable_migration']=stable_migration
         atomic_json(self.activation_journal,journal)
         try:
+            if stable_migration is not None:self._verify_migration_source(journal)
             if self._selection_hash()!=expected_revision:raise ValueError('发布SDK选择前原记录发生变化。')
             atomic_json(path,new_record);journal['state']='verifying_restart';atomic_json(self.activation_journal,journal)
             hello=self._handshake(selected,deep=True)
+            if stable_migration is not None:self._verify_migration_source(journal)
             if self._selection_hash()!=after_hash:raise ValueError('重启核对期间SDK选择发生外部变化。')
             with self._data_locks(selected.data):
+                if stable_migration is not None:selected.prepare()
                 if tree_hash(data_state(selected.data))!=journal['after_data_hash']:raise ValueError('候选资料在重启核对期间变化；已保留快照并回退SDK选择。')
             journal.update(state='complete',hello=hello);atomic_json(self.root/'activations'/(journal['id']+'.json'),journal)
             self.activation_journal.unlink();self.service._environment_changed=True
@@ -374,17 +395,96 @@ class SDKUpgradeManager:
             result=self._switch(selected,new,selection_revision);result['snapshot']=snapshot;return result
         return self._start('rollback',rollback)
 
+    def migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False):
+        if confirmed is not True:raise ValueError('请确认已冻结旧默认资源和当前 SDK 选择。')
+        commit(old_revision)
+        sha256_token(old_defaults_digest)
+
+        def migrate():
+            if self.activation_journal.exists():raise ValueError('先核对并恢复上次SDK切换。')
+            if self._selection_hash()!=selection_revision:raise ValueError('SDK选择已变化，请刷新后迁移。')
+            self.paths.verify()
+            pointer=selection_path(self.data)
+            record=read_json(pointer,8192) if pointer.exists() else {}
+            if type(record)is not dict:raise ValueError('SDK选择记录无效。')
+            stable_revision=self.paths.revision if record.get('revision')==self.paths.revision else old_revision
+            current=resolve_selection(self.data,stable_source=self.paths.source,stable_python=self.paths.python,
+                stable_bridge=self.paths.bridge_root,stable_bundle=self.paths.bundle,stable_revision=stable_revision,
+                protocol=PROTOCOL_VERSION,verify_files=False)
+            source=self.data if current is None else current.data
+            if current is not None and current.kind=='candidate':
+                return dict(status='candidate_preserved',revision=current.revision,data=str(source))
+            with self._data_locks(source):
+                marker=plain(source/'autozzz-runtime.json')
+                marker_digest=digest(marker)
+                saved=read_json(marker,4096,expected_digest=marker_digest)
+                if saved==dict(revision=self.paths.revision,protocol=PROTOCOL_VERSION):
+                    if current is not None:current.prepare()
+                    return dict(status='already_current',revision=self.paths.revision,data=str(source))
+                if (saved!=dict(revision=old_revision,protocol=PROTOCOL_VERSION)
+                        or current is not None and current.revision!=old_revision):
+                    raise ValueError('旧稳定 SDK 资料标记与冻结版本不符。')
+                defaults=frozen_defaults(self.data,old_revision,old_defaults_digest)
+                expected=data_state(source)
+                binding=dict(old_revision=old_revision,old_defaults_digest=old_defaults_digest,
+                    source_data_hash=tree_hash(expected),source_marker_digest=marker_digest)
+                data_id=uuid.uuid4().hex;target=snapshot_path(self.data,data_id)
+                snapshot=snapshot_data(source,target,self.paths.source,None,self.paths.revision,PROTOCOL_VERSION,
+                    self.cancelled,expected,old_defaults=defaults)
+                selected=RuntimeSelection(self.paths.source,self.paths.python,target,self.paths.bridge_root,self.paths.revision,
+                    PROTOCOL_VERSION,None,None,None,'stable',self.data,None)
+                self._handshake(selected,deep=True)
+                new=dict(format=FORMAT,kind='stable',candidate_id=None,data_id=data_id,revision=self.paths.revision,
+                    protocol=PROTOCOL_VERSION,identity_digest=None)
+                result=self._switch(selected,new,selection_revision,stable_migration=binding)
+            return dict(result,status='promoted',snapshot=snapshot)
+
+        return self._start('migrate_stable',migrate)
+
+    def _migration_source(self,journal):
+        binding=journal['stable_migration']
+        if type(binding)is not dict or set(binding)!={'old_revision','old_defaults_digest','source_data_hash','source_marker_digest'}:
+            raise ValueError('稳定 SDK 迁移日志缺少原资料身份。')
+        old_revision=commit(binding['old_revision'])
+        for key in ('old_defaults_digest','source_data_hash','source_marker_digest'):sha256_token(binding[key])
+        after=journal['after']
+        if after.get('kind')!='stable' or after.get('revision')!=self.paths.revision or after.get('protocol')!=PROTOCOL_VERSION:
+            raise ValueError('稳定 SDK 迁移目标与当前发行不符。')
+        if journal['before_text'] is None:return self.data
+        before=json.loads(journal['before_text'])
+        if (type(before)is not dict or before.get('format')!=FORMAT or before.get('kind')!='stable'
+                or before.get('revision')!=old_revision or before.get('protocol')!=PROTOCOL_VERSION
+                or before.get('candidate_id')is not None or before.get('identity_digest')is not None):
+            raise ValueError('稳定 SDK 迁移日志原选择不符。')
+        return snapshot_path(self.data,before.get('data_id'))
+
+    def _verify_migration_source(self,journal):
+        source=self._migration_source(journal)
+        binding=journal['stable_migration']
+        old_revision=binding['old_revision']
+        frozen_defaults(self.data,old_revision,binding['old_defaults_digest'])
+        marker=read_json(source/'autozzz-runtime.json',4096,expected_digest=binding['source_marker_digest'])
+        if marker!=dict(revision=old_revision,protocol=PROTOCOL_VERSION) or tree_hash(data_state(source))!=binding['source_data_hash']:
+            raise ValueError('旧稳定 SDK 资料在迁移期间变化，需重新迁移。')
+
+    def _verify_migration_target(self,selected,journal):
+        with self._data_locks(selected.data):
+            selected.prepare()
+            if tree_hash(data_state(selected.data))!=journal['after_data_hash']:
+                raise ValueError('迁移后的资料快照已变化，现场已保留。')
+
     def activation_review(self):
         if not self.activation_journal.exists():return dict(pending=False)
-        raw=read_json(self.activation_journal,256*1024)
+        journal_digest=digest(self.activation_journal)
+        raw=read_json(self.activation_journal,256*1024,expected_digest=journal_digest)
         required={'format','id','before_text','before_hash','after','after_hash','after_data_hash','state'}
-        if type(raw)is not dict or set(raw)!=required or raw['format']!=1 or raw['state']not in ('prepared','verifying_restart'):
+        if type(raw)is not dict or set(raw) not in (required,required|{'stable_migration'}) or raw['format']!=1 or raw['state']not in ('prepared','verifying_restart'):
             raise ValueError('SDK切换journal格式无效，已保留。')
         identifier(raw['id'])
         before_hash='-'if raw['before_text']is None else hashlib.sha256(raw['before_text'].encode()).hexdigest()
         if before_hash!=raw['before_hash']or hashlib.sha256(self._payload(raw['after'])).hexdigest()!=raw['after_hash']:raise ValueError('SDK切换journal摘要不符，已保留。')
         current=self._selection_hash()
-        return dict(pending=True,journal_digest=digest(self.activation_journal),current_revision=current,
+        return dict(pending=True,journal_digest=journal_digest,current_revision=current,stable_migration='stable_migration'in raw,
             before_revision=raw['before_hash'],after_revision=raw['after_hash'],after=raw['after'],conflict=current not in (raw['before_hash'],raw['after_hash']),
             after_data_changed=tree_hash(data_state(snapshot_path(self.data,raw['after']['data_id'])))!=raw['after_data_hash'])
 
@@ -394,24 +494,36 @@ class SDKUpgradeManager:
             review=self.activation_review()
             if not review['pending']or review['journal_digest']!=journal_digest:raise ValueError('SDK切换现场已变化，请重新核对。')
             if review['conflict']:raise ValueError('SDK选择存在外部变更，已保留，未覆盖。')
-            journal=read_json(self.activation_journal)
-            if choice=='before':
-                self._restore_selector(journal);result=dict(restored='before')
-            else:
-                after=journal['after']
-                if review['after_data_changed']:raise ValueError('切换后的资料已变化，仅可恢复切换前选择；资料现场保留。')
-                if after['kind']=='candidate':
-                    self._candidate(after['candidate_id'])
-                    selected=candidate_selection(self.data,after['candidate_id'],after['data_id'],1)
-                    if selected.identity_digest!=after['identity_digest']:raise ValueError('切换目标身份已变化。')
-                elif after['kind']=='stable':
-                    selected=RuntimeSelection(self.paths.source,self.paths.python,snapshot_path(self.data,after['data_id']),self.paths.bridge_root,self.paths.revision,1,None,None,None,'stable',self.data,None)
-                else:raise ValueError('切换目标无效。')
-                if self._selection_hash()!=review['current_revision']:raise ValueError('恢复前SDK选择发生变化。')
-                atomic_json(selection_path(self.data),after);hello=self._handshake(selected,deep=True);result=dict(restored='after',hello=hello)
-            if self._selection_hash()not in (journal['before_hash'],journal['after_hash']):raise ValueError('恢复期间SDK选择被外部改动，journal保留。')
-            journal.update(state='recovered',choice=choice);atomic_json(self.root/'activations'/(journal['id']+'.json'),journal)
-            self.activation_journal.unlink();self.service._environment_changed=True;return result
+            journal=read_json(self.activation_journal,256*1024,expected_digest=journal_digest)
+            with ExitStack() as locks:
+                if choice=='before':
+                    if self._selection_hash()!=review['current_revision']:raise ValueError('恢复前SDK选择发生变化。')
+                    self._restore_selector(journal);result=dict(restored='before')
+                else:
+                    after=journal['after']
+                    if review['after_data_changed']:raise ValueError('切换后的资料已变化，仅可恢复切换前选择；资料现场保留。')
+                    if after['kind']=='candidate':
+                        self._candidate(after['candidate_id'])
+                        selected=candidate_selection(self.data,after['candidate_id'],after['data_id'],1)
+                        if selected.identity_digest!=after['identity_digest']:raise ValueError('切换目标身份已变化。')
+                    elif after['kind']=='stable':
+                        selected=RuntimeSelection(self.paths.source,self.paths.python,snapshot_path(self.data,after['data_id']),self.paths.bridge_root,self.paths.revision,1,None,None,None,'stable',self.data,None)
+                    else:raise ValueError('切换目标无效。')
+                    if review['stable_migration']:
+                        source=self._migration_source(journal)
+                        if source==selected.data:raise ValueError('稳定 SDK 迁移快照与原资料重复。')
+                        locks.enter_context(self._data_locks(source))
+                        self._verify_migration_source(journal)
+                        self._verify_migration_target(selected,journal)
+                    if self._selection_hash()!=review['current_revision']:raise ValueError('恢复前SDK选择发生变化。')
+                    atomic_json(selection_path(self.data),after);hello=self._handshake(selected,deep=True);result=dict(restored='after',hello=hello)
+                    if review['stable_migration']:
+                        self._verify_migration_source(journal)
+                        self._verify_migration_target(selected,journal)
+                expected=journal['before_hash' if choice=='before' else 'after_hash']
+                if self._selection_hash()!=expected:raise ValueError('恢复期间SDK选择被外部改动，journal保留。')
+                journal.update(state='recovered',choice=choice);atomic_json(self.root/'activations'/(journal['id']+'.json'),journal)
+                self.activation_journal.unlink();self.service._environment_changed=True;return result
         return self._start('recover_activation',recover)
 
     def status(self,job_id=None):

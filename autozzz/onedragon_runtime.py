@@ -1,7 +1,7 @@
 """固定版本一条龙的独立运行环境和本机进程通信。"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import ctypes
 import json
 import os
@@ -50,6 +50,7 @@ class RuntimePaths:
     stable_data: Path | None = None
     generation: str | None = None
     management_only: bool = False
+    sdk_control: bool = False
 
     @classmethod
     def discover(cls, root: Path, profile: str = "cn", *, use_selection: bool = True) -> RuntimePaths:
@@ -76,6 +77,10 @@ class RuntimePaths:
                     selected.revision,selected.bridge,selected,root,data.resolve(),generation,False)
         return stable
 
+    @classmethod
+    def discover_sdk_control(cls, root: Path, profile: str = "cn") -> RuntimePaths:
+        return replace(cls.discover(root, profile, use_selection=False), sdk_control=True)
+
     @property
     def bridge_root(self):
         return self.bridge if self.bridge is not None else self.bundle/'bridge' if self.bundle is not None else Path(__file__).resolve().parent.parent
@@ -91,11 +96,15 @@ class RuntimePaths:
             '--product-root',str((self.product_root or (self.bundle.parent if self.bundle else self.source.parent.parent)).resolve()),
             '--selection-generation',self.generation if self.generation is not None else selection_generation(self.stable_data or self.data)]
         if self.management_only:arguments.append('--management-only')
+        if self.sdk_control:arguments.append('--sdk-control')
         if self.selection is not None and self.selection.identity_file is not None:
             arguments+=['--runtime-identity',str(self.selection.identity_file),'--runtime-identity-digest',self.selection.identity_digest]
         return arguments
 
     def verify(self) -> None:
+        if self.sdk_control and (not self.management_only or self.selection is not None or self.revision!=UPSTREAM_REVISION
+                                 or self.stable_data is None or self.data.resolve()!=self.stable_data.resolve()):
+            raise RuntimeUnavailable('SDK 控制连接必须使用当前稳定执行包及本区服控制目录。')
         from .runtime_generation import RuntimeGeneration
         try:RuntimeGeneration(self.stable_data or self.data,self.generation,self.management_only).check_current()
         except RuntimeError as exc:raise RuntimeUnavailable(str(exc)) from exc
@@ -142,6 +151,7 @@ class RuntimePaths:
     def prepare(self) -> None:
         """只复制版本控制中的资源；已有用户文件不覆盖。"""
         self.verify()
+        if self.sdk_control:return  # Control RPCs inspect profiles without initializing them.
         if self.selection is not None:
             try:self.selection.prepare()
             except (OSError,ValueError) as exc:raise RuntimeUnavailable(str(exc)) from exc

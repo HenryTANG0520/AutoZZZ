@@ -63,6 +63,17 @@ class RuntimeGenerationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):execution._validate_task_input()
         operation.assert_not_called()
 
+    def test_sdk_control_worker_routes_only_source_and_migration_requests(self):
+        service = NS(runtime_guard=RuntimeGeneration(self.data, '-', True),
+                     _rotation_sealed=False, _rotation_guard=None)
+        for method in ('hello', 'source_catalog', 'sdk_migrate_stable', 'sdk_recover_activation'):
+            validate_worker_request(service, method, sdk_control=True)
+        for method in ('catalog', 'configuration_save', 'prepare_application', 'program_import'):
+            with self.assertRaisesRegex(RuntimeError, '仅提供 SDK 管理与源码操作'):
+                validate_worker_request(service, method, sdk_control=True)
+        with self.assertRaisesRegex(RuntimeError, '请通过 SDK 控制连接'):
+            validate_worker_request(service, 'sdk_migrate_stable')
+
     def test_real_launch_arguments_pin_generation_and_candidate_data(self):
         paths=RuntimePaths(self.data/'source',self.data/'python.exe',self.data/'profile',stable_data=self.data,generation='-')
         self.switch();args=paths.identity_arguments()

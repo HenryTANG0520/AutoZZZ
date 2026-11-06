@@ -99,7 +99,7 @@ class SDKUpgradeWindow:
             try:return client.result(request,timeout=.5)
             except RequestPending:pass
     def work(self):
-        client=OneDragonClient(RuntimePaths.discover(ROOT,self.profile,use_selection=False));job=None
+        client=OneDragonClient(RuntimePaths.discover_sdk_control(ROOT,self.profile));job=None
         try:
             try:client.start(timeout=.5)
             except RequestPending:

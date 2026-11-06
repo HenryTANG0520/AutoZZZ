@@ -34,16 +34,21 @@ def commit(value):
     return value
 
 
-def read_json(path,limit=32*1024*1024):
+def read_json(path,limit=32*1024*1024,*,expected_digest=None):
     path=plain(path)
-    if not path.is_file()or path.stat().st_size>limit:raise ValueError('SDK清单缺失或过大：'+str(path))
+    io=filesystem_path(path)
+    if not io.is_file():raise ValueError('SDK清单缺失或过大：'+str(path))
+    with io.open('rb') as stream:raw=stream.read(limit+1)
+    if len(raw)>limit:raise ValueError('SDK清单缺失或过大：'+str(path))
+    if expected_digest is not None and hashlib.sha256(raw).hexdigest()!=expected_digest:
+        raise ValueError('SDK清单摘要已变化：'+str(path))
     def unique(rows):
         result={}
         for key,value in rows:
             if key in result:raise ValueError('SDK清单含重复字段。')
             result[key]=value
         return result
-    return json.loads(path.read_text(encoding='utf-8'),object_pairs_hook=unique)
+    return json.loads(raw.decode('utf-8'),object_pairs_hook=unique)
 
 
 def store_root(stable_data):

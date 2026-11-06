@@ -78,7 +78,9 @@ class ApplicationsPanel:
         self.plugins_button.grid(row=0,column=4,padx=(d(8),0))
         self.load_button = ttk.Button(heading,text="读取配置",command=self.load)
         self.load_button.grid(row=0,column=5,padx=(d(10),0))
-        self.controls += [self.profile_box,self.load_button,self.accounts_button,self.plugins_button]
+        self.sdk_button = ttk.Button(heading,text="上游源码分支…",command=self.source_workspace)
+        self.sdk_button.grid(row=0,column=6,padx=(d(8),0))
+        self.controls += [self.profile_box,self.load_button,self.accounts_button,self.plugins_button,self.sdk_button]
         body = ttk.Frame(self.page)
         body.grid(row=1,column=0,sticky="nsew")
         body.columnconfigure(1,weight=1)
@@ -217,6 +219,18 @@ class ApplicationsPanel:
         if self.busy or not self.allow_leave():return
         from .onedragon_plugins_ui import open_plugins
         open_plugins(self.ui,'global' if self.profile.get()=='国际服' else 'cn')
+
+    def source_workspace(self):
+        if self.closing:return
+        from .source_workspace_ui import SourceBranchesWindow
+        profile='global' if self.profile.get()=='国际服' else 'cn'
+        existing=getattr(self.ui,'source_workspace_window',None)
+        if existing is not None and not existing.closed:
+            if existing.profile!=profile:
+                self.status.set('请先关闭另一区服的源码管理窗口。')
+                return
+            existing.window.deiconify();existing.window.lift();return
+        self.ui.source_workspace_window=SourceBranchesWindow(self.ui,profile)
 
     def native_settings(self):
         if self.busy or self.dirty or self.closing or not self.settings_target or not self.apps.get(self.current_id,{}).get('native_settings'):return
@@ -387,13 +401,7 @@ class ApplicationsPanel:
                 ttk.Button(self.content,text="资源下载…",command=self.downloads).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1
             if self.current_id=="_environment":
-                from .source_workspace_ui import SourceBranchesWindow
-                def source_workspace():
-                    existing=getattr(self.ui,'source_workspace_window',None)
-                    if existing is not None and not existing.closed:
-                        existing.window.deiconify();existing.window.lift();return
-                    self.ui.source_workspace_window=SourceBranchesWindow(self.ui,"global" if self.profile.get()=="国际服" else "cn")
-                ttk.Button(self.content,text="上游源码分支…",command=source_workspace).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
+                ttk.Button(self.content,text="上游源码分支…",command=self.source_workspace).grid(row=row,column=0,sticky="w",pady=(0,round(18*self.scale)))
                 row+=1
                 def environment_tools():
                     existing=getattr(self.ui,'environment_tools_window',None)
