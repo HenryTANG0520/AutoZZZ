@@ -465,7 +465,7 @@ class ManagedController(ZPcController):
             else:
                 from one_dragon.base.controller.pc_button.ds4_button_controller import Ds4ButtonController
                 raw=Ds4ButtonController()
-            device=ControlledGamepad(raw,self.control);device.before_input=self._gamepad_checkpoint;setattr(self,name,device)
+            device=ControlledGamepad(raw,self.control,kind=kind);device.before_input=self._gamepad_checkpoint;setattr(self,name,device)
         device.set_key_press_time(getattr(self.game_config,kind+'_key_press_time'))
         self.btn_controller=device;self._gamepad_type=kind
         self.action_keys=self.game_config.get_action_keys(kind)

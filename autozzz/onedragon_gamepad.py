@@ -5,6 +5,12 @@ import math
 import threading
 
 
+_DS4_VERTICAL_KEYS = {
+    'ds4_ls_up': 'ds4_ls_down', 'ds4_ls_down': 'ds4_ls_up',
+    'ds4_rs_up': 'ds4_rs_down', 'ds4_rs_down': 'ds4_rs_up',
+}
+
+
 def _duration(value,*,positive=False):
     if type(value) not in (int,float) or not math.isfinite(value) or value<(0.001 if positive else 0):
         raise ValueError('手柄时长须为有限非负数。')
@@ -23,9 +29,10 @@ def release_controller_inputs(controller):
 
 
 class ControlledGamepad:
-    def __init__(self,raw,control):
+    def __init__(self,raw,control,*,kind='xbox'):
         if raw.pad is None:raise RuntimeError('虚拟手柄未创建，请检查 vgamepad 与 ViGEmBus。')
         self.raw,self.control=raw,control
+        self._ds4 = kind == 'ds4'
         self.lock=threading.RLock();self.pressed={};self.camera=None
         self.before_input=None
 
@@ -34,8 +41,14 @@ class ControlledGamepad:
 
     def set_key_press_time(self,value):self.raw.set_key_press_time(_duration(value,positive=True))
 
+    def _binding(self,key):
+        # 固定 SDK 的方向表沿用 Xbox 符号。vgamepad 0.1.0 的 DS4 Y 轴方向相反。
+        if self._ds4:
+            key = _DS4_VERTICAL_KEYS.get(key, key)
+        return self.raw._key_bindings[key]
+
     def _press(self,key):
-        activate,_=self.raw._key_bindings[key]
+        activate,_=self._binding(key)
         owner=(self.control.task_epoch,object())
         def send():
             with self.lock:
@@ -70,7 +83,7 @@ class ControlledGamepad:
             if owner is not None:
                 if actual!=owner:return
             elif actual[0]!=self.control.task_epoch:return
-            _,deactivate=self.raw._key_bindings[key]
+            _,deactivate=self._binding(key)
             deactivate();self.raw.pad.update();self.pressed.pop(key,None)
 
     def tap_combo(self,keys):
@@ -97,10 +110,11 @@ class ControlledGamepad:
             raise ValueError('手柄镜头参数必须为有限数。')
         if speed<=0 or dx==dy==0:return
         distance=max(abs(dx),abs(dy));owner=(self.control.task_epoch,object())
+        y = (dy if self._ds4 else -dy) / distance
         def send():
             with self.lock:
                 if self.before_input is not None:self.before_input(None)
-                self.camera=owner;self.raw.pad.right_joystick_float(dx/distance,-dy/distance);self.raw.pad.update()
+                self.camera=owner;self.raw.pad.right_joystick_float(dx/distance,y);self.raw.pad.update()
         try:
             self.control.input(send);self.control.hold(distance/speed)
         finally:

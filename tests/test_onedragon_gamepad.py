@@ -66,6 +66,27 @@ class GamepadTests(unittest.TestCase):
         self.assertIn(('camera',1.,.5),self.raw.events);self.assertIn(('camera',0,0),self.raw.events)
         self.assertIsNone(self.pad.camera)
 
+    def test_ds4_uses_native_vertical_axes_for_keys_and_camera(self):
+        for stick in ('ls', 'rs'):
+            for direction in ('up', 'down'):
+                key = f'ds4_{stick}_{direction}'
+                self.raw._key_bindings[key] = (
+                    lambda key=key: self.raw.events.append(('down', key)),
+                    lambda key=key: self.raw.events.append(('up', key)),
+                )
+        self.pad = ControlledGamepad(self.raw, self.control, kind='ds4')
+        self.pad.press('ds4_ls_up')
+        self.pad.release('ds4_ls_up')
+        self.pad.press('ds4_rs_down')
+        self.pad.release('ds4_rs_down')
+        self.pad.turn(2, -1, 1000)
+
+        self.assertEqual([event for event in self.raw.events if event[0] != 'update'], [
+            ('down', 'ds4_ls_down'), ('up', 'ds4_ls_down'),
+            ('down', 'ds4_rs_up'), ('up', 'ds4_rs_up'),
+            ('camera', 1., -.5), ('camera', 0, 0),
+        ])
+
     def test_invalid_duration_never_sends(self):
         for value in (float('inf'),float('nan'),-1,True,'1'):
             with self.assertRaises(ValueError):self.pad.press('a',value)
