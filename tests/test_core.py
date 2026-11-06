@@ -1,10 +1,13 @@
 """Offline safety regression tests; all Win32 input is mocked."""
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import ctypes
 from datetime import datetime, timedelta, timezone
+import io
 import json
 from pathlib import Path
+import runpy
 import sys
 import tempfile
 import threading
@@ -1381,10 +1384,11 @@ class HandbookShortcutTests(unittest.TestCase):
             DailyWorkflow(context)._open_daily()
         self.assertEqual(context.actions, [])
 
-    def test_cn_without_template_retains_f2_with_handbook_verification(self):
-        context, daily = self.opening_context(captured_global_shortcut_hud(), server="cn", anchor=False)
-        self.assertIs(DailyWorkflow(context)._open_daily(), daily)
-        self.assertEqual(context.actions, [("key", "f2"), ("click", "日常")])
+    def test_cn_missing_handbook_glyph_never_guesses_f2(self):
+        context, _ = self.opening_context(captured_global_shortcut_hud(), server="cn", anchor=False)
+        with self.assertRaises(AutomationError):
+            DailyWorkflow(context)._open_daily()
+        self.assertEqual(context.actions, [])
 
     def test_wrong_page_after_function_key_is_not_treated_as_handbook(self):
         world, battlepass = captured_global_shortcut_hud(), captured_battlepass_tabs()
@@ -1393,6 +1397,115 @@ class HandbookShortcutTests(unittest.TestCase):
         with self.assertRaises(AutomationError):
             DailyWorkflow(context)._open_daily()
         self.assertEqual(context.actions, [("key", "f4")])
+
+    def test_focus_loss_around_handbook_keydown_uses_fresh_scene_without_replay(self):
+        for loss, expected in (
+            ("before", [("focus", None), ("down", 0x72), ("up", 0x72)]),
+            ("after", [("down", 0x73), ("up", 0x73), ("focus", None)]),
+        ):
+            with self.subTest(loss=loss):
+                world, remapped = captured_global_shortcut_hud(), captured_global_shortcut_hud()
+                daily = captured_daily_cards()
+                remapped.tokens = [Token("F3", t.score, t.box) if t.text == "F4" else t for t in remapped.tokens]
+                context, runner, window = context_for(world)
+                runner._window = window
+                window.key = types.MethodType(windows.GameWindow.key, window)
+                window.send = types.MethodType(windows.GameWindow.send, window)
+                window.emergency_pressed.return_value = False
+                context.template = lambda frame, name, *_: (
+                    self.anchor if name == "world_menu" and (frame is world or frame is remapped) else None)
+                events = []
+                frame = world
+                lost = recovered = False
+
+                def guard(_expected=None, *, refresh=False):
+                    nonlocal frame, recovered
+                    if lost and not recovered:
+                        if not refresh:
+                            raise FocusLost("fixture lost focus")
+                        recovered = True
+                        if loss == "before":
+                            frame = remapped
+                        events.append(("focus", None))
+                    return world.geometry
+
+                def map_key(vk, _mode):
+                    nonlocal lost
+                    if loss == "before" and not recovered:
+                        lost = True
+                    return vk
+
+                def record_input(count, address, _size):
+                    nonlocal frame, lost
+                    key = ctypes.cast(address, ctypes.POINTER(windows.INPUT))[0].ki
+                    if key.dwFlags & 0x2:
+                        events.append(("up", key.wVk))
+                    else:
+                        events.append(("down", key.wVk))
+                        frame = daily
+                        lost = loss == "after"
+                    return count
+
+                window.guard.side_effect = guard
+                context.vision.read.side_effect = lambda *_: frame
+                api = Mock()
+                api.MapVirtualKeyW.side_effect = map_key
+                api.SendInput.side_effect = record_input
+                with patch.object(windows, "user32", api):
+                    self.assertIs(runner._resume_step(DailyWorkflow(context)._open_daily), daily)
+                self.assertEqual(events, expected)
+                self.assertEqual(runner.focus_epoch, 1)
+                window.click.assert_called_once_with(*daily.find("日常", exact=True).center, daily.geometry)
+
+    def test_probe_uses_visible_handbook_remaps_with_legacy_settings(self):
+        probe = Path(__file__).resolve().parents[1] / "tools" / "live_probe.py"
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as directory:
+            config = Path(directory) / "config.json"
+            load = Settings.load
+            for server in ("cn", "global"):
+                config.write_text(json.dumps({
+                    "server": server, "game_path": GAME_PATHS[server],
+                    "scratch": False, "coffee": False, "video": False, "promoter": "", "daily": True,
+                    "auto_launch": False, "action_delay": .8, "transition_timeout": 20, "ocr_confidence": .75,
+                }), encoding="utf-8-sig")
+                original = config.read_bytes()
+                for key, other_f2, expected in (
+                    ("F3", True, "f3"), ("F1", False, "f1"), ("F5", True, None), ("K", True, None),
+                ):
+                    with self.subTest(server=server, key=key, other_f2=other_f2):
+                        world = captured_global_shortcut_hud()
+                        world.tokens = [Token(key, t.score, t.box) if t.text == "F4" else t for t in world.tokens
+                                        if other_f2 or t.text != "F2"]
+                        context, _, window = context_for(world)
+                        window.guard.return_value = world.geometry
+                        context.vision.template.side_effect = (
+                            lambda _frame, path, *_: self.anchor if path.stem == "world_menu" else None)
+                        with (
+                            patch.object(Settings, "load", side_effect=lambda: load(config)),
+                            patch.object(windows, "find_game", return_value=window) as find,
+                            patch("autozzz.vision.Vision", return_value=context.vision) as vision,
+                            patch.object(Context, "sleep"),
+                            patch.object(Context, "evidence"),
+                            patch.object(threading.Thread, "start"),
+                            patch.object(sys, "argv", [str(probe), "handbook"]),
+                            patch.object(sys, "path", sys.path.copy()),
+                            redirect_stdout(io.StringIO()),
+                        ):
+                            if expected:
+                                runpy.run_path(str(probe), run_name="__main__")
+                            else:
+                                with self.assertRaisesRegex(AutomationError, "唯一可识别"):
+                                    runpy.run_path(str(probe), run_name="__main__")
+                        find.assert_called_once_with(GAME_PATHS[server])
+                        vision.assert_called_once_with(.75)
+                        if expected:
+                            window.key.assert_called_once()
+                            self.assertEqual(window.key.call_args.args[:2], (expected, .08))
+                        else:
+                            window.key.assert_not_called()
+                        window.click.assert_not_called()
+                self.assertEqual(config.read_bytes(), original)
 
     def test_battlepass_is_known_only_for_escape_without_purchase_or_redemption(self):
         battlepass, world = captured_battlepass_tabs(), captured_global_shortcut_hud()

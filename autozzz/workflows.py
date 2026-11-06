@@ -748,31 +748,31 @@ class DailyWorkflow:
         self.c.sleep(1)
         return self._snapshot()
 
+    def _activate_handbook_entry(self, scene):
+        """Send one input for the visible handbook entry on a known main screen."""
+        target = scene.find("快捷手册", exact=True)
+        if target:
+            self.c.click(scene, target)
+            return
+        anchor = self._template(scene, "world_menu", roi(1400, 28, 1730, 120))
+        if not anchor:
+            self._unknown(scene, "快捷手册图标尚未识别")
+        key_area = (anchor[0] - .025, 100 / 1080, anchor[0] + .025, 165 / 1080)
+        shortcuts = [normalize(t.text) for t in scene.tokens if t.within(key_area)
+                     and normalize(t.text) in ("f1", "f2", "f3", "f4")]
+        if len(shortcuts) == 1:
+            self.c.key(shortcuts[0], scene)
+        elif self._menu(scene):
+            self.c.click(scene, (anchor[0], anchor[1]))
+        else:
+            self._unknown(scene, "快捷手册图标下没有唯一可识别的功能键")
+
     def _open_daily(self):
         scene = self._snapshot()
         if not self._handbook(scene):
             self.ensure_main()
             scene = self._snapshot()
-            target = scene.find("快捷手册", exact=True)
-            if target:
-                self.c.click(scene, target)
-            else:
-                anchor = self._template(scene, "world_menu", roi(1400, 28, 1730, 120))
-                if anchor:
-                    shortcuts = [normalize(t.text) for t in scene.tokens if t.within(
-                        (anchor[0] - .025, 100 / 1080, anchor[0] + .025, 165 / 1080))
-                        and normalize(t.text) in ("f1", "f2", "f3", "f4")]
-                    if len(shortcuts) == 1:
-                        self.c.key(shortcuts[0], scene)
-                    elif self._menu(scene):
-                        self.c.click(scene, (anchor[0], anchor[1]))
-                    else:
-                        self._unknown(scene, "快捷手册图标下没有唯一可识别的功能键")
-                else:
-                    # Bindings may differ by account; always verify the resulting page.
-                    if self.c.settings.server == "global":
-                        self._unknown(scene, "国际服快捷手册图标尚未识别，不能假定 F2 绑定")
-                    self.c.key("f2", scene)
+            self._activate_handbook_entry(scene)
             scene = self._wait(self._handbook, "快捷手册标签")
         daily = scene.find("日常", TABS, exact=True)
         if not daily:

@@ -12,6 +12,7 @@ from autozzz.config import ROOT, Settings
 from autozzz.models import AutomationError
 from autozzz.vision import Vision
 from autozzz.windows import find_game
+from autozzz.workflows import DailyWorkflow
 
 parser = argparse.ArgumentParser()
 parser.add_argument("action", choices=("observe", "map", "handbook", "back", "click"))
@@ -35,10 +36,15 @@ context = Context(runner, runner._window, Vision(settings.ocr_confidence))
 try:
     before = context.snapshot()
     context.evidence(before, "before")
-    if args.action in ("map", "handbook"):
+    if args.action == "map":
         if not before.has("F2", (0.6, 0, 1, 0.2), exact=True) or not before.has("Tab", exact=True):
             raise AutomationError("尚未确认可操作的街区 HUD。")
-        context.key("m" if args.action == "map" else "f2", before)
+        context.key("m", before)
+    elif args.action == "handbook":
+        workflow = DailyWorkflow(context)
+        if not before.has("Tab", exact=True) or not workflow._main(before):
+            raise AutomationError("尚未确认可操作的街区 HUD。")
+        workflow._activate_handbook_entry(before)
     elif args.action == "back":
         if not before.has(("日常", "六分街", "咖啡", "经营状况")):
             raise AutomationError("不是已识别的每日页面，拒绝返回键。")
