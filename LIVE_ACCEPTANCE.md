@@ -1,5 +1,7 @@
 # 实机验收清单
 
+2026-11-06 开发版 `434865b` 在 AutoHSR 交接后从关闭状态启动国服并核实街区。菜单入口的第一次点击成功提交，下一帧仍保留原街区 HUD，但整个画面已明显淡出。验收脚本将该帧仍识别为大世界，在 `no_transition` 处提前结束，训练入口继续待验收。原客户端和两个 worker 均正常退出，电量消耗为 0，桌面时段已交还 AutoHSR。证据见 `runs/parallel-20261106/B2-black-cold-start-preflight/live/cn-3685f75fbd0d/result.json` 和 `runs/parallel-20261106/B2-sealed-menu-black-transition/cases/cn-7fb638ee9061/menu.json`。
+
 2026-11-06 开发版 `fd2e84f` 接管原国服窗口，点击进入并核实街区。短暂失焦后同一任务自动继续。独立封存的 B2 入口核实前台和原菜单点击，下一帧是全黑转场，当前验收脚本在未知画面保护处停止。训练场、独立战斗和连携仍待实机。电量消耗为 0，客户端与 worker 正常退出，桌面已交还 AutoHSR。证据见 `runs/cn-b2-attach-774efd111/result.json` 及 `runs/parallel-20261106/B2-training-entry-sealed/cases/cn-06bdf845675c/menu.json`。
 
 2026-11-06 开发版 `872c8f9` 国服实测。原生冷启动进入街区，核实 400 活跃度和四档全领。两场「机师与叛甲」胜利各结清 60 电量，当前电量 233→113，储蓄及电池前后分别为 570、6。达到场次与电量预算后结束，待核对为零。原游戏进程与 SDK worker 正常退出，窗口交还 AutoHSR。证据见 `runs/source-live-872c8f9-cn-20261105/result.json`。
