@@ -2,12 +2,14 @@ from contextlib import nullcontext,contextmanager
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from autozzz.onedragon_runtime import RuntimePaths,UPSTREAM_REVISION
+from autozzz.onedragon_bundle import filesystem_path
 from autozzz.runtime_selection import (bridge_fingerprint,candidate_selection,digest,resolve_selection,runtime_files,selection_path,tree_hash,verify_identity)
 from autozzz.sdk_upgrade import SDKUpgradeManager
 from autozzz.sdk_upgrade_files import atomic_json,data_state,pending_edits,snapshot_data,unpack_archive
@@ -151,6 +153,31 @@ class SDKUpgradeTests(unittest.TestCase):
         report=snapshot_data(self.data,target,new,self.stable_source,self.revision,1,threading.Event(),before)
         self.assertEqual((target/'config/default.sample.yml').read_bytes(),b'new default');self.assertEqual((target/'assets/custom/raw.png').read_bytes(),b'user PNG')
         self.assertEqual(data_state(self.data),before);self.assertIn('config/default.sample.yml',report['refreshed_defaults'])
+
+    def test_snapshot_copies_and_refreshes_assets_beyond_windows_max_path(self):
+        self.addCleanup(shutil.rmtree, filesystem_path(self.root))
+        new_source = self.root / 'new_source'
+        target = self.data / 'autozzz/runtime-data' / ('d' * 32)
+        folder = '/'.join(['assets', 'templates'] + ['nested_' + 'x' * 72] * 3)
+        builtin = folder + '/builtin.png'
+        custom = folder + '/custom.png'
+        self.assertGreater(len(str(self.data / builtin)), 260)
+        for root, name, content in (
+            (self.stable_source, builtin, b'old default'),
+            (self.data, builtin, b'old default'),
+            (self.data, custom, b'custom asset'),
+            (new_source, builtin, b'new default'),
+        ):
+            self.put(filesystem_path(root / name), content)
+
+        before = data_state(self.data)
+        report = snapshot_data(self.data, target, new_source, self.stable_source,
+                               self.revision, 1, threading.Event(), before)
+
+        self.assertEqual(filesystem_path(target / builtin).read_bytes(), b'new default')
+        self.assertEqual(filesystem_path(target / custom).read_bytes(), b'custom asset')
+        self.assertEqual(report['refreshed_defaults'], [builtin])
+        self.assertEqual(data_state(self.data), before)
 
     def test_snapshot_carries_plugin_data_bytes_and_refuses_stale_plugin_data(self):
         name = 'plugin_data/demo/缓存/record.bin'

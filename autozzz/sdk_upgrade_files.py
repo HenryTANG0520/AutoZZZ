@@ -13,7 +13,7 @@ DATA_PARTS=('config','assets','plugins','plugin_data','autozzz/dependencies')
 
 
 def atomic_bytes(path,raw):
-    path=plain(path);path.parent.mkdir(parents=True,exist_ok=True)
+    path=filesystem_path(plain(path));path.parent.mkdir(parents=True,exist_ok=True)
     temporary=plain(path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp'))
     try:
         with temporary.open('xb')as stream:
@@ -48,7 +48,8 @@ def resource_files(root):
 
 
 def pending_edits(root):
-    config=plain(Path(root)/'config')
+    root=filesystem_path(Path(root))
+    config=plain(root/'config')
     if not config.exists():return []
     result=[]
     for pattern in ('autozzz*transaction*.json','autozzz*pending*.json','autozzz-devtools-edit.json'):
@@ -60,10 +61,12 @@ def copy_files(root,target,files,cancelled):
     root,target=plain(root),plain(target)
     for name in files:
         if cancelled.is_set():raise InterruptedError('SDK构建已取消，候选与资料快照保留。')
-        relative_name(name);origin=plain(root/name);destination=plain(target/name)
+        relative_name(name)
+        origin=filesystem_path(plain(root/name))
+        destination=filesystem_path(plain(target/name))
         if not origin.is_file():raise ValueError('SDK来源文件缺失：'+name)
         destination.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(filesystem_path(origin),filesystem_path(destination))
+        shutil.copyfile(origin,destination)
 
 
 def unpack_archive(archive,destination,cancelled):
@@ -134,11 +137,12 @@ def snapshot_data(source,target,new_source,old_source,revision,protocol,cancelle
     changed=[];preserved=[]
     for name,origin in new_resources.items():
         if issues:continue  # Pending transaction versions must remain byte-for-byte unchanged.
-        destination=plain(target/name);exists=destination.exists()
+        destination=filesystem_path(plain(target/name));exists=destination.exists()
         unchanged_builtin=name in old_resources and name in before and before[name]==digest(old_resources[name])
         if not exists or unchanged_builtin:
             if not exists or digest(origin)!=before.get(name):
-                destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(filesystem_path(origin),filesystem_path(destination));changed.append(name)
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(filesystem_path(origin),destination);changed.append(name)
         elif name in old_resources and digest(origin)!=digest(old_resources[name]):preserved.append(name)
     # Obsolete defaults remain as user-reviewable material; no automatic deletion of user assets.
     if data_state(source)!=before or any(digest(source/name)!=checksum for name,checksum in archive_hashes.items()):raise ValueError('资料快照期间原账号或待恢复归档发生变化，已保留未激活候选。')

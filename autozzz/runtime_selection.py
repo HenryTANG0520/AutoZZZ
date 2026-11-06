@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import re
 
-from .onedragon_bundle import digest,tree_files,relative_name
+from .onedragon_bundle import digest,filesystem_path,tree_files,relative_name
 
 FORMAT=1
 RUNTIME_PARTS=('source','base-python','env','bridge')
@@ -14,8 +14,9 @@ RUNTIME_PARTS=('source','base-python','env','bridge')
 
 def plain(path):
     path=Path(path).absolute()
-    if path!=path.resolve():raise ValueError('SDK路径被重定向。')
-    current=path
+    checked=filesystem_path(path)
+    if checked!=filesystem_path(checked.resolve()):raise ValueError('SDK路径被重定向。')
+    current=checked
     while current.parent!=current:
         if current.exists()and (current.is_symlink()or getattr(current.lstat(),'st_file_attributes',0)&0x400):
             raise ValueError('SDK路径不能包含链接或重解析点。')
