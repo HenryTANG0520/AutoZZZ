@@ -8,7 +8,9 @@ SDK 工作进程使用 Windows 扩展路径导入已核实的源码，保留原�
 
 独立 SDK 兼容性探测统一了导入与来源检查的 Windows 路径形式。普通 worker、兼容探测和两个原生工具宿主在身份校验后使用同一依赖目录的扩展写法。174 字符的发行目录通过 30 工厂预检，183 字符的官方候选通过 45 项兼容检查并加载 30 个工厂，选中后普通 worker 正常退出。两处二进制依赖的实际载入文件及摘要匹配原清单。两个深目录中的原生体力计划设置和开发工具三页均正常打开并退出，目录外源码仍被拒绝。证据见 `runs/parallel-20261106/B-stable-sdk-deep-entrypoints/`、`runs/parallel-20261106/B-stable-sdk-deep-dependencies/` 和 `runs/parallel-20261106/B-stable-sdk-deep-native-hosts/`。
 
-`a9e893b` 的双区服整链在 174 字符目录通过。首份区服选择写入后，原更新助手硬退出；使用同一事务的恢复入口继续提交，重复运行记录一致。两服普通 worker 各加载 30 个工厂，原生设置和开发工具各自通过。旧安装 `dev-6fe833f` 先经同 pin 桥接，再由新助手迁移到 `6008415`，两段均验证了中断回退与资料保全。旧版入口仍可能直接选择标准资产名的跨 pin 包，正式发布前需补协议隔离。证据见 `runs/parallel-20261106/B-stable-sdk-integrated-release/` 和 `runs/parallel-20261106/B-stable-sdk-legacy-bridge/`。
+`a9e893b` 的双区服整链在 174 字符目录通过。首份区服选择写入后，原更新助手硬退出。使用同一事务的恢复入口继续提交，重复运行记录一致。两服普通 worker 各加载 30 个工厂，原生设置和开发工具各自通过。旧安装 `dev-6fe833f` 先经同 pin 桥接，再由新助手迁移到 `6008415`，两段均验证了中断回退与资料保全。证据见 `runs/parallel-20261106/B-stable-sdk-integrated-release/` 和 `runs/parallel-20261106/B-stable-sdk-legacy-bridge/`。
+
+跨 pin 发布包使用独立资产名、ZIP 根目录和清单格式。同 pin 桥接保留旧版能识别的格式。真实 `dev-6fe833f` 发现并安装同 pin 完整包，跨 pin 包改名或解包后导入也被拦截。新版助手接受两类包并分别通过 30 工厂预检，跨 pin 助手硬中断后恢复旧版本和两区服资料。本地目录和包内 Python 已验收，公开发布与冻结 EXE 仍需核实。证据见 `runs/parallel-20261106/B-stable-sdk-release-compat/`。
 
 原战斗 worker 可通过 `trace_configure` 显式开启首领时序采样，沿用现有时间线和限额。区域巡防、恶名狩猎的原生轮次能关联同帧受管收据、原执行器与输入回调。两版真实 SDK worker 各通过 16 条追踪请求，原节点使用内存设备回放。新版合成禁用帧撤销等待中的输入。默认关闭，真实首领阶段和输入时序仍需实机验收。证据见 `runs/parallel-20261106/B-boss-permit/worker-timing/failure-guard/`。
 

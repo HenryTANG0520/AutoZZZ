@@ -14,7 +14,7 @@ import zipfile
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from autozzz.onedragon_bundle import digest,filesystem_path
-from autozzz.program_package import MANIFEST,read_manifest,verify_package
+from autozzz.program_package import MANIFEST,PROGRAM_ARCHIVES,read_manifest,verify_package
 from autozzz.program_update import ProgramUpdate,package_processes,write_json
 from autozzz.run_lock import RunLock
 
@@ -41,14 +41,14 @@ def main():
     readme=(target/'README.md').read_bytes()+b'\nFrozen update acceptance marker.\n'
     import hashlib
     new['files']['README.md']=hashlib.sha256(readme).hexdigest()
-    archive=base/'AutoZZZ-windows-x64.zip'
+    archive_root,asset=PROGRAM_ARCHIVES[new['format']];archive=base/asset
     print('Creating complete release ZIP from managed program files.',flush=True)
     with zipfile.ZipFile(archive,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=1,allowZip64=True) as output:
-        output.writestr('AutoZZZ/','')
+        output.writestr(archive_root+'/','')
         for name in original['files']:
-            if name=='README.md':output.writestr('AutoZZZ/'+name,readme)
-            else:output.write(filesystem_path(target/name),'AutoZZZ/'+name)
-        output.writestr('AutoZZZ/'+MANIFEST,json.dumps(new,ensure_ascii=False,sort_keys=True,indent=2))
+            if name=='README.md':output.writestr(archive_root+'/'+name,readme)
+            else:output.write(filesystem_path(target/name),archive_root+'/'+name)
+        output.writestr(archive_root+'/'+MANIFEST,json.dumps(new,ensure_ascii=False,sort_keys=True,indent=2))
     users={'config.json':'{"verification":"isolated configuration"}',
            'runs/保留报告.json':'{"report":"preserve"}',
            '我的策略/坏女人.json':'{"strategy":"preserve custom file"}'}

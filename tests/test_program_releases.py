@@ -5,11 +5,12 @@ import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock,patch
+import zipfile
 
 from autozzz.program_updates import ASSET,release_rows,ProgramUpdates
 from autozzz.program_update import verify_preflight
 from autozzz.onedragon_bundle import digest
-from autozzz.program_package import MANIFEST,extract_package
+from autozzz.program_package import LEGACY_UPDATE_REVISION,MANIFEST,PROGRAM_ARCHIVES,SDK_BRIDGE_PACKAGE_FORMAT,extract_package
 from tests.test_program_update import package
 from tools.package_release import main as package_release
 
@@ -35,7 +36,7 @@ class ProgramReleaseTests(unittest.TestCase):
     def test_preflight_is_bound_to_this_manifest_and_report_and_requires_exited_worker(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);candidate=package(root/'candidate','new');report=root/'runtime-report.json'
-            value=dict(state='success',bundled=True,worker_exited=True,game_started=False,game_input_sent=False,revision='a'*40,applications=30,strategies=dict(auto_battle=8,dodge=7))
+            value=dict(state='success',bundled=True,worker_exited=True,game_started=False,game_input_sent=False,revision=LEGACY_UPDATE_REVISION,applications=30,strategies=dict(auto_battle=8,dodge=7))
             report.write_text(json.dumps(value));tx=NS(job=root,candidate=candidate,data=dict(new_manifest='new',preflight=dict(manifest='new',report=digest(report))))
             self.assertEqual(verify_preflight(tx)['applications'],30)
             for changes in (dict(worker_exited=False),dict(game_started=True),dict(applications=29),dict(revision='other'),dict(strategies={})):
@@ -81,6 +82,52 @@ class ProgramReleaseTests(unittest.TestCase):
         self.assertTrue(manager.cancel('same')['busy']);self.assertTrue(manager.cancelled.is_set());self.assertEqual(manager.signal['signal'],'cancel')
         with self.assertRaises(ValueError):manager.cancel('other')
         manager.close();manager.worker.join.assert_called_once()
+
+    def test_sdk_transition_asset_keeps_exact_url_and_digest_requirements(self):
+        _,name=PROGRAM_ARCHIVES[SDK_BRIDGE_PACKAGE_FORMAT]
+        release=self.release()
+        asset=release['assets'][0]
+        asset['name']=name
+        self.assertEqual(release_rows([release]),[])
+        asset['browser_download_url']=asset['browser_download_url'].removesuffix(ASSET)+name
+        self.assertEqual(release_rows([release])[0]['sha256'],'a'*64)
+        asset['digest']='sha256:'+'b'*63
+        self.assertEqual(release_rows([release]),[])
+
+    def test_sdk_transition_uses_separate_zip_root_and_rejects_mismatched_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            source=package(root/'package','dev-fixture',revision='c'*40)
+            archive_root,name=PROGRAM_ARCHIVES[SDK_BRIDGE_PACKAGE_FORMAT]
+            archive=root/name
+            command=['package_release.py','--package',str(source),'--version','v1.2.3','--output']
+            original=(source/MANIFEST).read_bytes()
+            with patch('sys.argv',command+[str(root/ASSET)]),self.assertRaisesRegex(ValueError,name):
+                package_release()
+            self.assertEqual((source/MANIFEST).read_bytes(),original)
+            self.assertFalse((root/ASSET).exists())
+            with patch('sys.argv',command+[str(archive)]),patch('builtins.print'):
+                package_release()
+            self.assertTrue(archive.with_suffix('.zip.sha256').read_text().startswith(digest(archive)))
+            extracted=root/'extracted'
+            metadata=extract_package(archive,extracted)
+            self.assertEqual(metadata['format'],SDK_BRIDGE_PACKAGE_FORMAT)
+            self.assertTrue((extracted/'AutoZZZ/AutoZZZ.exe').is_file())
+            mismatched=root/'mismatched.zip'
+            with zipfile.ZipFile(archive) as original_zip,zipfile.ZipFile(mismatched,'x') as wrong:
+                for member in original_zip.namelist():
+                    self.assertTrue(member.startswith(archive_root+'/'))
+                    wrong.writestr('AutoZZZ/'+member.split('/',1)[1],original_zip.read(member))
+            with self.assertRaisesRegex(ValueError,'清单格式不符'):
+                extract_package(mismatched,root/'wrong')
+
+            with zipfile.ZipFile(archive,'a') as original_zip:
+                original_zip.writestr(archive_root+'///','')
+            decorated=root/'decorated'
+            with patch('autozzz.program_package.filesystem_path',wraps=Path) as checked_path:
+                extract_package(archive,decorated)
+            self.assertIn(((decorated/'AutoZZZ'),),[call.args for call in checked_path.call_args_list])
+            self.assertTrue(all(Path(call.args[0]).is_relative_to(decorated) for call in checked_path.call_args_list))
 
 
 if __name__=='__main__':unittest.main()

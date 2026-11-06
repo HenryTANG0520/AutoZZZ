@@ -15,6 +15,13 @@ from .onedragon_bundle import digest,filesystem_path,read_manifest as read_runti
 MANIFEST='autozzz-package.json'
 USER_FILES={'config.json','battle.json','training_catalog.json'}
 MAX_PACKAGE_BYTES=8*1024**3
+LEGACY_PACKAGE_FORMAT=1
+SDK_BRIDGE_PACKAGE_FORMAT=2
+LEGACY_UPDATE_REVISION='f80b68456306d2afb97be72436dcda27f2ed6b59'
+PROGRAM_ARCHIVES={
+    LEGACY_PACKAGE_FORMAT: ('AutoZZZ','AutoZZZ-windows-x64.zip'),
+    SDK_BRIDGE_PACKAGE_FORMAT: ('AutoZZZ-SDK-Transition','AutoZZZ-windows-x64-sdk-transition.zip'),
+}
 
 
 def relative(value):
@@ -60,7 +67,7 @@ def read_manifest(root):
     if path.is_symlink() or getattr(path.lstat(),'st_file_attributes',0)&0x400 or path.stat().st_size>64*1024**2:raise ValueError('程序包清单无效。')
     data=json.loads(path.read_text(encoding='utf-8'),object_pairs_hook=_pairs)
     if (type(data)is not dict or set(data)!={'format','product','version','base_commit','runtime_revision','protocol','files'}
-        or type(data['format'])is not int or data['format']!=1 or data['product']!='AutoZZZ'
+        or type(data['format'])is not int or data['format'] not in PROGRAM_ARCHIVES or data['product']!='AutoZZZ'
         or type(data['version'])is not str or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}',data['version'])is None
         or type(data['base_commit'])is not str or re.fullmatch('[0-9a-f]{40}',data['base_commit'])is None
         or type(data['runtime_revision'])is not str or re.fullmatch('[0-9a-f]{40}',data['runtime_revision'])is None
@@ -95,16 +102,22 @@ def verify_runtime_index(root,data,actual):
     return runtime
 
 
-def create_manifest(root,version,base_commit,*,reindex=False,require_index_match=False):
+def create_manifest(root,version,base_commit,*,reindex=False,require_index_match=False,archive_name=None):
     root=Path(root).resolve()
     bundle=json.loads((root/'onedragon/autozzz-bundle.json').read_text(encoding='utf-8'))
+    # Released legacy updaters can only replace a package safely at their original SDK pin.
+    format_=LEGACY_PACKAGE_FORMAT if bundle['revision']==LEGACY_UPDATE_REVISION else SDK_BRIDGE_PACKAGE_FORMAT
+    bridge_asset=PROGRAM_ARCHIVES[SDK_BRIDGE_PACKAGE_FORMAT][1]
+    if archive_name is not None and (format_==SDK_BRIDGE_PACKAGE_FORMAT or archive_name==bridge_asset):
+        expected=PROGRAM_ARCHIVES[format_][1]
+        if archive_name!=expected:raise ValueError('此程序包的发布资产文件名应为 '+expected)
     managed=read_manifest(root)['files'] if (root/MANIFEST).exists() and not reindex else None
     entries={name:digest(path) for name,path in files(root) if name!=MANIFEST and not user_file(name) and (managed is None or name in managed)}
     if managed is not None and entries.keys()!=managed.keys():raise ValueError('原清单中的程序文件缺失，不能重新标记发布包。')
     if require_index_match and managed is not None and entries!=managed:
         changed=next(name for name in entries if entries[name]!=managed[name])
         raise ValueError('程序文件摘要不符：'+changed)
-    data=dict(format=1,product='AutoZZZ',version=version,base_commit=base_commit,runtime_revision=bundle['revision'],protocol=bundle['protocol'],files=entries)
+    data=dict(format=format_,product='AutoZZZ',version=version,base_commit=base_commit,runtime_revision=bundle['revision'],protocol=bundle['protocol'],files=entries)
     verify_runtime_index(root,data,entries)
     path=root/MANIFEST
     original=path.read_bytes() if path.exists() else None
@@ -139,14 +152,20 @@ def preserve_user_files(source,target):
 def extract_package(archive,destination,cancelled=lambda:False):
     archive=Path(archive);destination=Path(destination).resolve()
     if destination.exists():raise ValueError('更新包解压目录已存在。')
+    roots={folder:format_ for format_,(folder,_) in PROGRAM_ARCHIVES.items()}
+    extracted=destination/PROGRAM_ARCHIVES[LEGACY_PACKAGE_FORMAT][0]
     with zipfile.ZipFile(archive) as zipped:
-        seen=set();total=0
-        if len(zipped.infolist())>200001:raise ValueError('更新包文件过多。')
-        for item in zipped.infolist():
+        seen=set();total=0;archive_root=None
+        items=zipped.infolist()
+        if not items:raise ValueError('更新包缺少程序目录。')
+        if len(items)>200001:raise ValueError('更新包文件过多。')
+        for item in items:
             name=item.orig_filename.rstrip('/')
             relative(name)
-            root_directory=name=='AutoZZZ' and item.is_dir()
-            if item.orig_filename!=item.filename or not (root_directory or name.startswith('AutoZZZ/')):raise ValueError('更新包需要完整的 AutoZZZ 目录。')
+            folder,_,suffix=name.partition('/')
+            if (item.orig_filename!=item.filename or folder not in roots or archive_root not in (None,folder)
+                    or not (suffix or item.is_dir())):raise ValueError('更新包需要一个完整的 AutoZZZ 程序目录。')
+            archive_root=folder
             key=name.casefold();mode=item.external_attr>>16
             if key in seen or stat.S_IFMT(mode)not in (0,stat.S_IFREG,stat.S_IFDIR) or item.flag_bits&1:raise ValueError('更新包路径重复或类型无效。')
             seen.add(key);total+=item.file_size
@@ -155,13 +174,16 @@ def extract_package(archive,destination,cancelled=lambda:False):
         while not ancestor.exists():ancestor=ancestor.parent
         if shutil.disk_usage(ancestor).free<total+64*1024**2:raise ValueError('解压目录可用空间不足。')
         destination.mkdir(parents=True)
-        for item in zipped.infolist():
+        for item in items:
             if cancelled():raise InterruptedError('已取消更新包解压。')
-            target=filesystem_path(destination/item.filename)
+            suffix=item.filename.rstrip('/').partition('/')[2]
+            target=filesystem_path(extracted/suffix)
             if item.is_dir():target.mkdir(parents=True,exist_ok=True);continue
             target.parent.mkdir(parents=True,exist_ok=True)
             with zipped.open(item) as source,target.open('xb') as out:
                 while chunk:=source.read(1024*1024):
                     if cancelled():raise InterruptedError('已取消更新包解压。')
                     out.write(chunk)
-    return verify_package(destination/'AutoZZZ',strict=True)
+    package=verify_package(extracted,strict=True)
+    if package['format']!=roots[archive_root]:raise ValueError('更新包目录与程序包清单格式不符。')
+    return package

@@ -10,21 +10,21 @@ from unittest.mock import patch
 import zipfile
 
 from autozzz.onedragon_bundle import MANIFEST_NAME,digest,filesystem_path
-from autozzz.program_package import MANIFEST,create_manifest,extract_package,read_manifest,verify_package,preserve_user_files
+from autozzz.program_package import LEGACY_UPDATE_REVISION,MANIFEST,create_manifest,extract_package,read_manifest,verify_package,preserve_user_files
 from autozzz.program_sdk_commit import ProgramSdkCommit
 from autozzz.program_update import ProgramUpdate, verify_preflight, write_json
 from autozzz.runtime_selection import selection_path, snapshot_path, tree_hash
 from autozzz.sdk_upgrade_files import atomic_bytes, atomic_json, data_state
 
 
-def package(root,version):
+def package(root,version,*,revision=LEGACY_UPDATE_REVISION):
     root=Path(root);root.mkdir(parents=True)
     required=('python/python.exe','python/python311.dll','python/LICENSE.txt','source/LICENSE','source/src/zzz_od/context/zzz_context.py',
         'bridge/autozzz/onedragon_worker.py','bridge/autozzz/onedragon_runtime.py','bridge/autozzz/onedragon_bundle.py','bridge/autozzz/onedragon_diagnostics.py')
     entries={}
     for name in required:
         path=root/'onedragon'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(version+name,encoding='utf-8');entries[name]=digest(path)
-    (root/'onedragon'/MANIFEST_NAME).write_text(json.dumps(dict(format=1,revision='a'*40,protocol=1,python_version='3.11.18',files=entries,resources=[])),encoding='utf-8')
+    (root/'onedragon'/MANIFEST_NAME).write_text(json.dumps(dict(format=1,revision=revision,protocol=1,python_version='3.11.18',files=entries,resources=[])),encoding='utf-8')
     (root/'AutoZZZ.exe').write_text('fixture executable '+version,encoding='utf-8')
     (root/'README.md').write_text(version,encoding='utf-8')
     create_manifest(root,version,'b'*40)
@@ -181,7 +181,7 @@ class ProgramUpdateTests(unittest.TestCase):
                 transaction = ProgramUpdate.prepare(old, source, probe=lambda _: [])
                 report = transaction.job / 'runtime-report.json'
                 write_json(report, dict(state='success', bundled=True, worker_exited=True, game_started=False,
-                                        game_input_sent=False, revision='a'*40, applications=30,
+                                        game_input_sent=False, revision=LEGACY_UPDATE_REVISION, applications=30,
                                         strategies=dict(auto_battle=1, dodge=1)))
                 transaction.state('prepared', preflight=dict(manifest=transaction.data['new_manifest'], report=digest(report)))
                 verify_preflight(transaction)

@@ -14,13 +14,14 @@ import uuid
 from .onedragon_bundle import digest,filesystem_path
 from .onedragon_environment import EnvironmentStore,validate_environment,validate_resource_environment
 from .onedragon_notify import credential_fragments,redact
-from .program_package import read_manifest,extract_package,verify_package
+from .program_package import LEGACY_PACKAGE_FORMAT,PROGRAM_ARCHIVES,read_manifest,extract_package,verify_package
 from .program_update import ProgramUpdate,verify_preflight
 from .run_lock import profile_lock
 from .runtime_selection import plain,read_json
 
 REPOSITORY='HenryTANG0520/AutoZZZ'
-ASSET='AutoZZZ-windows-x64.zip'
+ASSET=PROGRAM_ARCHIVES[LEGACY_PACKAGE_FORMAT][1]
+ASSET_NAMES=tuple(asset for _,asset in PROGRAM_ARCHIVES.values())
 
 
 def release_rows(items,channel='stable'):
@@ -35,9 +36,9 @@ def release_rows(items,channel='stable'):
         if not isinstance(assets,list):continue
         for asset in assets:
             if not isinstance(asset,dict):continue
-            url=asset.get('browser_download_url','');checksum=asset.get('digest','')
-            if (asset.get('name')!=ASSET or type(asset.get('id'))is not int or asset['id']<1 or type(asset.get('size'))is not int
-                or not 0<asset['size']<=4*1024**3 or url!=f'https://github.com/{REPOSITORY}/releases/download/{tag}/{ASSET}'
+            name=asset.get('name');url=asset.get('browser_download_url','');checksum=asset.get('digest','')
+            if (name not in ASSET_NAMES or type(asset.get('id'))is not int or asset['id']<1 or type(asset.get('size'))is not int
+                or not 0<asset['size']<=4*1024**3 or url!=f'https://github.com/{REPOSITORY}/releases/download/{tag}/{name}'
                 or type(checksum)is not str or re.fullmatch('sha256:[0-9a-f]{64}',checksum)is None):continue
             result.append(dict(id=str(asset['id']),version=tag,url=url,sha256=checksum[7:],bytes=asset['size'],
                 published=str(release.get('published_at','')),page=f'https://github.com/{REPOSITORY}/releases/tag/{tag}'))
