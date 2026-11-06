@@ -5,13 +5,16 @@ import json
 from pathlib import Path
 import sys
 
+from .onedragon_bundle import filesystem_path
+
 
 def probe(identity,checksum,data):
     from .runtime_selection import read_json,verify_identity
     metadata=read_json(identity);root=identity.parent
     verify_identity(identity,checksum,source=root/'source',python=Path(sys.executable),bridge=Path(__file__).resolve().parent.parent,
         revision=metadata['revision'],protocol=metadata['protocol'],require_compatible=False)
-    sys.path.insert(0,str(root/'source/src'))
+    runtime_root=filesystem_path(root)
+    sys.path.insert(0,str(runtime_root/'source/src'))
     from one_dragon.utils import os_utils
     os_utils.set_work_dir(data)
     errors=[];checks=[];service=None;window=None;application=None;policies={};apps=[]
@@ -84,7 +87,7 @@ def probe(identity,checksum,data):
     origins={name:str(Path(module.__file__).resolve())for name,module in list(sys.modules.items())if name in
         ('autozzz.onedragon_service','zzz_od.context.zzz_context','numpy','PySide6')and getattr(module,'__file__',None)}
     for name,path in origins.items():
-        if not Path(path).is_relative_to(root):errors.append(dict(check='candidate_isolation',error=name+' loaded outside candidate: '+path))
+        if not filesystem_path(Path(path)).is_relative_to(runtime_root):errors.append(dict(check='candidate_isolation',error=name+' loaded outside candidate: '+path))
     return dict(compatible=not errors,revision=metadata['revision'],checks=checks,errors=errors,policies=policies,
         applications=len(apps),third_party=[row['id']for row in apps if row['third_party']],origins=origins,
         python=sys.version.split()[0],game_started=False,game_initialized=False,game_input_sent=False,game_acceptance=False)
