@@ -116,7 +116,8 @@ class ControlledGamepad:
                 if self.before_input is not None:self.before_input(None)
                 self.camera=owner;self.raw.pad.right_joystick_float(dx/distance,y);self.raw.pad.update()
         try:
-            self.control.input(send);self.control.hold(distance/speed)
+            self.control.input(send)
+            return self.control.hold(distance/speed)
         finally:
             with self.lock:
                 if self.camera==owner:

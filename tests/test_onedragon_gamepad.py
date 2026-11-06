@@ -62,7 +62,7 @@ class GamepadTests(unittest.TestCase):
         self.assertNotIn(('down','b'),self.raw.events);self.assertFalse(self.pad.pressed)
 
     def test_camera_formula_and_stop_neutral(self):
-        self.pad.turn(2,-1,1000)
+        self.assertTrue(self.pad.turn(2,-1,1000))
         self.assertIn(('camera',1.,.5),self.raw.events);self.assertIn(('camera',0,0),self.raw.events)
         self.assertIsNone(self.pad.camera)
 

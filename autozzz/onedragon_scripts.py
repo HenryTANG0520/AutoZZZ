@@ -278,6 +278,7 @@ class ScriptPlaybackControl:
         from zzz_od.auto_battle.atomic_op.wait import AtomicWait
         from zzz_od.operation.key_sim_runner import KeySimRunner
         from zzz_od.application.devtools.operation_debug.operation_debug_app import OperationDebugApp
+        from zzz_od.application.game_config_checker.mouse_sensitivity_checker.mouse_sensitivity_checker import MouseSensitivityChecker
         from one_dragon.utils.log_utils import log
         owner = self
         original_time = btn_common.time
@@ -327,6 +328,32 @@ class ScriptPlaybackControl:
         def debug_step(operation):return owner.execute(operation, operation._autozzz_repeat)
         self.patch(KeySimRunner, "run_key_sim", key_step)
         self.patch(OperationDebugApp, "run_operations", debug_step)
+
+        original_check = MouseSensitivityChecker.check
+
+        def check_sensitivity(operation):
+            if not operation._is_gamepad_mode:
+                return original_check(operation)
+            epoch = owner.control.task_epoch
+            if getattr(operation, "_autozzz_sensitivity_epoch", None) != epoch:
+                operation.angle_check_times = 0
+                operation.last_angle = 0
+                operation.angle_diff_list.clear()
+                operation._autozzz_sensitivity_epoch = epoch
+            try:
+                return original_check(operation)
+            except (ExecutionStopped, ObservationExpired):
+                operation._autozzz_sensitivity_epoch = None
+                raise
+
+        def test_sensitivity_turn(operation):
+            # 满偏向右持续固定秒数，不依赖正在测量的 gamepad_turn_speed。
+            if not operation.ctx.controller.btn_controller.turn(operation.gamepad_test_duration, 0, 1):
+                owner.control.checkpoint(require_frame=True)
+                raise ObservationExpired("手柄灵敏度检测动作被中断。")
+
+        self.patch(MouseSensitivityChecker, "check", check_sensitivity)
+        self.patch(MouseSensitivityChecker, "_gamepad_turn_test", test_sensitivity_turn)
 
     def close(self) -> None:
         self.debug_template = None
