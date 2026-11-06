@@ -38,17 +38,22 @@ def credential_fragments(values):
                 if url.username: add(unquote(url.username))
                 if url.password: add(unquote(url.password))
                 for fragment in url.path.split("/"):
-                    if len(fragment) >= 4: add(unquote(fragment))
+                    if len(fragment) >= 4:
+                        add(fragment)
+                        add(unquote(fragment))
+                for field in url.query.split("&"):
+                    _, separator, fragment = field.partition("=")
+                    if separator: add(fragment)
                 for _, fragment in parse_qsl(url.query): add(fragment)
             except ValueError: pass
     return tuple(result)
 
 
 def redact(text: Any, secrets=(), limit=2000) -> str:
-    value = str(text)
+    # Hide the complete address before a literal match can break it into fragments.
+    value = re.sub(r"(?i)\b(?:https?|wss?|socks(?:4a?|5h?))://[^\s\)>\"']+", "[地址已隐藏]", str(text))
     for secret in sorted({str(s) for s in secrets if s}, key=len, reverse=True):
         value = value.replace(secret, "[已隐藏]")
-    value = re.sub(r"(?i)\b(?:https?|wss?|socks(?:4a?|5h?))://[^\s\]\)>\"']+", "[地址已隐藏]", value)
     return value if limit is None else value[:limit]
 
 

@@ -13,6 +13,7 @@ from one_dragon.base.operation.notify_pool import NotifyPoolItem
 from one_dragon.utils.log_utils import log
 
 from .onedragon_notify import credential_fragments, redact
+from .onedragon_push_transport import ManagedWorkWeixinApp, delivery_secrets, delivery_transport
 
 
 class _RedactFilter(logging.Filter):
@@ -21,12 +22,13 @@ class _RedactFilter(logging.Filter):
         self.service = service
 
     def filter(self, record):
-        record.msg = redact(record.getMessage(), self.service.secrets, limit=None)
+        secrets = (*self.service.secrets, *delivery_secrets())
+        record.msg = redact(record.getMessage(), secrets, limit=None)
         record.args = ()
         if record.exc_info:
-            record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)), self.service.secrets, limit=None)
+            record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)), secrets, limit=None)
             record.exc_info = None
-        if record.stack_info: record.stack_info = redact(record.stack_info, self.service.secrets, limit=None)
+        if record.stack_info: record.stack_info = redact(record.stack_info, secrets, limit=None)
         return True
 
 
@@ -40,6 +42,11 @@ class ManagedPushService(PushService):
         self.transient_secrets = set()
         self.log_filter = _RedactFilter(self)
         log.addFilter(self.log_filter)
+
+    def _add_channel(self, channel):
+        if channel.channel_id == "QYWX_APP":
+            channel = ManagedWorkWeixinApp()
+        super()._add_channel(channel)
 
     @cached_property
     def push_config(self):
@@ -117,16 +124,23 @@ class ManagedPushService(PushService):
             else:
                 ok, detail = self.validate_channel(channel)
                 if ok:
-                    try:
-                        config = self.get_channel_config(cid)
-                        if items is None:
-                            ok, detail = channel.push(config=config, title=title, content=content,
-                                image=image if self.push_config.send_image is True and not manual else None, proxy_url=self.get_proxy())
-                        else:
-                            payload = list(items) if self.push_config.send_image is True else [NotifyPoolItem(content=item.content) for item in items]
-                            ok, detail = channel.push_merged(config=config, title=title, items=payload, proxy_url=self.get_proxy())
-                    except Exception as exc:
-                        ok, detail = False, type(exc).__name__ + ": " + str(exc)
+                    with delivery_transport(cid):
+                        try:
+                            config = self.get_channel_config(cid)
+                            if items is None:
+                                attachment = image if self.push_config.send_image is True and not manual else None
+                                has_image = attachment is not None
+                                ok, detail = channel.push(config=config, title=title, content=content,
+                                    image=attachment, proxy_url=self.get_proxy())
+                            else:
+                                payload = list(items) if self.push_config.send_image is True else [NotifyPoolItem(content=item.content) for item in items]
+                                has_image = any(item.image is not None for item in payload)
+                                ok, detail = channel.push_merged(config=config, title=title, items=payload, proxy_url=self.get_proxy())
+                            if cid == "QYWX" and ok and not has_image and detail.startswith("部分推送成功: "):
+                                ok, detail = False, "推送失败: " + detail.removeprefix("部分推送成功: ")
+                        except Exception as exc:
+                            ok, detail = False, type(exc).__name__ + ": " + str(exc)
+                        detail = redact(detail, delivery_secrets())
             if type(ok) is not bool: ok, detail = False, "渠道返回了无效的发送结果。"
             self._record(cid, ok, detail, kind)
             if not ok: errors.append(cid + "：" + redact(detail, self.secrets))
