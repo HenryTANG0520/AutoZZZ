@@ -118,6 +118,36 @@ def install_msi(path,repair,log):
     return process.wait()  # cannot safely cancel an in-progress driver transaction
 
 
+def _existing_bus_connects(home, arch):
+    """Use the verified client DLL to test the bus without attaching a target."""
+    import ctypes as C
+    from _ctypes import FreeLibrary
+
+    path = checked(home / f'vgamepad/win/vigem/client/{arch}/ViGEmClient.dll', home)
+    client = None
+    try:
+        client = C.CDLL(str(path))
+        client.vigem_alloc.argtypes, client.vigem_alloc.restype = [], C.c_void_p
+        client.vigem_connect.argtypes, client.vigem_connect.restype = [C.c_void_p], C.c_uint
+        client.vigem_disconnect.argtypes, client.vigem_disconnect.restype = [C.c_void_p], None
+        client.vigem_free.argtypes, client.vigem_free.restype = [C.c_void_p], None
+        handle = client.vigem_alloc()
+        if not handle:
+            return False
+        try:
+            if client.vigem_connect(handle) != 0x20000000:  # VIGEM_ERROR_NONE
+                return False
+            client.vigem_disconnect(handle)
+            return True
+        finally:
+            client.vigem_free(handle)
+    except (OSError, AttributeError):
+        return False
+    finally:
+        if client is not None:
+            FreeLibrary(client._handle)
+
+
 class GamepadDependencies:
     def __init__(self,service):
         self.service=service;self.root=Path(service.data);self.thread=None
@@ -145,7 +175,7 @@ class GamepadDependencies:
             except (ValueError,OSError) as exc:error=error or str(exc)
         return dict(version='0.1.0',driver_target_version='1.17.333.0',python_ready=ready,driver=driver,error=error,restart_required=restart,
             revision=hashlib.sha256(json.dumps([ready,driver,error,restart],sort_keys=True).encode()).hexdigest(),
-            note='安装或修复会更改系统虚拟手柄驱动；可能需要 Windows 管理员确认及重启。游戏输入仍需实测。')
+            note='驱动安装或修复可能需要 Windows 管理员确认及重启。游戏输入仍需实测。')
 
     def start(self,action,revision,confirmed=False):
         if action not in ('install','repair') or confirmed is not True:raise ValueError('请明确确认安装或修复虚拟手柄驱动')
@@ -155,7 +185,7 @@ class GamepadDependencies:
             if self.closed:raise RuntimeError('手柄依赖连接已关闭，请重新打开窗口')
             if self.busy:raise RuntimeError('原手柄安装仍在运行')
             self.cancelled.clear();self.job=dict(job_id=uuid.uuid4().hex,state='starting',detail='正在准备虚拟手柄依赖',
-                action=action,restart_required=False,process_restart_required=False,installed=False,game_verified=False)
+                action=action,restart_required=current['restart_required'],process_restart_required=False,installed=False,game_verified=False)
             self.thread=threading.Thread(target=self._work,name='AutoZZZ-GamepadInstall',daemon=False);self.thread.start()
         return self.status()
 
@@ -190,14 +220,20 @@ class GamepadDependencies:
                     self._update(process_restart_required=True)
                     if home.exists():home.rename(home.parent/('previous-'+self.job['job_id']))
                     stage.rename(home);verify_dependency(home)
+                    arch='x64' if struct.calcsize('P')==8 else 'x86'
+                    driver = driver_state() if self.job['action'] == 'install' else {}
+                    reuse = driver.get('registered') and not driver.get('disabled') and _existing_bus_connects(home, arch)
                     # Commit the non-cancellable phase under the same lock used by
                     # cancel/close. A successful cancellation before this gate must
                     # never fall through to msiexec, including after final validation.
                     with self.lock:
                         self.job['process_restart_required']=True
                         if self.cancelled.is_set():raise InterruptedError('安装已取消，未运行驱动安装器')
+                        if reuse:
+                            self.job.update(state='installed_unverified', installed=True, driver=driver, driver_reused=True,
+                                            installer_completed=False, detail='固定依赖已准备，沿用已连接的 ViGEmBus；请重新连接助手后验收游戏手柄输入')
+                            return
                         self.job.update(state='installing',detail='等待 Windows 驱动安装结束；此阶段不能取消')
-                    arch='x64' if struct.calcsize('P')==8 else 'x86'
                     installer=checked(home/f'vgamepad/win/vigem/install/{arch}/ViGEmBusSetup_{arch}.msi',home)
                     log=home.parent/('driver-'+self.job['job_id']+'.log')
                     code=install_msi(installer,self.job['action']=='repair',log)

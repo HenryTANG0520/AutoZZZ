@@ -60,7 +60,11 @@ class GamepadInstallWindow:
 
     def start(self,action):
         if not self.catalog or self.job is not None:return
-        if not messagebox.askokcancel('虚拟手柄驱动',('修复' if action=='repair' else '安装')+' ViGEmBus 1.17.333.0 系统驱动及固定版本依赖？可能需要管理员确认或重启，程序不会自动重启 Windows。',parent=self.window):return
+        if action == 'repair':
+            question = '修复 ViGEmBus 1.17.333.0 系统驱动及固定版本依赖？可能需要管理员确认或重启。'
+        else:
+            question = '安装固定版本手柄依赖？可连接的 ViGEmBus 会继续使用。需要驱动时将运行内置安装器，可能需要管理员确认或重启。'
+        if not messagebox.askokcancel('虚拟手柄驱动', question, parent=self.window):return
         self.request('gamepad_install_start',self.updated,action=action,revision=self.catalog['revision'],confirmed=True)
 
     def updated(self,result):

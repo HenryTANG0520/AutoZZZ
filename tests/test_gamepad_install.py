@@ -72,10 +72,11 @@ class GamepadDependencyTests(unittest.TestCase):
                 with self.subTest(args=args),self.assertRaises(ValueError):manager.start(*args)
         self.assertIsNone(manager.thread)
 
-    def run_install(self,code,registered=True,action='install'):
+    def run_install(self,code,registered=True,action='install',bus_connects=False):
         manager=self.manager();driver=dict(registered=registered,disabled=False,game_verified=False)
         self.install_calls=[]
         with patch.object(g,'driver_state',return_value=driver),patch.object(manager,'_download',return_value=self.payload),\
+            patch.object(g,'_existing_bus_connects',return_value=bus_connects),\
             patch.object(g,'install_msi',side_effect=lambda p,r,l:self.install_calls.append((p,r,l)) or code),\
             patch('autozzz.run_lock.RunLock',return_value=nullcontext()),patch('autozzz.run_lock.profile_lock',return_value=nullcontext()):
             revision=manager.catalog()['revision'];manager.start(action,revision,True);manager.thread.join(5)
@@ -91,13 +92,24 @@ class GamepadDependencyTests(unittest.TestCase):
         state=self.run_install(0,registered=False).status()
         self.assertTrue(state['installer_completed']);self.assertFalse(state['installed'])
 
+    def test_install_reuses_connectable_bus_and_still_requires_worker_restart(self):
+        manager = self.run_install(0, bus_connects=True)
+        state = manager.status()
+        self.assertEqual(state['state'], 'installed_unverified')
+        self.assertTrue(state['installed'])
+        self.assertTrue(state['driver_reused'])
+        self.assertTrue(state['process_restart_required'])
+        self.assertFalse(state['installer_completed'])
+        self.assertFalse(state['game_verified'])
+        self.assertEqual(self.install_calls, [])
+
     def test_reboot_code_is_preserved_not_called_ready(self):
         for code in (3010,1641):
             manager=self.run_install(code);state=manager.status()
             self.assertEqual(state['state'],'restart_required');self.assertTrue(state['restart_required']);self.assertFalse(state['installed'])
 
     def test_repair_uses_repair_installer_operation(self):
-        manager=self.run_install(0,action='repair')
+        manager=self.run_install(0,action='repair',bus_connects=True)
         self.assertTrue(self.install_calls[0][1]);self.assertEqual(manager.status()['action'],'repair')
 
     def test_installer_failure_never_returns_installed(self):
