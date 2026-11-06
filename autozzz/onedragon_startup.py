@@ -58,6 +58,17 @@ class GameStartup:
     def _matches_path(self,process):
         return str(Path(process['path']).resolve()).casefold()==str(self.path).casefold()
 
+    def _check_focus_authority(self):
+        if self.cancelled.is_set() or self.paused.is_set():
+            return False
+        self.poll_keys()
+        self._account_elapsed()
+        if self.cancelled.is_set() or self.paused.is_set():
+            return False
+        self.launch_session.guard()
+        self._account_elapsed()
+        return not (self.cancelled.is_set() or self.paused.is_set())
+
     @staticmethod
     def _window_owner(api,hwnd):
         if not hwnd:
@@ -88,7 +99,6 @@ class GameStartup:
             return self.cancelled.is_set() or self.paused.is_set()
 
         def verified_process():
-            self.poll_keys()
             if interrupted():
                 return False
             self.launch_session.guard()
@@ -127,8 +137,19 @@ class GameStartup:
             if interrupted():
                 observe(phase='interrupted')
                 return
+
+            def can_continue():
+                # A native focus call can outlive the preceding stop or
+                # generation check. Recheck before the next side effect.
+                return (api.GetForegroundWindow()==foreground
+                        and self._window_owner(api,foreground)==foreground_owner
+                        and self._window_owner(api,hwnd)==target_owner
+                        and self._check_focus_authority()
+                        and poll_process() is None and api.GetForegroundWindow()==foreground
+                        and not interrupted())
+
             self._focus_checked=True
-            if api.GetForegroundWindow()!=foreground or interrupted():
+            if not can_continue():
                 observe(phase='foreground_changed_or_interrupted')
                 return
             observe(phase='primary_pending')
@@ -140,12 +161,6 @@ class GameStartup:
                 return
             if not verified_process():
                 return
-
-            def can_continue():
-                return (self._window_owner(api,foreground)==foreground_owner
-                        and self._window_owner(api,hwnd)==target_owner
-                        and poll_process() is None and api.GetForegroundWindow()==foreground
-                        and not interrupted())
 
             # Join only the input queues involved in this attempt. If the user
             # changes windows, stop before making another foreground request.
@@ -232,6 +247,7 @@ class GameStartup:
             if self.paused.is_set():continue
             if window is not None and identity is not None:
                 if auto_launch:self._focus_new_client(window,identity)
+                if self.launched and not self._check_focus_authority():continue
                 self._account_elapsed()
                 if self.cancelled.is_set():return None
                 if self.paused.is_set():continue

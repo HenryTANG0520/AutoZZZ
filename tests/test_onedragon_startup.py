@@ -226,6 +226,29 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(api.brought,[200])
         self.assertEqual([row[2] for row in api.attachments],[True,True,False,False])
 
+    def test_generation_change_during_first_attach_stops_and_detaches(self):
+        generation_valid = True
+
+        def guard():
+            if not generation_valid:
+                raise ValueError('stale runtime generation')
+
+        startup, api = self.new_client(guard=guard)
+
+        def attach(_thread, join):
+            nonlocal generation_valid
+            if join:
+                generation_valid = False
+            return True
+
+        api.on_attach = attach
+        with self.assertRaisesRegex(ValueError, 'stale runtime generation'):
+            startup.run(True)
+        current = get_native_id()
+        self.assertEqual(api.attachments, [(current, 101, True), (current, 101, False)])
+        self.assertEqual(api.requests, [200])
+        self.assertEqual(api.brought, [])
+
     def test_fallback_refusal_returns_bound_identity_without_more_requests(self):
         startup,api=self.new_client()
         api.on_attach=lambda _thread,_join:True
