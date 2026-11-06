@@ -67,9 +67,17 @@ class RpcErrorCompatibilityTests(unittest.TestCase):
                 kind.poll(window)
                 self.assertFalse(window.busy);self.assertIsNone(window.callback)
                 self.assertIn('rejected',messages)
-        window,messages=self.fixture(dict(type='error',tag='run-account-list',message='rejected',busy=False))
+        fixture,messages=self.fixture(dict(type='error',tag='run-account-list',message='rejected',busy=False))
+        window = ExecutionWindow.__new__(ExecutionWindow)
+        window.__dict__.update(vars(fixture))
+        overlay_events = []
+        window.ui.closing = False
+        window.ui.overlay_game_handle = 200
+        window.ui.overlay = NS(sync_target=lambda: overlay_events.append(window.ui.overlay_game_handle),
+                               finish=lambda status, *, linger: overlay_events.append((status, linger)))
         ExecutionWindow.poll(window)
         self.assertFalse(window.busy);self.assertIn('rejected',messages)
+        self.assertEqual(overlay_events, [None, ('rejected', False)])
 
     def test_mcp_error_finishes_original_future_without_changing_execution_busy(self):
         window,messages=self.fixture(dict(type='rpc_error',tag='mcp-fixture',message='rejected'))
