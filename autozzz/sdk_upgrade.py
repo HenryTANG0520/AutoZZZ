@@ -26,6 +26,17 @@ from .sdk_stable_migration import frozen_defaults,sha256_token
 from .sdk_upgrade_tools import prepare_uv,verified_uv,UV_VERSION
 
 
+# OneDragonContext creates this registry when the first instance is needed.
+_FIRST_INSTANCE_REGISTRY_HASH = hashlib.sha256((
+    "instance_list:\n"
+    "- idx: 1\n"
+    "  name: '01'\n"
+    "  active: true\n"
+    "  active_in_od: true\n"
+    "  force_login_before_run: false\n"
+).replace('\n', os.linesep).encode('utf-8')).hexdigest()
+
+
 class SDKUpgradeManager:
     def __init__(self,service,stable_paths=None,profile=None):
         from .onedragon_runtime import RuntimePaths
@@ -471,8 +482,11 @@ class SDKUpgradeManager:
                     with self._data_locks(target):
                         selected.prepare()
                         checked=data_state(target)
-                        # The native notification factory materializes an absent per-instance default.
                         added=checked.keys()-prepared.keys()
+                        registry='config/one_dragon.yml'
+                        if registry in added and checked[registry]==_FIRST_INSTANCE_REGISTRY_HASH:
+                            added.remove(registry)
+                        # The native notification factory materializes an absent per-instance default.
                         if (any(checked.get(name)!=value for name,value in prepared.items())
                                 or any(not re.fullmatch(r'config/[0-9]{2,}/notify\.yml',name) for name in added)):
                             raise ValueError('目标区服快照在探测期间变化。')

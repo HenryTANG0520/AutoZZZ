@@ -1,6 +1,7 @@
 from contextlib import nullcontext,contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -188,6 +189,51 @@ class SDKUpgradeTests(unittest.TestCase):
                     target = self.data/'autozzz/runtime-data'/state['result']['data_id']
                     self.assertEqual(state['result']['hash'], tree_hash(data_state(target)))
                     self.assertTrue((target/'config/01/notify.yml').is_file())
+                else:
+                    self.assertEqual(state['state'], 'failed', state)
+                    self.assertIn('目标区服快照在探测期间变化', state['error'])
+                self.assertEqual(data_state(self.data), original)
+                self.assertFalse(selection_path(self.data).exists())
+                self.assertFalse(self.manager.activation_journal.exists())
+
+    def test_release_prepare_accepts_only_exact_new_first_instance_registry(self):
+        revision, receipt = self.old_stable_receipt()
+        self.service._sdk_control_lease = SimpleNamespace(scope=nullcontext, check=lambda:None)
+        registry = Path('config/one_dragon.yml')
+        first = os.linesep.join(('instance_list:', '- idx: 1', "  name: '01'", '  active: true',
+                                '  active_in_od: true', '  force_login_before_run: false', '')).encode()
+        custom = first.replace(b"'01'", b'fixture account')
+        for label, old, probe, accepted in (
+                ('first instance', None, first, True),
+                ('unknown new bytes', None, custom, False),
+                ('existing user registry', custom, custom, True),
+                ('overwrite with the default', custom, first, False),
+                ('delete existing registry', custom, None, False)):
+            with self.subTest(label=label):
+                source = self.data / registry
+                if old is None:
+                    source.unlink(missing_ok=True)
+                else:
+                    self.put(source, old)
+                original = data_state(self.data)
+                proof = dict(marker=digest(self.data/'autozzz-runtime.json'), data=tree_hash(original))
+
+                def handshake(selected, **_):
+                    target = selected.data / registry
+                    if probe is None:
+                        target.unlink()
+                    elif old != probe:
+                        self.put(target, probe)
+                    return dict(revision=selected.revision, pid=1)
+
+                with patch.object(RuntimePaths, 'verify'), patch.object(self.manager, '_handshake', side_effect=handshake):
+                    self.manager.migrate_stable(revision, receipt, '-', True, source_proof=proof, prepare_only=True)
+                    state = self.finish()
+                if accepted:
+                    self.assertEqual(state['state'], 'success', state)
+                    target = self.data/'autozzz/runtime-data'/state['result']['data_id']
+                    self.assertEqual((target/registry).read_bytes(), probe)
+                    self.assertEqual(state['result']['hash'], tree_hash(data_state(target)))
                 else:
                     self.assertEqual(state['state'], 'failed', state)
                     self.assertIn('目标区服快照在探测期间变化', state['error'])
