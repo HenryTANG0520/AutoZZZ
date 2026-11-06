@@ -37,6 +37,7 @@ class OneDragonExecution:
         bindings, self.run_hotkeys = load_run_hotkeys(self.data)
         self._run_aliases = {key: bindings[key] for key in ('start', 'stop') if key in bindings}
         self.startup=None
+        self.startup_focus=None
         self.client_exit=None
         self.client_exit_result={}
         self.close_target=None
@@ -208,6 +209,7 @@ class OneDragonExecution:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             self.cancelled.clear()
             self.single_battle_state = None
+            self.startup_focus = None
             patrol_control = getattr(self, "patrol_control", None)
             if patrol_control is not None:
                 patrol_control.reset()
@@ -459,7 +461,9 @@ class OneDragonExecution:
                             identity=self.startup.run(auto_launch=True)
                             if identity is not None:
                                 identity['process_created']=self.startup.previous_process[1]
-                        finally:self.startup=None;self.preparation_step=""
+                        finally:
+                            self.startup_focus=getattr(self.startup,'focus_observation',None)
+                            self.startup=None;self.preparation_step=""
                         if identity is None:self.state="stopped";return
                     def factory(ctx):
                         if mode=='account':
@@ -808,6 +812,10 @@ class OneDragonExecution:
                 result['run_hotkeys']['warning'] = '自定义运行键监听不可用，可使用 F9/F10。'
             result.update(prepared_app=self.prepared_app,uses_charge=self.uses_charge)
             result.update(prepared_requirements=self.prepared_requirements,preparation_step=self.preparation_step)
+            startup=getattr(self,'startup',None)
+            focus=getattr(startup,'focus_observation',None) if startup is not None else getattr(self,'startup_focus',None)
+            if focus is not None:
+                result['startup_focus']=dict(instance_idx=self.ctx.current_instance_idx,**focus)
             result.update(script=dict(self.script_control.progress),assistant=self.assistant_control.status(),redemption=list(self.redemption_control.attempts),login=self.login_control.status())
             from .onedragon_battle_state import battle_snapshot
             result['battle']=battle_snapshot(self.ctx)

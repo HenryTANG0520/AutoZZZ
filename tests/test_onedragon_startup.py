@@ -125,6 +125,8 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(self.launches,[str(self.path)])
         self.assertEqual(api.requests,[200])
         self.assertEqual(api.attachments,[])
+        self.assertEqual(startup.focus_observation['foreground_before'],100)
+        self.assertTrue(startup.focus_observation['primary_accepted'])
 
     def test_foreground_request_crossing_deadline_stops_before_fallback_or_window_handoff(self):
         for accepted in (False,True):
@@ -184,6 +186,7 @@ class StartupTests(unittest.TestCase):
 
         def request(_hwnd):
             self.assertFalse(launch_lock.locked())
+            self.assertEqual(startup.focus_observation['phase'], 'primary_pending')
             self.cancel.set()
             return False
 
@@ -210,6 +213,8 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(api.requests,[200,200])
         self.assertEqual(api.brought,[200])
         self.assertEqual(api.attachments,joins+[(current,202,False),(current,101,False)])
+        self.assertFalse(startup.focus_observation['primary_accepted'])
+        self.assertTrue(startup.focus_observation['fallback_accepted'])
 
     def test_fallback_does_not_reactivate_after_bring_to_top_focuses_game(self):
         startup,api=self.new_client()

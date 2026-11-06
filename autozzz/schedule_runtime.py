@@ -154,6 +154,7 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
                 return
             with phase_lock:
                 phase = None
+                changed = False
                 if kind == 'phase':
                     phase = str(event.get('phase') or '')
                 elif kind in ('focus_wait', 'paused'):
@@ -164,6 +165,10 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
                     phase = '已暂停' if legacy_paused else '等待游戏恢复焦点' if legacy_focus_waiting else ''
                 elif kind == 'state' and event['state'].get('busy'):
                     state = event['state']
+                    startup_focus = state.get('startup_focus')
+                    if startup_focus is not None and startup_focus != record.get('startup_focus'):
+                        record['startup_focus'] = startup_focus
+                        changed = True
                     control = state.get('control', {})
                     if control.get('manual_paused'):
                         phase = '已暂停'
@@ -173,6 +178,8 @@ def run_scheduled(key: str,store_path: Path,expected_revision: str,*,root: Path=
                         phase = str(state.get('preparation_step') or '')
                 if phase is not None and phase != record['phase']:
                     record['phase'] = phase
+                    changed = True
+                if changed:
                     write_record(path,record)
         record['state']='running';write_record(path,record)
         if check_stop():

@@ -156,6 +156,10 @@ class ScheduledRuntimeTests(unittest.TestCase):
 
             emit(dict(type='state', state=dict(busy=True, preparation_step='登录', control=dict(focus_waiting=True))))
             self.assertEqual(phase(), '等待游戏恢复焦点')
+            focus = dict(phase='primary_returned', primary_accepted=False, window_handle=200)
+            emit(dict(type='state', state=dict(busy=True, preparation_step='登录', control=dict(focus_waiting=True),
+                                                startup_focus=focus)))
+            self.assertEqual(json.loads(record.read_text(encoding='utf-8'))['startup_focus'], focus)
             emit(dict(type='report', path='some/report.json'))
             self.assertEqual(phase(), '等待游戏恢复焦点')
             emit(dict(type='state', state=dict(busy=True, preparation_step='登录', control={})))

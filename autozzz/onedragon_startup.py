@@ -49,6 +49,7 @@ class GameStartup:
         self._launched_process=None
         self._focus_checked=False
         self._window_api=window_api
+        self.focus_observation=None
 
     def _attempt(self,action):
         if self.cancelled.is_set() or self.paused.is_set():return False
@@ -69,7 +70,17 @@ class GameStartup:
         process=self._launched_process
         pid,created=identity
         poll_process=getattr(process,'poll',None)
-        if self._focus_checked or getattr(process,'pid',None)!=pid or not callable(poll_process):
+        if self._focus_checked:
+            return
+        launched_pid=getattr(process,'pid',None)
+        self.focus_observation=dict(window_handle=window.hwnd,process_id=pid,process_created=created,
+                                    launched_pid=launched_pid,phase='checking')
+
+        def observe(**fields):
+            self.focus_observation = self.focus_observation | fields
+
+        if launched_pid!=pid or not callable(poll_process):
+            observe(phase='launch_identity_unverified' if self.launched else 'existing_client')
             return
 
         def interrupted():
@@ -89,6 +100,7 @@ class GameStartup:
 
         def focus():
             if not verified_process():
+                observe(phase='preflight_incomplete')
                 return
             api=self._window_api
             if api is None:
@@ -97,18 +109,32 @@ class GameStartup:
             hwnd=window.hwnd
             foreground=api.GetForegroundWindow()
             foreground_owner=self._window_owner(api,foreground)
+            observe(foreground_before=foreground or None,
+                    foreground_pid=None if foreground_owner is None else foreground_owner[1])
+            query_timeout=getattr(api,'SystemParametersInfoW',None)
+            if query_timeout is not None:
+                timeout=wintypes.DWORD()
+                if query_timeout(0x2000,0,ctypes.byref(timeout),0):
+                    observe(lock_timeout_ms=timeout.value)
             if foreground==hwnd or (foreground_owner is not None and foreground_owner[1]==pid):
                 self._focus_checked=True
+                observe(phase='target_foreground' if foreground==hwnd else 'other_client_window_foreground')
                 return
             target_owner=self._window_owner(api,hwnd)
             if target_owner is None or target_owner[1]!=pid or poll_process() is not None:
+                observe(phase='target_identity_unverified')
                 return
             if interrupted():
+                observe(phase='interrupted')
                 return
             self._focus_checked=True
             if api.GetForegroundWindow()!=foreground or interrupted():
+                observe(phase='foreground_changed_or_interrupted')
                 return
-            if api.SetForegroundWindow(hwnd):
+            observe(phase='primary_pending')
+            accepted=bool(api.SetForegroundWindow(hwnd))
+            observe(phase='primary_returned',primary_accepted=accepted)
+            if accepted:
                 return
             if foreground_owner is None or api.GetForegroundWindow()!=foreground or interrupted():
                 return
@@ -132,9 +158,13 @@ class GameStartup:
                         return
                     attached.callback(api.AttachThreadInput,current,thread,False)
                 if can_continue():
-                    api.BringWindowToTop(hwnd)
+                    observe(phase='raise_pending')
+                    raised=bool(api.BringWindowToTop(hwnd))
+                    observe(phase='raise_returned',raise_accepted=raised)
                     if can_continue():
-                        api.SetForegroundWindow(hwnd)
+                        observe(phase='fallback_pending')
+                        accepted=bool(api.SetForegroundWindow(hwnd))
+                        observe(phase='fallback_returned',fallback_accepted=accepted)
             # If Windows still declines, the normal login gate waits for focus.
 
         # User32 may wait on another input queue. Keep this call on the
