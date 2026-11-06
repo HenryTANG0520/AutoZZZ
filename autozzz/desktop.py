@@ -195,7 +195,10 @@ def _settings(ui, server_names):
     from .onedragon_devtools_ui import open_devtools
     ttk.Button(tools,text='图像、模板与画面…',command=lambda:open_devtools(ui,'global' if ui.server.get()=='国际服' else 'cn')).grid(row=2,column=0,sticky='w',pady=d(10))
     from .program_updates_ui import open_program_updates
-    ttk.Button(updates,text='版本与归档…',command=lambda:open_program_updates(ui),style='Accent.TButton').grid(row=1,column=0,sticky='w',pady=d(10))
+    from .program_update_recovery_ui import open_program_update_recovery
+    update_views=ttk.Frame(updates,style='Card.TFrame');update_views.grid(row=1,column=0,sticky='w',pady=d(10))
+    ttk.Button(update_views,text='版本与归档…',command=lambda:open_program_updates(ui),style='Accent.TButton').grid(row=0,column=0,sticky='w')
+    ttk.Button(update_views,text='本机更新事务…',command=lambda:open_program_update_recovery(ui)).grid(row=0,column=1,padx=(d(8),0))
     ttk.Checkbutton(updates,text='启动时检查更新',variable=ui.startup_updates.enabled,command=ui.startup_updates.save).grid(row=2,column=0,sticky='w',pady=d(8))
     channel=ttk.Combobox(updates,textvariable=ui.startup_updates.channel,values=('稳定版','测试版'),state='readonly',width=12)
     channel.grid(row=3,column=0,sticky='w',pady=d(8));channel.bind('<<ComboboxSelected>>',lambda _:ui.startup_updates.save())

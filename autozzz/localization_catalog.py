@@ -313,6 +313,30 @@ B服|Bilibili
 上游源码分支…|Upstream source branches…
 执行SDK…|Execution SDK…
 安装程序版本|Install app version
+本机更新事务…|Local update transactions…
+AutoZZZ · 本机更新事务|AutoZZZ · Local update transactions
+原版本|Previous version
+更新版本|Target version
+阶段|Stage
+时间（UTC）|Time (UTC)
+打开事务目录…|Open transaction folder…
+此安装目录没有本机更新事务。|No local update transactions for this installation.
+交接待核对|Handoff pending review
+已取消交接|Handoff cancelled
+准备区服快照|Preparing profile snapshots
+设置联合门槛|Setting joint recovery gates
+交换程序目录|Swapping program folders
+提交区服选择|Publishing profile selections
+恢复原版本中|Restoring the previous version
+等待释放区服门槛|Waiting for profile gates to clear
+更新已完成|Update complete
+已恢复原版本|Previous version restored
+需要恢复原版本|Previous version recovery required
+事务需要核对|Transaction needs review
+关闭所有 AutoZZZ 进程后，在事务目录中运行所选恢复脚本。|Close all AutoZZZ processes, then run the chosen recovery script in the transaction folder.
+当前没有可用的恢复脚本。|No recovery script is currently available.
+已保存恢复结果|Recovery result saved
+上次更新助手报告失败|The previous update helper reported a failure
 检查更新|Check for updates
 检查更新设置|Update settings
 检查本地|Check local files

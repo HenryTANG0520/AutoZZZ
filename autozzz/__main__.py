@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--onedragon-run", metavar="APP_ID", help="运行已保存的一条龙应用配置")
     mode.add_argument("--runtime-check", type=Path, metavar="REPORT", help="检查一条龙分发环境并保存离线报告，不操作游戏")
     mode.add_argument('--program-update',type=Path,metavar='ZIP',help='验证完整更新包，关闭当前进程后安装')
+    mode.add_argument('--program-update-status',nargs='?',const=True,type=Path,metavar='TRANSACTION',
+                      help='查看本机或指定程序更新事务的阶段、结果与恢复脚本')
     mode.add_argument('--scheduled-run',metavar='ID',help='运行已启用且由 Windows 启动的固定计划')
     parser.add_argument('--schedule-store',type=Path,help='当前安装目录的计划资料清单')
     parser.add_argument('--schedule-revision',help='已注册系统计划的配置版本')
@@ -82,6 +84,19 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(_json(dict(error=str(exc))),file=sys.stderr);return 2
     if args.update_report is not None or args.no_restart:parser.error('程序更新选项只能与 --program-update 一起使用。')
+
+    if args.program_update_status is not None:
+        try:
+            from .program_update_recovery import discover_transactions, inspect_transaction
+            if args.program_update_status is True:
+                print(_json(dict(transactions=discover_transactions(ROOT))))
+            else:
+                result=inspect_transaction(args.program_update_status)
+                if result is None:raise ValueError('此程序更新事务尚未进入交接。')
+                print(_json(result))
+            return 0
+        except Exception as exc:
+            print(_json(dict(error=str(exc))),file=sys.stderr);return 2
 
     if args.runtime_check:
         try:
