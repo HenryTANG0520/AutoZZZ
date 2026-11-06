@@ -135,7 +135,8 @@ class CityFundRewardsWorkflow(DailyWorkflow):
             self._city_stage = "growth_tab"
             return None
         if self._menu(scene):
-            entry = self._city_unique(scene, "丽都城募", (0, 0.08, 1, .94))
+            # The SDK's bottom menu row extends to y=1058 at 1080p.
+            entry = self._city_unique(scene, "丽都城募", (0, 0.08, 1, 1058 / 1080))
             if entry:
                 self._city_click(scene, entry)
                 self._city_stage, self._city_pending = "growth_tab", "fund"

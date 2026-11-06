@@ -426,6 +426,21 @@ class CityFundRewardTests(unittest.TestCase):
         self.assertIn(("click", "丽都城募"), context.inputs)
         self.assertFalse(any(action == "key" and label.startswith("f") for action, label in context.inputs))
 
+    def test_bottom_menu_entry_requires_a_unique_city_fund_label(self):
+        bottom_y = 1041 / 1080
+        for duplicate_y in (None, .60, bottom_y):
+            with self.subTest(duplicate_y=duplicate_y):
+                frame = menu(entry=False)
+                frame.tokens.append(token("丽都城募", 1482 / 1920, bottom_y))
+                if duplicate_y is not None:
+                    frame.tokens.append(token("丽都城募", .85, duplicate_y))
+                context = FundReplay(frame, earned=(False, False, False), level_after=False)
+                self.assertEqual(CityFundRewardsWorkflow(context).city_fund().status, "ok")
+                if duplicate_y is None:
+                    self.assertEqual(context.inputs[0], ("click", "丽都城募"))
+                else:
+                    self.assertEqual(context.inputs, [("key", "esc")])
+
     def test_red_hud_icon_with_f4_hint_uses_observed_binding_not_f2(self):
         context = FundReplay(world("F4", True), earned=(False, False, False), level_after=False)
         context.menu_entry = False
