@@ -44,6 +44,8 @@ class SingleBattleApplication(Application):
         self._engine_epoch = None
         self._wait_epoch = None
         self._wait_started = None
+        self._result_seen = False
+        self._result_frame = None
         self._finished = False
 
     def _publish(self, state):
@@ -71,29 +73,32 @@ class SingleBattleApplication(Application):
         return any(''.join(normalize('NFKC', result.data).casefold().split()) == expected for result in results)
 
     def _screen_state(self, hud):
+        return self._screen_observation(hud)[0]
+
+    def _screen_observation(self, hud):
         if hud:
             # Use the source's fast HUD path during battle. OCR is needed only
             # for a conflicting menu template or after the attack icon vanishes.
             menu_back = screen_utils.find_area(self.ctx, self.last_screenshot, '战斗-菜单', '菜单-返回')
             if menu_back is screen_utils.FindAreaResultEnum.TRUE:
                 if self._find_text('战斗-菜单', '按钮-战况') and self._find_text('战斗-菜单', '按钮-设置'):
-                    return 'waiting'
-            return 'fighting'
+                    return 'waiting', False
+            return 'fighting', False
 
         # The fixed source's loose LCS lets 出战 match 退出. Keep its screen
         # regions and OCR, and require whole labels plus supporting evidence.
         finish = self._find_text('战斗画面', '战斗结果-完成')
         retreat = self._find_text('战斗画面', '战斗结果-撤退')
         if finish and retreat:
-            return 'waiting'
+            return 'waiting', False
         title = self._find_text('战斗-挑战结果-失败', '标题-挑战结果')
         if retreat and (title or self._find_text('战斗画面', '战斗结果-倒带')):
-            return 'withdrawn'
+            return 'withdrawn', True
         if finish and (title or self._find_text('战斗画面', '战斗结果-再来一次')):
-            return 'victory'
+            return 'victory', True
         if title and self._find_text('战斗-挑战结果-失败', '按钮-退出'):
-            return 'withdrawn'
-        return 'waiting'
+            return 'withdrawn', True
+        return 'waiting', title
 
     def _suspend(self):
         with self._engine_lock:
@@ -138,10 +143,14 @@ class SingleBattleApplication(Application):
             chain = self.battle_input.observe_chain_frame(self.battle, self.last_screenshot, self.last_screenshot_time)
         # The chain probe also rules out overlapping menus and result labels.
         interrupted = self._suspend() if not hud and chain is None else False
-        state = 'fighting' if chain is not None else self._screen_state(hud)
+        state, result_seen = ('fighting', False) if chain is not None else self._screen_observation(hud)
         self.control.checkpoint(require_frame=True)
 
         if state == 'fighting':
+            if self._result_seen:
+                # A new HUD or chain after result evidence cannot rearm this run.
+                self._suspend()
+                return self._unverified()
             self._start_from_frame()
             self.battle.check_battle_state(self.last_screenshot, self.last_screenshot_time,
                                            check_battle_end_normal_result=chain is None, chain_prompt=chain)
@@ -153,13 +162,24 @@ class SingleBattleApplication(Application):
         if hud:
             interrupted = self._suspend()
         self.control.checkpoint(require_frame=True)
+        if self._entered_battle and result_seen:
+            self._result_seen = True
         if state in ('victory', 'withdrawn'):
             if not self._entered_battle:
                 return self._unverified()
-            self._publish(state)
-            if state == 'victory':
-                return self.round_success(self.VICTORY)
-            return self.round_fail(self.WITHDRAWN)
+            # A single frame can expose the buttons while the result animates in.
+            # Confirm from a later frame in the same observation epoch.
+            previous = self._result_frame
+            current = (state, self.control.task_epoch, self.last_screenshot_time)
+            self._result_frame = current
+            if previous is not None and previous[:2] == current[:2] and previous[2] < current[2]:
+                self.control.checkpoint(require_frame=True)
+                self._publish(state)
+                if state == 'victory':
+                    return self.round_success(self.VICTORY)
+                return self.round_fail(self.WITHDRAWN)
+        else:
+            self._result_frame = None
 
         self._publish('waiting')
         if interrupted:
