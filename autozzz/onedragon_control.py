@@ -38,6 +38,16 @@ class WindowState:
     reason: str = ""
 
 
+@dataclass(frozen=True, eq=False)
+class CaptureReceipt:
+    epoch: int
+    sequence: int
+    started: float
+    finished: float
+    wall_time: float
+    screen: Any
+
+
 class ExecutionControl:
     def __init__(self, probe: Callable[[], WindowState], release: Callable[[], None],
                  pause_backend: Callable[[], None], resume_backend: Callable[[], None],
@@ -46,6 +56,9 @@ class ExecutionControl:
         self.release = release
         self.pause_backend, self.resume_backend, self.stop_backend = pause_backend, resume_backend, stop_backend
         self.lock = threading.RLock()
+        self.capture_changed = threading.Condition(self.lock)
+        self.capture_receipt: CaptureReceipt | None = None
+        self._capture_sequence = 0
         self._transitions = threading.RLock()
         self.epoch = 0
         self.run_epoch = 0
@@ -73,6 +86,8 @@ class ExecutionControl:
     def _invalidate(self) -> None:
         self.epoch += 1
         self.observed_epoch = None
+        self.capture_receipt = None
+        self.capture_changed.notify_all()
         self.changed.set()
 
     def _apply_pause(self) -> None:
@@ -179,15 +194,31 @@ class ExecutionControl:
             if require_frame and self.observed_epoch != self.epoch:
                 raise ObservationExpired("等待当前窗口的新截图。")
 
-    def observe(self, capture: Callable[[], Any]) -> Any:
+    def observe(self, capture: Callable[[], Any], *, managed: bool = False) -> Any:
         self.checkpoint()
         epoch = self.epoch
+        if managed:
+            with self.lock:
+                epoch = self.epoch
+                if self.stopped or self.manual_paused or self.focus_waiting or self.task_epoch != epoch:
+                    raise ObservationExpired("截图开始前状态发生变化。")
+                self._capture_sequence += 1
+                sequence = self._capture_sequence
+                started = time.perf_counter()
+                self.capture_receipt = None
+                self.capture_changed.notify_all()
         result = capture()
+        if managed:
+            finished = time.perf_counter()
         self.checkpoint()
         with self.lock:
             if epoch != self.epoch:
                 raise ObservationExpired("截图期间窗口状态发生变化。")
             self.observed_epoch = epoch
+            if managed and sequence == self._capture_sequence:
+                wall_time, screen = result
+                self.capture_receipt = CaptureReceipt(epoch, sequence, started, finished, wall_time, screen)
+                self.capture_changed.notify_all()
         return result
 
     def discard_frame(self) -> None:

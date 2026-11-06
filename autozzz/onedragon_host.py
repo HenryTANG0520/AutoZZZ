@@ -489,7 +489,7 @@ class ManagedController(ZPcController):
             except (ObservationExpired,ExecutionStopped):raise
             except Exception:
                 self.control.discard_frame();raise
-        return self.control.observe(capture)
+        return self.control.observe(capture, managed=True)
 
     def _position(self, point: Any) -> None:
         self.control.checkpoint(require_frame=True)

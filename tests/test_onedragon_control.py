@@ -90,6 +90,27 @@ class ControlTests(unittest.TestCase):
             self.control.observe(capture)
         self.assertFalse(self.control.status()["fresh_frame"])
 
+    def test_managed_capture_receipt_tracks_frame_and_expires_before_the_next_capture(self):
+        first, second = object(), object()
+        with self.control.scope():
+            self.control.observe(lambda: (10, first), managed=True)
+            first_receipt = self.control.capture_receipt
+            self.assertIs(first_receipt.screen, first)
+            self.assertLessEqual(first_receipt.started, first_receipt.finished)
+
+            def capture_again():
+                self.assertIsNone(self.control.capture_receipt)
+                return 11, second
+
+            self.control.observe(capture_again, managed=True)
+            second_receipt = self.control.capture_receipt
+
+        self.assertEqual(second_receipt.sequence, first_receipt.sequence + 1)
+        self.assertIs(second_receipt.screen, second)
+        self.assertEqual(second_receipt.wall_time, 11)
+        self.control.set_manual_pause(True)
+        self.assertIsNone(self.control.capture_receipt)
+
     def test_timed_hold_returns_quickly_after_pause(self):
         completed = threading.Event()
         result = []
