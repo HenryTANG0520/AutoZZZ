@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from autozzz.onedragon_bundle import filesystem_path
 from autozzz.onedragon_runtime import (
     OneDragonClient, PROTOCOL_VERSION, UPSTREAM_REVISION, RequestPending,
     RuntimePaths, RemoteError, RuntimeUnavailable,
@@ -178,6 +179,35 @@ class ProtocolTests(unittest.TestCase):
 
 
 class ProfileTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows SDK import paths")
+    def test_service_imports_sdk_module_from_extended_path(self):
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        temporary.name = str(filesystem_path(root))
+        self.addCleanup(temporary.cleanup)
+        source = root / ("candidate" * 22) / "source"
+        module = source / "src" / "one_dragon" / "utils" / "os_utils.py"
+        self.assertGreater(len(str(module)), 260)
+        extended = filesystem_path(module)
+        extended.parent.mkdir(parents=True)
+        extended.write_text("def set_work_dir(path):\n    pass\n", encoding="utf-8")
+        script = """
+from pathlib import Path
+import sys
+from autozzz.onedragon_service import OneDragonService
+
+source, expected_module = map(Path, sys.argv[1:])
+service = OneDragonService(source, source.parent / 'data')
+from one_dragon.utils import os_utils
+assert Path(os_utils.__file__) == expected_module, os_utils.__file__
+assert service.source == source.resolve(), service.source
+"""
+        result = subprocess.run(
+            [sys.executable, "-E", "-B", "-X", "utf8", "-c", script, str(source), str(extended)],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, encoding="utf-8", timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_initialization_does_not_overwrite_existing_user_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

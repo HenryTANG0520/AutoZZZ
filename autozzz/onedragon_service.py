@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Any
 import uuid
 
+from .onedragon_bundle import filesystem_path
 from .runtime_generation import SDK_CONTROL_METHODS
 
 
@@ -37,7 +38,7 @@ class OneDragonService:
         self.product_root=Path(product_root).resolve() if product_root is not None else self.source.parent.parent
         from .runtime_generation import RuntimeGeneration
         self.runtime_guard=RuntimeGeneration(self.stable_data,runtime_generation,management_only)
-        sys.path.insert(0, str(self.source / "src"))
+        sys.path.insert(0, str(filesystem_path(self.source / "src")))
         from one_dragon.utils import os_utils
         os_utils.set_work_dir(self.data)
         self._ctx: Any = None
