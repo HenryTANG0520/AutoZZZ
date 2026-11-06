@@ -91,6 +91,22 @@ class DailyInterfaceControl:
                 state['phase'] = 'verify'
             return op.round_wait('保存并核实怪物卡方案', wait=1)
 
+    def wait_for_team_list(self, op, original):
+        if op.start_at_team_list:
+            return original(op)
+        area = self.ctx.screen_loader.get_area('实战模拟室', '预备出战')
+        if area is None:
+            return op.round_fail('未配置预备编队就绪区域')
+        ready = op.round_by_ocr(op.last_screenshot, '预备出战', area=area, lcs_percent=.75)
+        if ready.is_success:
+            return op.round_success(op.STATUS_TEAM_LIST_READY, wait=.5)
+        # Wait for a new frame after the first accepted click, even if the old button remains visible.
+        if not op.node_clicked:
+            opened = op.round_by_find_and_click_area(op.last_screenshot, '实战模拟室', '预备编队')
+            if opened.is_success:
+                return op.round_wait(opened.status, wait=.5)
+        return op.round_retry(ready.status, wait=.5)
+
     def choose_team(self, op, original):
         # 防卫战仍使用上游的多队评分；普通刷本严格按用户保存的真实名称。
         if op.is_shiyu_defense or op.current_target_idx >= len(op.target_team_idx_list):
@@ -256,6 +272,7 @@ class DailyInterfaceControl:
 
         self.patch(CombatSimulation, 'choose_card_num', self.choose_cards)
         self.patch(CombatSimulation, 'click_card', enter_cards)
+        self.patch(ChoosePredefinedTeam, 'check_screen', self.wait_for_team_list)
         self.patch(ChoosePredefinedTeam, 'choose_team', self.choose_team)
         self.patch(EngagementRewardApp, 'check_reward', reward_result)
         self.patch(EngagementRewardApp, 'back_at_first', begin_reward)

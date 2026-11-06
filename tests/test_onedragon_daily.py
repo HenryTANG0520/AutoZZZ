@@ -65,6 +65,30 @@ class DailyInterfaceTests(unittest.TestCase):
         op=self.operation(plan=NS(card_num='默认数量'))
         self.assertEqual(self.adapter.choose_cards(op,lambda _:42),42)
 
+    def test_team_opening_waits_for_visible_readiness_without_repeating_the_click(self):
+        ready_area = object()
+        self.ctx.screen_loader = NS(get_area=lambda *_: ready_area)
+
+        def read(frame, text, *, area, lcs_percent):
+            self.assertEqual((text, area, lcs_percent), ('预备出战', ready_area, .75))
+            return result('success' if frame == 'list' else 'retry')
+
+        def click(frame, screen, name):
+            self.assertEqual((frame, screen, name), ('entry', '实战模拟室', '预备编队'))
+            self.clicks.append(name)
+            op.node_clicked = True
+            return result('success', name)
+
+        op = self.operation(start_at_team_list=False, node_clicked=False, STATUS_TEAM_LIST_READY='ready',
+                            round_by_ocr=read, round_by_find_and_click_area=click)
+        observed = []
+        for frame in ('entry', 'blank', 'entry', 'list'):
+            op.last_screenshot = frame
+            observed.append(self.adapter.wait_for_team_list(op, None))
+        self.assertEqual([item.kind for item in observed], ['wait', 'retry', 'retry', 'success'])
+        self.assertEqual(observed[-1].status, 'ready')
+        self.assertEqual(self.clicks, ['预备编队'])
+
     def team(self,names):
         self.names=names;self.selected=False;self.scrolls=[]
         return self.operation(is_shiyu_defense=False,current_target_idx=0,target_team_idx_list=[2],
