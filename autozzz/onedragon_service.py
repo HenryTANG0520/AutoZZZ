@@ -850,8 +850,12 @@ class OneDragonService:
     def sdk_rollback(self,selection_revision,confirmed=False):return self.sdk_upgrade.rollback(selection_revision,confirmed)
     def sdk_activation_review(self):return self.sdk_upgrade.activation_review()
     def sdk_recover_activation(self,journal_digest,choice='before',confirmed=False):return self.sdk_upgrade.recover_activation(journal_digest,choice,confirmed)
-    def sdk_migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False):
-        return self.sdk_upgrade.migrate_stable(old_revision,old_defaults_digest,selection_revision,confirmed)
+    def sdk_migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False,source_proof=None):
+        return self.sdk_upgrade.migrate_stable(old_revision,old_defaults_digest,selection_revision,confirmed,
+            source_proof=source_proof)
+    def sdk_prepare_stable(self,old_revision,old_defaults_digest,selection_revision,source_proof):
+        return self.sdk_upgrade.migrate_stable(old_revision,old_defaults_digest,selection_revision,True,
+            source_proof=source_proof,prepare_only=True)
     def sdk_prepare_tool(self):return self.sdk_upgrade.prepare_tool()
     def sdk_status(self,job_id=None):return self.sdk_upgrade.status(job_id)
     def sdk_cancel(self):return self.sdk_upgrade.cancel()

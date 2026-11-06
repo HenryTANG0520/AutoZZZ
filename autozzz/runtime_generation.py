@@ -10,7 +10,7 @@ SDK_CONTROL_METHODS = frozenset({
     'source_catalog','source_start','source_status','source_cancel',
     'sdk_catalog','sdk_review','sdk_build','sdk_refresh','sdk_status','sdk_cancel',
     'sdk_activate','sdk_rollback','sdk_activation_review','sdk_recover_activation',
-    'sdk_prepare_tool','sdk_migrate_stable',
+    'sdk_prepare_tool','sdk_migrate_stable','sdk_prepare_stable',
 })
 
 

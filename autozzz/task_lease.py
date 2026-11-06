@@ -23,6 +23,13 @@ def _created(kernel,handle):
     return values[0].dwHighDateTime<<32|values[0].dwLowDateTime
 
 
+def _descriptor(kernel,capability):
+    kernel.GetCurrentProcess.restype=W.HANDLE
+    created=_created(kernel,kernel.GetCurrentProcess())
+    return json.dumps(dict(version=1,parent_pid=os.getpid(),parent_created=created,
+                           capability=capability),separators=(',',':'))
+
+
 def _is_ancestor(kernel,pid):
     # Windows venv 的 python.exe 可能只是转发器，真实工作进程多一层父进程。
     class Entry(C.Structure):
@@ -50,9 +57,10 @@ def _is_ancestor(kernel,pid):
 
 
 class RunLeaseOwner:
-    def __init__(self):
+    def __init__(self,*,program_update=False):
         self.task=RunLock()
-        self.capability=RunLock('Local\\AutoZZZ.Rotation.'+uuid.uuid4().hex)
+        scope='ProgramUpdate' if program_update else 'Rotation'
+        self.capability=RunLock(f'Local\\AutoZZZ.{scope}.'+uuid.uuid4().hex)
         self.lock=threading.RLock()
         self.active=False
         self.used=False
@@ -70,9 +78,7 @@ class RunLeaseOwner:
     def export(self):
         with self.lock:
             if not self.active:raise RuntimeError('轮换任务锁已释放，不能建立后续工作进程。')
-            self.task.kernel.GetCurrentProcess.restype=W.HANDLE
-            created=_created(self.task.kernel,self.task.kernel.GetCurrentProcess())
-            return json.dumps(dict(version=1,parent_pid=os.getpid(),parent_created=created,capability=self.capability.name),separators=(',',':'))
+            return _descriptor(self.task.kernel,self.capability.name)
 
     def close(self):
         with self.lock:
@@ -86,8 +92,11 @@ class RunLeaseOwner:
 
 
 class JoinedRunLease:
-    def __init__(self,descriptor):
+    def __init__(self,descriptor,*,program_update=False):
         self.parent=self.task=self.capability=None
+        self._program_update=program_update
+        self._forward_lock=threading.Lock()
+        self._forwarded=False
         self.kernel=C.WinDLL('kernel32',use_last_error=True)
         self.kernel.OpenMutexW.argtypes=[W.DWORD,W.BOOL,W.LPCWSTR];self.kernel.OpenMutexW.restype=W.HANDLE
         self.kernel.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD];self.kernel.OpenProcess.restype=W.HANDLE
@@ -98,7 +107,8 @@ class JoinedRunLease:
             if not isinstance(value,dict) or set(value)!= {'version','parent_pid','parent_created','capability'} or type(value['version'])is not int or value['version']!=1:
                 raise ValueError()
             if type(value['parent_pid'])is not int or value['parent_pid']<=0 or type(value['parent_created'])is not int:raise ValueError()
-            if not isinstance(value['capability'],str) or re.fullmatch(r'Local\\AutoZZZ\.Rotation\.[0-9a-f]{32}',value['capability']) is None:raise ValueError()
+            scope='ProgramUpdate' if program_update else 'Rotation'
+            if not isinstance(value['capability'],str) or re.fullmatch(rf'Local\\AutoZZZ\.{scope}\.[0-9a-f]{{32}}',value['capability']) is None:raise ValueError()
         except (ValueError,TypeError,KeyError):raise RuntimeError('轮换任务锁交接信息无效。') from None
         try:
             self.parent=self.kernel.OpenProcess(0x101000,False,value['parent_pid'])
@@ -115,9 +125,21 @@ class JoinedRunLease:
         except BaseException:self.close();raise
 
     @classmethod
-    def from_environment(cls):
+    def from_environment(cls,*,program_update=False):
         descriptor=os.environ.pop(LEASE_ENV,None)
-        return None if descriptor is None else cls(descriptor)
+        return None if descriptor is None else cls(descriptor,program_update=program_update)
+
+    @contextmanager
+    def forward_for_program_update(self):
+        """Keep the same total lock and make the installed helper the live parent."""
+        with self._forward_lock:
+            if self._program_update or self._forwarded or not self.task or not self.capability or not self.parent:
+                raise RuntimeError('程序更新任务锁无法重复交接。')
+            if self.kernel.WaitForSingleObject(self.parent,0)!=0:
+                raise RuntimeError('原程序尚未确认退出，无法转交更新任务锁。')
+            self._forwarded=True
+        with RunLock('Local\\AutoZZZ.ProgramUpdate.'+uuid.uuid4().hex) as capability:
+            yield _descriptor(self.kernel,capability.name)
 
     def check(self):
         if not self.parent or not self.task or not self.capability:

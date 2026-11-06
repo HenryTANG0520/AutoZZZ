@@ -277,6 +277,9 @@ class SDKUpgradeManager:
 
     def _start(self,action,operation):
         self.service._assert_idle()
+        lease=getattr(self.service,'_sdk_control_lease',None)
+        if lease is not None and action!='prepare_stable':
+            raise RuntimeError('发行更新任务锁仅用于准备稳定 SDK 快照。')
         with self.lock:
             if self.closed:raise RuntimeError('SDK管理器已关闭。')
             if self.busy:raise RuntimeError('SDK作业仍在进行，请查询原编号。')
@@ -284,7 +287,8 @@ class SDKUpgradeManager:
             job_path=plain(self.root/'jobs'/(self.job['job_id']+'.json'));atomic_json(job_path,self.job)
             def work():
                 try:
-                    with RunLock(),profile_lock(self.data):result=operation()
+                    with (lease.scope() if lease is not None else RunLock()),profile_lock(self.data):
+                        result=operation()
                     with self.lock:self.job.update(state='success',result=result)
                 except Exception as exc:
                     with self.lock:self.job.update(state='cancelled'if isinstance(exc,InterruptedError)else'failed',error=str(exc)[-16000:])
@@ -334,6 +338,10 @@ class SDKUpgradeManager:
         if journal['before_text']is None:path.unlink(missing_ok=True)
         else:atomic_bytes(path,journal['before_text'].encode())
 
+    def _check_update_lease(self):
+        lease=getattr(self.service,'_sdk_control_lease',None)
+        if lease is not None:lease.check()
+
     def _switch(self,selected,new_record,expected_revision,*,stable_migration=None):
         if self.activation_journal.exists():raise ValueError('先核对并恢复上次SDK切换。')
         if self._selection_hash()!=expected_revision:raise ValueError('所选SDK已变化，请刷新后再操作。')
@@ -343,10 +351,12 @@ class SDKUpgradeManager:
         journal=dict(format=1,id=uuid.uuid4().hex,before_text=before_text,before_hash=expected_revision,after=new_record,after_hash=after_hash,
             after_data_hash=tree_hash(data_state(selected.data)),state='prepared')
         if stable_migration is not None:journal['stable_migration']=stable_migration
+        self._check_update_lease()
         atomic_json(self.activation_journal,journal)
         try:
             if stable_migration is not None:self._verify_migration_source(journal)
             if self._selection_hash()!=expected_revision:raise ValueError('发布SDK选择前原记录发生变化。')
+            self._check_update_lease()
             atomic_json(path,new_record);journal['state']='verifying_restart';atomic_json(self.activation_journal,journal)
             hello=self._handshake(selected,deep=True)
             if stable_migration is not None:self._verify_migration_source(journal)
@@ -354,6 +364,7 @@ class SDKUpgradeManager:
             with self._data_locks(selected.data):
                 if stable_migration is not None:selected.prepare()
                 if tree_hash(data_state(selected.data))!=journal['after_data_hash']:raise ValueError('候选资料在重启核对期间变化；已保留快照并回退SDK选择。')
+            self._check_update_lease()
             journal.update(state='complete',hello=hello);atomic_json(self.root/'activations'/(journal['id']+'.json'),journal)
             self.activation_journal.unlink();self.service._environment_changed=True
             return dict(revision=selected.revision,kind=selected.kind,candidate_id=selected.candidate_id,data=str(selected.data),hello=hello,selection_revision=after_hash)
@@ -395,10 +406,18 @@ class SDKUpgradeManager:
             result=self._switch(selected,new,selection_revision);result['snapshot']=snapshot;return result
         return self._start('rollback',rollback)
 
-    def migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False):
+    def migrate_stable(self,old_revision,old_defaults_digest,selection_revision,confirmed=False,*,source_proof=None,prepare_only=False):
         if confirmed is not True:raise ValueError('请确认已冻结旧默认资源和当前 SDK 选择。')
         commit(old_revision)
         sha256_token(old_defaults_digest)
+        leased=getattr(self.service,'_sdk_control_lease',None) is not None
+        if prepare_only!=leased:raise ValueError('发行更新工作进程仅可在更新租约下准备快照。')
+        if prepare_only:
+            if type(source_proof)is not dict or set(source_proof)!={'marker','data'}:
+                raise ValueError('发行更新必须提供已冻结的区服资料摘要。')
+            sha256_token(source_proof['marker']);sha256_token(source_proof['data'])
+        elif source_proof is not None:
+            raise ValueError('区服发行证明仅用于已交接的更新任务。')
 
         def migrate():
             if self.activation_journal.exists():raise ValueError('先核对并恢复上次SDK切换。')
@@ -426,20 +445,44 @@ class SDKUpgradeManager:
                     raise ValueError('旧稳定 SDK 资料标记与冻结版本不符。')
                 defaults=frozen_defaults(self.data,old_revision,old_defaults_digest)
                 expected=data_state(source)
+                expected_hash=tree_hash(expected)
+                if source_proof is not None and (marker_digest!=source_proof['marker'] or expected_hash!=source_proof['data']):
+                    raise ValueError('有效旧资料与程序更新记录不符，未发布 SDK 选择。')
                 binding=dict(old_revision=old_revision,old_defaults_digest=old_defaults_digest,
-                    source_data_hash=tree_hash(expected),source_marker_digest=marker_digest)
+                    source_data_hash=expected_hash,source_marker_digest=marker_digest)
                 data_id=uuid.uuid4().hex;target=snapshot_path(self.data,data_id)
+                self._check_update_lease()
                 snapshot=snapshot_data(source,target,self.paths.source,None,self.paths.revision,PROTOCOL_VERSION,
                     self.cancelled,expected,old_defaults=defaults)
+                if prepare_only:
+                    with self._data_locks(target):
+                        prepared=data_state(target)
+                        if tree_hash(prepared)!=snapshot['snapshot_hash']:
+                            raise ValueError('目标区服快照在探测前变化。')
                 selected=RuntimeSelection(self.paths.source,self.paths.python,target,self.paths.bridge_root,self.paths.revision,
                     PROTOCOL_VERSION,None,None,None,'stable',self.data,None)
-                self._handshake(selected,deep=True)
+                hello=self._handshake(selected,deep=True)
+                if prepare_only:
+                    self._check_update_lease()
+                    if (self._selection_hash()!=selection_revision or digest(marker)!=marker_digest
+                            or data_state(source)!=expected):
+                        raise ValueError('探测期间原选择或有效区服资料已变化。')
+                    frozen_defaults(self.data,old_revision,old_defaults_digest)
+                    with self._data_locks(target):
+                        selected.prepare()
+                        checked=data_state(target)
+                        # The native notification factory materializes an absent per-instance default.
+                        added=checked.keys()-prepared.keys()
+                        if (any(checked.get(name)!=value for name,value in prepared.items())
+                                or any(not re.fullmatch(r'config/[0-9]{2,}/notify\.yml',name) for name in added)):
+                            raise ValueError('目标区服快照在探测期间变化。')
+                    return dict(data_id=data_id,hash=tree_hash(checked),hello=hello)
                 new=dict(format=FORMAT,kind='stable',candidate_id=None,data_id=data_id,revision=self.paths.revision,
                     protocol=PROTOCOL_VERSION,identity_digest=None)
                 result=self._switch(selected,new,selection_revision,stable_migration=binding)
             return dict(result,status='promoted',snapshot=snapshot)
 
-        return self._start('migrate_stable',migrate)
+        return self._start('prepare_stable' if prepare_only else 'migrate_stable',migrate)
 
     def _migration_source(self,journal):
         binding=journal['stable_migration']
@@ -498,6 +541,7 @@ class SDKUpgradeManager:
             with ExitStack() as locks:
                 if choice=='before':
                     if self._selection_hash()!=review['current_revision']:raise ValueError('恢复前SDK选择发生变化。')
+                    self._check_update_lease()
                     self._restore_selector(journal);result=dict(restored='before')
                 else:
                     after=journal['after']
@@ -516,12 +560,14 @@ class SDKUpgradeManager:
                         self._verify_migration_source(journal)
                         self._verify_migration_target(selected,journal)
                     if self._selection_hash()!=review['current_revision']:raise ValueError('恢复前SDK选择发生变化。')
+                    self._check_update_lease()
                     atomic_json(selection_path(self.data),after);hello=self._handshake(selected,deep=True);result=dict(restored='after',hello=hello)
                     if review['stable_migration']:
                         self._verify_migration_source(journal)
                         self._verify_migration_target(selected,journal)
                 expected=journal['before_hash' if choice=='before' else 'after_hash']
                 if self._selection_hash()!=expected:raise ValueError('恢复期间SDK选择被外部改动，journal保留。')
+                self._check_update_lease()
                 journal.update(state='recovered',choice=choice);atomic_json(self.root/'activations'/(journal['id']+'.json'),journal)
                 self.activation_journal.unlink();self.service._environment_changed=True;return result
         return self._start('recover_activation',recover)

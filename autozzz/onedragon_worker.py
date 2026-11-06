@@ -60,6 +60,11 @@ def verify_sdk_control(args):
 def validate_worker_request(service,method,*,sdk_control=False):
     if sdk_control and method!='hello' and method not in SDK_CONTROL_METHODS:
         raise RuntimeError('SDK 控制连接仅提供 SDK 管理与源码操作。')
+    update_control=sdk_control and getattr(service,'_sdk_control_lease',None) is not None
+    if update_control and method not in {'hello','sdk_prepare_stable','sdk_status','sdk_cancel'}:
+        raise RuntimeError('发行更新工作进程仅可准备本区服快照。')
+    if method=='sdk_prepare_stable' and not update_control:
+        raise RuntimeError('准备发行快照需要已交接的更新任务锁。')
     if method=='sdk_migrate_stable' and not sdk_control:
         raise RuntimeError('请通过 SDK 控制连接迁移稳定资料。')
     service.runtime_guard.check_request(method)
@@ -93,10 +98,11 @@ def main() -> int:
         actual_revision=verify_worker_identity(args)
         from .onedragon_service import METHODS, OneDragonService
         from .task_lease import JoinedRunLease
-        run_lease=JoinedRunLease.from_environment()
+        run_lease=JoinedRunLease.from_environment(program_update=args.sdk_control)
         service = OneDragonService(args.source, args.data,run_lease=run_lease,
             runtime_revision=actual_revision,stable_data=args.stable_data,product_root=args.product_root,
             runtime_generation=args.selection_generation,management_only=args.management_only)
+        if args.sdk_control:service._sdk_control_lease=run_lease
         while True:
             line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1)
             if not line:

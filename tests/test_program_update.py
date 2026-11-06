@@ -4,13 +4,17 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
 
 from autozzz.onedragon_bundle import MANIFEST_NAME,digest,filesystem_path
 from autozzz.program_package import MANIFEST,create_manifest,extract_package,read_manifest,verify_package,preserve_user_files
+from autozzz.program_sdk_commit import ProgramSdkCommit
 from autozzz.program_update import ProgramUpdate, verify_preflight, write_json
+from autozzz.runtime_selection import selection_path, snapshot_path, tree_hash
+from autozzz.sdk_upgrade_files import atomic_bytes, atomic_json, data_state
 
 
 def package(root,version):
@@ -67,6 +71,48 @@ class ProgramUpdateTests(unittest.TestCase):
         with self.assertRaises(OSError):transaction.apply()
         self.assertEqual(verify_package(self.old)['version'],'old')
         self.assertEqual(verify_package(transaction.candidate)['version'],'new')
+
+    def test_joint_rollback_keeps_old_and_new_profile_edits_after_partial_publication(self):
+        transaction = self.prepare()
+        controls = {profile: self.root / 'profiles' / profile for profile in ('cn', 'global')}
+        targets, snapshots, rows = {}, {}, {}
+        for profile, control in controls.items():
+            target = targets[profile] = snapshot_path(control, 'c' * 32)
+            for root, revision in ((control, 'a' * 40), (target, 'd' * 40)):
+                atomic_json(root / 'autozzz-runtime.json', dict(revision=revision, protocol=1))
+                atomic_bytes(root / 'config/user.yml', b'original setting')
+            rows[profile] = dict(kind='stable', control=str(control.resolve()), source=str(control.resolve()),
+                                 selector='-', marker=digest(control / 'autozzz-runtime.json'),
+                                 data=tree_hash(data_state(control)))
+            snapshots[profile] = dict(data_id=target.name, hash=tree_hash(data_state(target)))
+        binding = dict(profiles=rows, old=dict(package=transaction.data['old_manifest']),
+                       new=dict(package=transaction.data['new_manifest'], revision='d' * 40, protocol=1))
+        transaction.state('prepared', sdk_transition=binding)
+
+        def interrupt_first_publish(path, raw):
+            atomic_bytes(path, raw)
+            if path == selection_path(controls['cn']):
+                raise PowerLoss()
+
+        with (patch('autozzz.program_sdk_commit.verify_sdk_transition', return_value=binding),
+              patch('autozzz.program_sdk_commit.RuntimePaths.discover',
+                    side_effect=lambda _, profile, **__: SimpleNamespace(data=controls[profile]))):
+            commit = ProgramSdkCommit.prepare(transaction, snapshots)
+            with patch('autozzz.program_sdk_commit.atomic_bytes', side_effect=interrupt_first_publish):
+                with self.assertRaises(PowerLoss):
+                    commit.after()
+            atomic_bytes(targets['cn'] / 'config/user.yml', b'new snapshot edit')
+            with self.assertRaisesRegex(ValueError, '目标区服快照在联合提交期间变化'):
+                commit.after()
+            atomic_bytes(controls['cn'] / 'config/user.yml', b'old profile edit')
+            commit.before()
+
+        self.assertEqual(verify_package(self.old)['version'], 'old')
+        self.assertEqual((controls['cn'] / 'config/user.yml').read_bytes(), b'old profile edit')
+        self.assertEqual((targets['cn'] / 'config/user.yml').read_bytes(), b'new snapshot edit')
+        for control in controls.values():
+            self.assertFalse(selection_path(control).exists())
+            self.assertFalse((control / 'autozzz/sdk-activation.json').exists())
 
     def test_failed_completion_journal_write_restores_original_installation(self):
         transaction = self.prepare()

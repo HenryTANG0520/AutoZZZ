@@ -16,7 +16,10 @@ from .program_package import MANIFEST,files,read_manifest,relative,verify_packag
 
 def write_json(path,value):
     path=Path(path);temporary=path.with_name(path.name+'.tmp')
-    filesystem_path(temporary).write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+    with filesystem_path(temporary).open('w',encoding='utf-8') as stream:
+        json.dump(value,stream,ensure_ascii=False,indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
     os.replace(filesystem_path(temporary),filesystem_path(path))
 
 
@@ -105,8 +108,14 @@ class ProgramUpdate:
     def _user_hashes(self,root):
         return {name:digest(path) for name,path in self._users(root).items()}
 
-    def apply(self):
+    def apply(self,*,sdk_coordinated=False):
         if self.data['state']!='prepared':raise ValueError('该事务已经执行过，请查询或恢复原事务。')
+        if ('sdk_commit' in self.data)!=sdk_coordinated or sdk_coordinated and self.data.get('sdk_phase')!='armed':
+            raise ValueError('程序目录和两区服 SDK 选择需要联合提交。')
+        if (not sdk_coordinated and self._marker(self.target,self.data['old_manifest'])
+                and self._marker(self.candidate,self.data['new_manifest'])
+                and read_manifest(self.target)['runtime_revision']!=read_manifest(self.candidate)['runtime_revision']):
+            raise ValueError('稳定 SDK 版本变化，需先准备两区服联合提交。')
         try:
             if not self._marker(self.target,self.data['old_manifest']):raise ValueError('当前程序版本已变化。')
             if self.backup.exists():raise ValueError('旧版本归档目录已存在。')
@@ -135,16 +144,22 @@ class ProgramUpdate:
             if not self._marker(self.target,self.data['new_manifest']):raise ValueError('安装后的程序包与已验证版本不一致。')
             if any(digest(filesystem_path(self.target/name))!=expected for name,expected in hashes.items()):raise ValueError('安装后用户文件核对失败。')
             if self._user_hashes(self.backup)!=hashes:raise ValueError('安装核对期间归档用户文件已变化，已停止安装。')
-            self.state('completed');return dict(self.data)
+            if not sdk_coordinated:self.state('completed')
+            return dict(self.data)
         except Exception as exc:
             self.data['error']=str(exc)
+            if sdk_coordinated:
+                self.state('needs_recovery',error=str(exc))
+                raise
             try:self.recover()
             except Exception as recovery:
                 self.state('needs_recovery',error=str(exc)+'；'+str(recovery))
             raise
 
-    def recover(self):
+    def recover(self,*,sdk_coordinated=False):
         if self.data['state']=='completed':return False
+        if ('sdk_commit' in self.data)!=sdk_coordinated or sdk_coordinated and self.data.get('sdk_phase')!='restoring':
+            raise ValueError('程序目录和两区服 SDK 选择需要联合恢复。')
         old_here=self._marker(self.target,self.data['old_manifest'])
         old_backup=self._marker(self.backup,self.data['old_manifest'])
         new_here=self._marker(self.target,self.data['new_manifest'])

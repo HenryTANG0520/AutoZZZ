@@ -166,6 +166,35 @@ class SDKUpgradeTests(unittest.TestCase):
         self.assertFalse(selection_path(self.data).exists())
         self.assertEqual((self.data / 'config/account.yml').read_bytes(), b'new edit from outside')
 
+    def test_release_prepare_keeps_original_bytes_and_seals_native_default(self):
+        revision, receipt = self.old_stable_receipt()
+        original = data_state(self.data)
+        proof = dict(marker=digest(self.data/'autozzz-runtime.json'), data=tree_hash(original))
+        self.service._sdk_control_lease = SimpleNamespace(scope=nullcontext, check=lambda:None)
+
+        for drift in (None, 'config/account.yml', 'config/01/unexpected.yml'):
+            with self.subTest(drift=drift):
+                def handshake(selected, **_):
+                    self.put(selected.data/'config/01/notify.yml', b'native default')
+                    if drift is not None:
+                        self.put(selected.data/drift, b'outside edit')
+                    return dict(revision=selected.revision, pid=1)
+
+                with patch.object(self.paths.__class__, 'verify'), patch.object(self.manager, '_handshake', side_effect=handshake):
+                    self.manager.migrate_stable(revision, receipt, '-', True, source_proof=proof, prepare_only=True)
+                    state = self.finish()
+                if drift is None:
+                    self.assertEqual(state['state'], 'success', state)
+                    target = self.data/'autozzz/runtime-data'/state['result']['data_id']
+                    self.assertEqual(state['result']['hash'], tree_hash(data_state(target)))
+                    self.assertTrue((target/'config/01/notify.yml').is_file())
+                else:
+                    self.assertEqual(state['state'], 'failed', state)
+                    self.assertIn('目标区服快照在探测期间变化', state['error'])
+                self.assertEqual(data_state(self.data), original)
+                self.assertFalse(selection_path(self.data).exists())
+                self.assertFalse(self.manager.activation_journal.exists())
+
     def test_fast_selection_never_hashes_candidate_directories_but_full_verify_does(self):
         atomic_json(selection_path(self.data),self.selection())
         with patch('autozzz.runtime_selection.runtime_files',side_effect=AssertionError('GUI must not enumerate SDK bytes')):

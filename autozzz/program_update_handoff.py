@@ -15,6 +15,9 @@ from .task_lease import RunLeaseOwner,JoinedRunLease,LEASE_ENV
 from .run_lock import RunLock
 
 MODULES=('__init__.py','program_package.py','program_update.py','program_update_handoff.py','onedragon_bundle.py','run_lock.py','task_lease.py')
+SDK_MODULES=('program_sdk_binding.py','program_sdk_commit.py','program_sdk_prepare.py','onedragon_runtime.py',
+             'runtime_generation.py','runtime_selection.py','sdk_upgrade_files.py','sdk_stable_migration.py')
+RECOVERY_COMMAND='@echo off\r\npushd "%~dp0"\r\n"helper\\python\\python.exe" -I -S -X utf8 "helper\\start.py" --job . --recover{}\r\npopd\r\npause\r\n'
 
 
 def copy_python(source,destination,expected=None):
@@ -57,8 +60,13 @@ class UpdateHandoff:
         self.lease.acquire()
         try:
             with marker.open('x',encoding='utf-8') as stream:json.dump(dict(state='preparing'),stream)
-            package=read_manifest(tx.target);helper=tx.job/'helper';bridge=helper/'bridge/autozzz';bridge.mkdir(parents=True)
-            for name in MODULES:
+            package=read_manifest(tx.target)
+            sdk_update=package['runtime_revision']!=read_manifest(tx.candidate)['runtime_revision']
+            if sdk_update:
+                from .program_sdk_binding import bind_sdk_transition
+                bind_sdk_transition(tx)
+            helper=tx.job/'helper';bridge=helper/'bridge/autozzz';bridge.mkdir(parents=True)
+            for name in MODULES+(SDK_MODULES if sdk_update else ()):
                 relative='onedragon/bridge/autozzz/'+name;origin=tx.target/relative
                 if relative not in package['files'] or digest(origin)!=package['files'][relative]:raise ValueError('更新助手源码已变化，请修复完整程序包。')
                 shutil.copyfile(origin,bridge/name)
@@ -66,7 +74,9 @@ class UpdateHandoff:
             copy_python(tx.target/'onedragon/python',helper/'python',expected)
             bootstrap=helper/'start.py'
             bootstrap.write_text("import sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parent/'bridge'))\nfrom autozzz.program_update_handoff import worker\nraise SystemExit(worker())\n",encoding='utf-8')
-            (tx.job/'恢复原版本.cmd').write_text('@echo off\r\npushd "%~dp0"\r\n"helper\\python\\python.exe" -I -S -X utf8 "helper\\start.py" --job . --recover\r\npopd\r\npause\r\n',encoding='utf-8')
+            (tx.job/'恢复原版本.cmd').write_text(RECOVERY_COMMAND.format(''),encoding='utf-8',newline='')
+            if sdk_update:
+                (tx.job/'继续SDK更新.cmd').write_text(RECOVERY_COMMAND.format(' --after'),encoding='utf-8',newline='')
             environment=os.environ.copy()
             for name in ('PYTHONHOME','PYTHONPATH','PYTHONUSERBASE','VIRTUAL_ENV','CONDA_PREFIX','PYTHONSTARTUP',LEASE_ENV):environment.pop(name,None)
             environment[LEASE_ENV]=self.lease.export()
@@ -106,13 +116,32 @@ class UpdateHandoff:
 def worker():
     import argparse
     parser=argparse.ArgumentParser();parser.add_argument('--job',type=Path,required=True);parser.add_argument('--target',type=Path)
-    parser.add_argument('--journal-hash');parser.add_argument('--no-restart',action='store_true');parser.add_argument('--recover',action='store_true');args=parser.parse_args()
+    parser.add_argument('--journal-hash');parser.add_argument('--no-restart',action='store_true');parser.add_argument('--recover',action='store_true')
+    parser.add_argument('--after',action='store_true');args=parser.parse_args()
+    if args.after and not args.recover:parser.error('--after 需要 --recover。')
     lease=None;tx=None
     try:
         if args.recover:
-            lease=RunLock();lease.acquire();tx=ProgramUpdate(args.job)
-            if tx.probe(tx.target) or tx.probe(tx.backup):raise RuntimeError('原程序或归档仍有进程运行，请先正常关闭。')
-            changed=tx.recover()
+            tx=ProgramUpdate(args.job)
+            prepare=args.after and 'sdk_transition' in tx.data and 'sdk_commit' not in tx.data
+            lease=RunLeaseOwner(program_update=True) if prepare else RunLock()
+            lease.acquire()
+            tx=ProgramUpdate(args.job)
+            if tx.probe(tx.target) or tx.probe(tx.backup) or tx.probe(tx.candidate):
+                raise RuntimeError('安装、归档或待更新目录仍有进程运行，请先正常关闭。')
+            if args.after:
+                if 'sdk_transition' not in tx.data:raise ValueError('此事务没有两区服 SDK 更新。')
+                from .program_sdk_prepare import advance_sdk_update
+                advance_sdk_update(tx,lease.export() if prepare else None)
+                write_json(tx.job/'recovery-result.json',dict(state='completed',target=str(tx.target)))
+                print('两区服 SDK 更新完成。')
+                return 0
+            if 'sdk_commit' in tx.data:
+                from .program_sdk_commit import ProgramSdkCommit
+                ProgramSdkCommit(tx).before()
+                changed=True
+            else:
+                changed=tx.recover()
             write_json(tx.job/'recovery-result.json',dict(state='rolled_back' if changed else 'already_completed',target=str(tx.target)))
             print('恢复完成。' if changed else '更新已经完成，无需恢复。')
             return 0
@@ -128,7 +157,13 @@ def worker():
             if state==0:break
             if state!=258:raise RuntimeError('无法核实原程序是否退出，更新尚未替换。')
         if digest(tx.journal)!=args.journal_hash:raise ValueError('等待退出期间更新事务已变化。')
-        tx.apply()
+        if (tx.job/'helper-cancel').exists():return 0
+        if 'sdk_transition' in tx.data:
+            from .program_sdk_prepare import advance_sdk_update
+            with lease.forward_for_program_update() as grant:
+                advance_sdk_update(tx,grant)
+        else:
+            tx.apply()
         lease.close();lease=None
         if not args.no_restart:
             try:subprocess.Popen([str(tx.target/'AutoZZZ.exe')],cwd=tx.target,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
