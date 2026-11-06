@@ -6,7 +6,7 @@ from ctypes import wintypes as W
 from pathlib import Path
 
 from .models import AutomationError
-from .windows import kernel32
+from .windows import kernel32, user32
 
 
 class _ProcessEntry(C.Structure):
@@ -46,6 +46,19 @@ def _identity(pid,exe_name):
         created=(times[0].dwHighDateTime<<32)|times[0].dwLowDateTime
         return dict(pid=pid,path=str(path.resolve()),created=created)
     finally:kernel32.CloseHandle(handle)
+
+
+def window_process_identity(hwnd):
+    """Read the current ZZZ owner of one HWND without scanning other processes."""
+    pid = W.DWORD()
+    thread = user32.GetWindowThreadProcessId(hwnd, C.byref(pid))
+    if not thread or not pid.value:
+        return None
+    identity = _identity(pid.value, 'zenlesszonezero.exe')
+    observed = W.DWORD()
+    if user32.GetWindowThreadProcessId(hwnd, C.byref(observed)) != thread or observed.value != pid.value:
+        return None
+    return identity
 
 
 def process_inventory(executable_name,*,only_pid=None):

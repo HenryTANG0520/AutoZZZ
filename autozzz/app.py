@@ -88,6 +88,10 @@ class Context:
         self.checkpoint()
 
     def snapshot(self) -> Scene:
+        manual_login = getattr(self.runner, 'manual_login', None)
+        if manual_login is not None:
+            from .manual_login import is_global_login_form
+
         while True:
             self.checkpoint()
             capture_epoch = self.runner.input_epoch
@@ -108,11 +112,22 @@ class Context:
                 self.last_scene = None
                 self.runner.wait_for_focus(self.window)
                 continue
+            except ScreenshotNotReady:
+                if manual_login is not None:
+                    manual_login.leave(self.runner)
+                raise
             if capture_epoch != self.runner.input_epoch:
                 self.last_scene = None
                 if focus_epoch != self.runner.focus_epoch:
                     continue  # Re-capture pixels and geometry after an automatic focus wait.
                 raise InputInterrupted("识别过程中发生手动暂停或恢复，旧截图已丢弃，重新识别当前任务。")
+            if manual_login is not None:
+                if is_global_login_form(scene, already_waiting=manual_login.deadline is not None):
+                    self.last_scene = None
+                    manual_login.begin(self.runner, scene)
+                    self.sleep(0.7)
+                    continue
+                manual_login.leave(self.runner)
             self.last_scene = scene
             self.scene_epoch = capture_epoch
             return scene
@@ -121,8 +136,12 @@ class Context:
         if scene is self.last_scene and self.scene_epoch != self.runner.input_epoch:
             self.last_scene = None
             raise InputInterrupted("暂停恢复后旧画面已丢弃，重新识别当前任务。")
-        if scene is not self.last_scene or time.monotonic() - scene.captured_at > 8:
+        if scene is None or scene is not self.last_scene or time.monotonic() - scene.captured_at > 8:
             raise AutomationError(detail)
+        if getattr(self.runner, 'manual_login', None) is not None:
+            from .manual_login import guard_manual_form_input
+
+            guard_manual_form_input(scene)
 
     def _focus_interrupted(self):
         self.last_scene = None
@@ -204,6 +223,8 @@ class Context:
         raise AutomationError(f"等待{description}超时（{timeout} 秒）。请查看本次运行截图。")
 
     def evidence(self, scene: Scene, name: str):
+        if getattr(self.runner, 'manual_login', None) is not None and name != 'entered_game':
+            return None  # User-entered login details can still be visible on a failure page.
         stamp = datetime.now().strftime("%H%M%S_%f")
         path = save_scene(scene, Path(self.report.run_dir), f"{stamp}_{name}")
         self.report.evidence.append(str(path))
@@ -272,11 +293,13 @@ class Context:
 
 
 class Runner:
-    def __init__(self, settings: Settings, emit=None, *, launch_options=None, runtime_guard=None, run_hotkeys=None):
+    def __init__(self, settings: Settings, emit=None, *, launch_options=None, runtime_guard=None,
+                 run_hotkeys=None, manual_login=None):
         self.settings = settings
         self.launch_options = launch_options
         self.runtime_guard = runtime_guard
         self.run_hotkeys = run_hotkeys
+        self.manual_login = manual_login
         self.report = RunReport()
         self._event_sink = emit or (lambda event: None)
         self._stop = threading.Event()
@@ -471,6 +494,9 @@ class Runner:
         guard = getattr(self, 'runtime_guard', None)
         if guard is not None:
             guard()
+        manual_login = getattr(self, 'manual_login', None)
+        if manual_login is not None:
+            manual_login.check()
 
     def wait_for_focus(self, window=None):
         window = window or self._window
@@ -650,6 +676,8 @@ class Runner:
             if not mutex or already_running:
                 raise AutomationError("另一个 AutoZZZ 任务正在运行，请先停止后重试。")
             with self._capture_lock:self._capture_mutex=mutex
+            if self.manual_login is not None and (not entry_only or self.settings.server != 'global'):
+                raise AutomationError('人工登录等待仅用于国际服启动流程。')
             self.settings.validate("battle" if battle_plan is not None else "enter_game" if entry_only else "daily")
             if battle_plan is not None:
                 from .battle_strategy import resolve_strategy
@@ -681,6 +709,8 @@ class Runner:
                         if self._stop.wait(1):
                             raise Stopped("任务已停止。")
             self._window = self._window or find_game(self.settings.game_path)
+            if self.manual_login is not None:
+                self.manual_login.bind(self._window, self.settings.game_path)
             if launch_session is not None:launch_session.close()
             if is_elevated(self._window.hwnd) and not is_admin():
                 raise AutomationError("绝区零以管理员权限运行；请使用 Start-AutoZZZ-Admin.cmd 或以管理员身份运行 AutoZZZ.exe。")
@@ -711,11 +741,18 @@ class Runner:
                     result = self._resume_step(opening_workflow.city_fund)
                     self.report.results.append(result)
                     self.log(result.detail)
-            main_result = self._resume_step(workflow.ensure_main)
+            def verify_manual_entry():
+                result = workflow.ensure_main()
+                self.checkpoint()
+                context._input_scene(context.last_scene, '进入游戏前需要重新识别主界面。')
+                return result
+
+            main_result = self._resume_step(workflow.ensure_main if self.manual_login is None else verify_manual_entry)
             if entry_only:
                 if not isinstance(main_result, TaskResult) or main_result.task != "main" or main_result.status != "ok":
                     raise AutomationError("尚未确认进入游戏主界面。")
-                self.checkpoint()
+                if self.manual_login is None:
+                    self.checkpoint()
                 context.evidence(context.last_scene, "entered_game")
                 self.report.status = "success"
                 self.report.results.append(TaskResult("launch", "ok", "已进入游戏主界面，可以开始每日。"))

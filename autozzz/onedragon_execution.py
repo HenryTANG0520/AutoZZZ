@@ -201,12 +201,14 @@ class OneDragonExecution:
                 monitor.join()
             self._fixed_stop_watched = False
 
-    def _submit(self, state: str, operation) -> dict:
+    def _submit(self, state: str, operation, *, expected_prepared_job=None) -> dict:
         guard=getattr(self.ctx,'autozzz_runtime_guard',None)
         if guard is not None:guard()
         with self.lock:
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
+            if expected_prepared_job is not None and (self.state != 'prepared' or self.job_id != expected_prepared_job):
+                raise RuntimeError('人工登录期间原准备任务已变化，请重新准备。')
             self.cancelled.clear()
             self.single_battle_state = None
             self.startup_focus = None
@@ -550,7 +552,7 @@ class OneDragonExecution:
 
     def start_application(self, app_id: str, *, fixed_entry: bool = False, budget:dict|None=None,timeout_seconds:int=600,
                           resource_confirmation: str | None = None,close_game_on_success:bool=False,
-                          finish_after_battle:bool=False) -> dict:
+                          finish_after_battle:bool=False,entry_handoff:dict|None=None) -> dict:
         """通过已准备的配置启动实际上游应用，保留同一进程与任务锁。"""
         validate_finish_after_battle(app_id, finish_after_battle)
         if finish_after_battle and self.rotation_guard is not None:
@@ -564,6 +566,17 @@ class OneDragonExecution:
         if app_id!=self.prepared_app:raise ValueError("请先准备所选应用。")
         if type(close_game_on_success)is not bool or (close_game_on_success and app_id!='one_dragon'):
             raise ValueError('仅一条龙应用组支持完成后关闭游戏。')
+        if entry_handoff is not None:
+            account = self.ctx.game_account_config
+            if (app_id != 'one_dragon' or self.rotation_guard is not None or
+                    account.game_region not in ('us', 'eu', 'asia', 'twhkmo') or
+                    self.connection != (self.ctx.current_instance_idx, account.game_path, account.game_region, account.game_language)):
+                raise ValueError('人工登录期间账号或区服配置已变化，请重新准备。')
+            if (type(entry_handoff) is not dict or not isinstance(entry_handoff.get('prepared_job_id'), str)
+                    or not entry_handoff['prepared_job_id'] or any(
+                        type(entry_handoff.get(key)) is not int or entry_handoff[key] <= 0
+                        for key in ('window_handle', 'process_id', 'process_created'))):
+                raise ValueError('人工登录交接缺少原任务或游戏进程身份。')
         validate_runtime_timeout(timeout_seconds)
         if self.uses_charge:
             from .battle_budget import validate_runtime_budget
@@ -646,6 +659,8 @@ class OneDragonExecution:
                         self._run_bound_app(app_id, takeover, display_name='接管当前战斗')
                     else:
                         binding = {'reuse_bound_window': True} if self.rotation_guard is not None else {}
+                        if entry_handoff is not None:
+                            binding['expected_window'] = entry_handoff
                         if factory is None:
                             close_ready = self._run_bound_app(app_id, keep_running_on_success=close_game_on_success, **binding)
                         else:
@@ -656,6 +671,8 @@ class OneDragonExecution:
                     if self.group_control is not None:self.group_control.close()
                     if self.resource_control is not None:self.resource_control.close()
                 if close_ready:self._finish_bound_client(60)
+        if entry_handoff is not None:
+            return self._submit('running', run, expected_prepared_job=entry_handoff['prepared_job_id'])
         return self._submit("running", run)
 
     def _run_bound_app(self,app_id:str,op_factory=None,display_name:str="路线调试",expected_window=None,
@@ -797,6 +814,7 @@ class OneDragonExecution:
             result = dict(job_id=self.job_id, state=self.state, busy=self.busy,
                           ready=bool(self.ctx.ready_for_application), error=self.error)
             result['single_battle_supported'] = True
+            result['manual_login_handoff_supported'] = True
             single_battle = getattr(self, 'single_battle_state', None)
             if single_battle is not None:
                 if self.state == 'stopped':

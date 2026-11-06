@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--account-region", choices=("cn", "cn_b", "us", "eu", "asia", "twhkmo"), help="一条龙账号时区")
     parser.add_argument("--run-timeout", type=int, default=600, help="一条龙运行时限，不小于 30 的整数秒")
     parser.add_argument("--no-auto-launch", action="store_true", help="一条龙直接使用已进入游戏的窗口")
+    parser.add_argument("--manual-login-timeout", type=int, metavar="SECONDS",
+                        help="自动启动国际服一条龙时等待 HOYOVERSE 人工登录，1—3600 秒")
     parser.add_argument('--finish-after-battle', action='store_true', help='接管当前普通战斗并在结算时停止，仅用于 --onedragon-run auto_battle')
     parser.add_argument('--confirm-resource-actions',action='store_true',help='允许本轮准备清单中的资源操作及第三方插件；操作与消费由配置决定')
     parser.add_argument("--battle-plan", type=Path, default=ROOT / "battle.json", help="独立战斗配置路径")
@@ -54,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--game-path", help="覆盖所选区服的 ZenlessZoneZero.exe 路径")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="配置 JSON 路径")
     args = parser.parse_args(argv)
-    native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id, args.account_region)
+    native_options = (args.energy_limit, args.battle_limit, args.battle_cost_limit, args.budget_id,
+                      args.account_region, args.manual_login_timeout)
     if not args.onedragon_run and (any(value is not None for value in native_options) or args.no_auto_launch or args.confirm_resource_actions or args.run_timeout != 600):
         parser.error("一条龙预算和运行选项只能与 --onedragon-run 一起使用。")
     if args.finish_after_battle and args.onedragon_run != 'auto_battle':
@@ -97,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.server is None:
                 raise ValueError("一条龙命令行运行须明确指定 --server cn 或 global。")
             extra = {'finish_after_battle': True} if args.finish_after_battle else {}
+            if args.manual_login_timeout is not None:
+                extra['manual_login_timeout_seconds'] = args.manual_login_timeout
             result = run_application(args.onedragon_run, server=args.server,
                 game_path=args.game_path or GAME_PATHS[args.server],
                 region=args.account_region or ("cn" if args.server == "cn" else "asia"),

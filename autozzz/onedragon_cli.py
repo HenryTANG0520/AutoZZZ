@@ -6,6 +6,7 @@ import signal
 import uuid
 
 from .config import ROOT
+from .manual_login import validate_manual_login_timeout
 from .onedragon_runtime import RuntimePaths
 from .onedragon_session import RuntimeSession
 from .battle_budget import validate_runtime_budget
@@ -28,13 +29,15 @@ def combat_budget(allowance, battles, maximum, identifier=None):
 
 def run_application(app_id, *, server, game_path, region, timeout=600,
                     allowance=None, battles=None, maximum=None, budget_id=None, auto_launch=True,
-                    emit=lambda event: None, session_factory=RuntimeSession,confirm_resources=False,finish_after_battle=False):
+                    emit=lambda event: None, session_factory=RuntimeSession,confirm_resources=False,finish_after_battle=False,
+                    manual_login_timeout_seconds=None):
     if not isinstance(app_id,str) or not app_id or len(app_id)>512:raise ValueError('应用编号无效。')
     if type(confirm_resources)is not bool:raise ValueError('资源确认开关须为布尔值。')
     validate_finish_after_battle(app_id, finish_after_battle, auto_launch=auto_launch)
     if server not in ("cn", "global"):
         raise ValueError("请选择国服或国际服。")
     validate_runtime_timeout(timeout)
+    validate_manual_login_timeout(manual_login_timeout_seconds, app_id=app_id, server=server, auto_launch=auto_launch)
     budget = combat_budget(allowance, battles, maximum, budget_id)
     events = queue.Queue()
     session = session_factory(RuntimePaths.discover(ROOT, server), events.put)
@@ -81,6 +84,8 @@ def run_application(app_id, *, server, game_path, region, timeout=600,
                     started = True
                     extra={} if confirmation is None else dict(resource_confirmation=confirmation)
                     if finish_after_battle:extra['finish_after_battle']=True
+                    if manual_login_timeout_seconds is not None:
+                        extra['manual_login_timeout_seconds'] = manual_login_timeout_seconds
                     session.send("start", app_id=app_id, budget=budget,
                                  timeout_seconds=timeout, auto_launch=auto_launch,**extra)
                 elif state["state"] in ("success", "failed", "stopped", "interrupted"):

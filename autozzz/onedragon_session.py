@@ -109,7 +109,7 @@ class RuntimeSession:
                 try:self._save_report()
                 except OSError as exc:self.emit(dict(type="error",message="报告写入失败："+str(exc),busy=bool(self.phase)))
 
-    def _enter_game(self,params,client=None):
+    def _enter_game(self,params,client=None,*,manual_login=None):
         from .app import Runner
         from .config import Settings
         self.emit(dict(type="phase",phase="正在进入游戏",minimize=True,bootstrapping=True))
@@ -118,15 +118,25 @@ class RuntimeSession:
             from .runtime_generation import RuntimeGeneration
             paths=client.paths
             if paths.generation is None:raise RuntimeError('原 SDK 连接未绑定选择代次，请重新准备。')
-            guard=RuntimeGeneration(paths.stable_data or paths.data,paths.generation,paths.management_only).check_execution
+            runtime=RuntimeGeneration(paths.stable_data or paths.data,paths.generation,paths.management_only)
+
+            def guard():
+                runtime.check_execution()
+                if manual_login is not None and not client.alive:
+                    raise RuntimeError('人工登录期间原一条龙工作进程已退出，请重新准备。')
+
             options=self._call(client,'game_launch_options')
         shortcut_options = {'run_hotkeys': self.run_hotkeys} if getattr(self, 'run_hotkeys', None) else {}
+        if manual_login is not None:
+            shortcut_options['manual_login'] = manual_login
         runner=Runner(Settings(server=params["server"],game_path=params["game_path"],auto_launch=True),self._legacy_event,
                       launch_options=options,runtime_guard=guard,**shortcut_options)
         self.runner=runner
         try:
             if self.closing.is_set() or self.stop_requested.is_set():runner.stop()
             report=runner.enter_game().to_dict()
+            if manual_login is not None and report['status'] == 'stopped':
+                self.stop_requested.set()  # F10 is handled by the legacy runner during entry.
             if report["status"]!="success":raise RuntimeError(report.get("error") or report.get("safe_next") or "进入游戏未完成。")
         finally:self.runner=None
 
@@ -154,10 +164,21 @@ class RuntimeSession:
             self.emit(dict(type="phase",phase="正在初始化"))
         elif command=="start":
             if self.phase:raise RuntimeError("原任务仍在处理中。")
+            from .manual_login import ManualLoginWait, validate_manual_login_timeout
             from .onedragon_control import validate_finish_after_battle
 
             finish_after_battle = params.get('finish_after_battle', False)
             validate_finish_after_battle(params['app_id'], finish_after_battle, auto_launch=params.get('auto_launch', False))
+            manual_seconds = params.get('manual_login_timeout_seconds')
+            validate_manual_login_timeout(manual_seconds, app_id=params['app_id'],
+                                          server=self.parameters.get('server'), auto_launch=params.get('auto_launch', False))
+            if manual_seconds is not None:
+                state = self._call(client, 'execution_status')
+                if state.get('manual_login_handoff_supported') is not True:
+                    raise RuntimeError('当前一条龙桥接不支持人工登录等待，请使用随包运行环境或更新 SDK。')
+                if (state.get('state') != 'prepared' or state.get('job_id') != self.job_id
+                        or self.parameters.get('app_id') != params['app_id']):
+                    raise RuntimeError('请先准备同一国际服一条龙任务。')
             if finish_after_battle and not self.single_battle_supported:
                 raise ValueError('当前运行环境不支持结算后停止，请使用随包运行环境或更新 SDK。')
             if not finish_after_battle:
@@ -175,8 +196,15 @@ class RuntimeSession:
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))
                 return
             auto_launch=params.pop("auto_launch",False)
+            params.pop('manual_login_timeout_seconds', None)
             login=params.get("app_id")=="_login"
-            if auto_launch and not login:self._enter_game(self.parameters,client)
+            if manual_seconds is not None:
+                manual_login = ManualLoginWait(manual_seconds)
+                prepared_job_id = self.job_id
+                self._enter_game(self.parameters, client, manual_login=manual_login)
+                params['entry_handoff'] = dict(prepared_job_id=prepared_job_id, **manual_login.expected_window())
+            elif auto_launch and not login:
+                self._enter_game(self.parameters,client)
             if self.stop_requested.is_set() or self.closing.is_set():
                 self._finish_report(dict(state="stopped",application_started=False))
                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=True,uses_charge=False)))
