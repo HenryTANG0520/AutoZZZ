@@ -527,6 +527,16 @@ class ExecutionWindow:
             self.finish_cancel.grid_remove()
         self.finish_label.grid();self.update_buttons()
 
+    def _set_overlay_target(self, target):
+        self.ui.overlay_game_handle = target
+        if not self.ui.closing:
+            self.ui.overlay.sync_target()
+
+    def _clear_overlay(self, status):
+        self._set_overlay_target(None)
+        if not self.ui.closing:
+            self.ui.overlay.finish(status, linger=False)
+
     def poll(self):
         self.poll_token=None
         if self.closed:return
@@ -569,7 +579,7 @@ class ExecutionWindow:
                     self.status.set("已连接 · 待准备")
                 elif kind=="rpc_result" and event["tag"]=="assistant-mode":
                     self.events.put(dict(type="state",state=event["result"]))
-                elif kind=="window":self.ui.overlay_game_handle=event["handle"]
+                elif kind=="window":self._set_overlay_target(event["handle"])
                 elif kind=="report":
                     from pathlib import Path
                     self.last_report=Path(event["path"])
@@ -587,6 +597,7 @@ class ExecutionWindow:
                     self.bootstrapping=event.get("bootstrapping",self.bootstrapping)
                     self.status.set(event["phase"])
                     if event.get("minimize") and not self.ui.closing:
+                        self._set_overlay_target(None)
                         self.ui.overlay.begin(event["phase"])
                         self.ui.root.iconify()
                 elif kind=="bootstrap_paused":
@@ -651,7 +662,14 @@ class ExecutionWindow:
                         if self.application_states.get(item["id"]) != signature:
                             self.application_states[item["id"]] = signature
                             self.write(item["name"] + " · " + label + (" · " + detail if detail else ""), level)
-                    if state.get("window_handle") is not None:self.ui.overlay_game_handle=state["window_handle"]
+                    if "window_handle" in state:
+                        target = state["window_handle"]
+                        if "window_identity" in state:
+                            identity = state["window_identity"]
+                            pid = identity.get("process_id") if isinstance(identity, dict) else None
+                            target = ((target, pid) if type(target) is int and target > 0 and type(pid) is int and pid > 0
+                                      and identity.get("window_handle") == target else None)
+                        self._set_overlay_target(target)
                     self.busy=state["busy"]
                     self.bootstrapping=False
                     self.prepared=state["state"]=="prepared"
@@ -741,6 +759,7 @@ class ExecutionWindow:
                     if self.loading_account:self.connected=False
                     if not self.busy:self.bootstrapping=False
                     if not self.busy:
+                        self._clear_overlay(event["message"])
                         if getattr(self,'finish_selector',None) is not None:self.finish_selector.current(0)
                         if getattr(self,'finish_action',None) is not None:self.cancel_finish()
                     self.status.set(event["message"][:160])
@@ -749,6 +768,7 @@ class ExecutionWindow:
                         self.ui.root.deiconify()
                         self.window.deiconify()
                 elif kind=="closed":
+                    self._clear_overlay("运行连接已关闭")
                     if getattr(self,'finish_action',None) is not None:self.cancel_finish()
                     self.cancel_mcp_requests()
                     self.connected=self.prepared=self.busy=self.bootstrapping=False
@@ -766,6 +786,7 @@ class ExecutionWindow:
     def close(self):
         if not self.closing:
             self.closing=True
+            self._clear_overlay("正在停止并关闭…")
             if self.run_shortcut is not None:
                 self.run_shortcut.close()
             self.cancel_finish()

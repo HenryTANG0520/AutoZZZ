@@ -33,6 +33,8 @@ class NativePresentation:
         self.user32.GetForegroundWindow.restype = W.HWND
         self.user32.IsWindow.argtypes = [W.HWND]
         self.user32.IsIconic.argtypes = [W.HWND]
+        self.user32.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+        self.user32.GetWindowThreadProcessId.restype = W.DWORD
         self.user32.GetClientRect.argtypes = [W.HWND, C.POINTER(W.RECT)]
         self.user32.ClientToScreen.argtypes = [W.HWND, C.POINTER(W.POINT)]
         self.user32.SetWindowDisplayAffinity.argtypes = [W.HWND, W.DWORD]
@@ -46,6 +48,36 @@ class NativePresentation:
         self.set_style.argtypes = [W.HWND, C.c_int, C.c_ssize_t]
         self.set_style.restype = C.c_ssize_t
 
+    def prepare_hidden(self, window):
+        # Tk 8.6.12 tries to activate its first wrapper even when withdrawn.
+        child = window.winfo_id()
+        api = self.user32
+        hook_proc = C.WINFUNCTYPE(C.c_ssize_t, C.c_int, W.WPARAM, W.LPARAM)
+        api.SetWindowsHookExW.argtypes = [C.c_int, hook_proc, W.HINSTANCE, W.DWORD]
+        api.SetWindowsHookExW.restype = W.HANDLE
+        api.CallNextHookEx.argtypes = [W.HANDLE, C.c_int, W.WPARAM, W.LPARAM]
+        api.CallNextHookEx.restype = C.c_ssize_t
+        api.UnhookWindowsHookEx.argtypes = [W.HANDLE]
+        api.UnhookWindowsHookEx.restype = W.BOOL
+
+        @hook_proc
+        def guard(code, hwnd, detail):
+            if code in (5, 9):  # HCBT_ACTIVATE, HCBT_SETFOCUS
+                wrapper = api.GetAncestor(child, 2)
+                if wrapper and api.GetAncestor(hwnd, 2) == wrapper:
+                    return 1
+            return api.CallNextHookEx(None, code, hwnd, detail)
+
+        thread = api.GetWindowThreadProcessId(child, None)
+        hook = api.SetWindowsHookExW(5, guard, None, thread) if thread else None  # WH_CBT
+        if not hook:
+            raise OSError(C.get_last_error(), "无法保证覆盖日志初始化时不激活")
+        try:
+            window.update_idletasks()
+            return self.prepare(window)
+        finally:
+            api.UnhookWindowsHookEx(hook)
+
     def prepare(self, window):
         handle = self.user32.GetAncestor(window.winfo_id(), 2)
         style = self.get_style(handle, -20)
@@ -57,10 +89,14 @@ class NativePresentation:
             raise OSError(C.get_last_error(), "覆盖日志无法从截图中排除")
         return handle
 
-    def game_bounds(self, handle, *, require_foreground=True):
+    def game_bounds(self, handle, *, require_foreground=True, process_id=None):
         if (not isinstance(handle, int) or not self.user32.IsWindow(handle)
                 or self.user32.IsIconic(handle) or (require_foreground and self.user32.GetForegroundWindow() != handle)):
             return None
+        if process_id is not None:
+            current_pid = W.DWORD()
+            if not self.user32.GetWindowThreadProcessId(handle, C.byref(current_pid)) or current_pid.value != process_id:
+                return None
         rect, point = W.RECT(), W.POINT()
         if not self.user32.GetClientRect(handle, C.byref(rect)) or not self.user32.ClientToScreen(handle, C.byref(point)):
             return None
@@ -82,6 +118,7 @@ class GameLogOverlay:
         self.linger_until = 0.0
         self.status = "准备就绪"
         self._bounds = None
+        self._target = None
         self._dirty = True
         self._timer = None
         self.log_panel_enabled=True;self.log_fade_seconds=0;self.preference_next=0
@@ -96,21 +133,29 @@ class GameLogOverlay:
         self.window.attributes("-transparentcolor", "#010101")
         self.canvas = tk.Canvas(self.window, bg="#010101", highlightthickness=0, takefocus=False)
         self.canvas.pack(fill="both", expand=True)
-        self.window.update_idletasks()
         self.presentation = presentation or NativePresentation()
         try:
-            self.handle = self.presentation.prepare(self.window)
+            self.handle = self.presentation.prepare_hidden(self.window)
         except OSError as exc:
             self.handle = None
+            self.window.destroy()
+            self.window = None
             self.warn(f"覆盖日志已隐藏，以免影响游戏识别：{exc}", "warning")
-        self._tick()
+        else:
+            self._tick()
 
     def begin(self, status):
+        self._hide()
+        self._target = None
         self.lines.clear()
+        self._dirty = True
         self.active, self.linger_until = True, 0.0
         self.set_status(status)
 
     def append(self, message, level="info"):
+        if self.closed:
+            return
+        self.sync_target()
         self.lines.append(LogLine(f"{time.strftime('%H:%M:%S')}  {message}", level))
         self._dirty = True
 
@@ -123,10 +168,37 @@ class GameLogOverlay:
         if not self.enabled:
             self._hide()
 
-    def finish(self, status):
+    def finish(self, status, *, linger=True):
         self.active = False
-        self.linger_until = time.monotonic() + 6
+        self.linger_until = time.monotonic() + 6 if linger else 0.0
         self.set_status(status)
+        if not linger:
+            self._hide()
+
+    def sync_target(self):
+        if self.closed:
+            return None
+        target = self.game_handle()
+        previous = getattr(self, "_target", None)
+        if target != previous:
+            self._hide()
+            if target is not None:
+                if previous is not None:
+                    self.lines.clear()
+                    self.linger_until = 0.0
+                    self.status = "等待当前游戏状态"
+                    self._dirty = True
+                self._target = target
+        return target
+
+    def _game_bounds(self, target, *, desktop=False):
+        options = {"require_foreground": False} if desktop else {}
+        if isinstance(target, tuple):
+            target, options["process_id"] = target
+        return self.presentation.game_bounds(target, **options)
+
+    def _can_show(self, target, game):
+        return self.game_handle() == target and self._game_bounds(target) == game
 
     def _hide(self):
         if self.visible:
@@ -189,8 +261,8 @@ class GameLogOverlay:
             while self.log_fade_seconds and self.lines and now-self.lines[0].created>self.log_fade_seconds:
                 self.lines.popleft();self._dirty=True
             config=self.preferences['panels']['log'];desktop=config['mode']=='desktop'
-            game = (self.presentation.game_bounds(self.game_handle(),require_foreground=False) if desktop
-                    else self.presentation.game_bounds(self.game_handle())) if self.handle else None
+            target = self.sync_target()
+            game = self._game_bounds(target, desktop=desktop) if self.handle else None
             from .trace_preferences import panel_bounds
             bounds=None
             if game and game[2]>=960 and game[3]>=540:
@@ -214,11 +286,17 @@ class GameLogOverlay:
                     self._bounds, self._dirty = bounds, True
                 if self._dirty:
                     self._render(bounds, game[2])
-                if not self.visible:
-                    self.window.deiconify()
+                self.handle = self.presentation.prepare(self.window)
+                if not self._can_show(target, game):
+                    self._hide()
+                else:
+                    was_hidden = not self.visible
                     self.visible = True
-                self.presentation.show(self.handle, bounds)
-                self.handle=self.presentation.prepare(self.window)
+                    self.presentation.show(self.handle, bounds)
+                    if was_hidden:
+                        self.window.state("normal")
+                    if not self._can_show(target, game):
+                        self._hide()
         except (OSError, tk.TclError):
             self._hide()
         self._timer = self.root.after(getattr(self,'preferences',{}).get('follow_interval_ms',200), self._tick)
@@ -229,5 +307,9 @@ class GameLogOverlay:
         self.closed = True
         if self._timer is not None:
             self.root.after_cancel(self._timer)
+            self._timer = None
         if self.desktop_panel is not None:self.desktop_panel.close()
-        self.window.destroy()
+        self.visible = False
+        self.handle = None
+        if self.window is not None:
+            self.window.destroy()
