@@ -696,7 +696,7 @@ class LibraryWindow:
         else:
             self.capture=None;self.capture_cancel=False;self.capture_pause=None;self.thaw()
             if result["state"]=="success" and result.get("result") is not None:
-                if result.get('kind')=='map':self.map_action('captured',result['result'])
+                if result.get('kind')=='map':self.map_action('captured',result['job_id'])
                 else:self.position_result(result["result"])
             else:self.status.set(result.get("error") or "截图已取消")
         self.buttons()

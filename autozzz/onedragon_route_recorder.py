@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from dataclasses import dataclass
 import math
 from pathlib import Path
 import threading
@@ -13,6 +14,39 @@ from .onedragon_library_rules import coordinate
 from .run_lock import RunLock, profile_lock
 
 MAX_IMAGE_BYTES = 1_400_000
+
+
+def _capture_account(service):
+    from .config_transaction import config_revision_from_path
+    path = Path(service.data) / "config/one_dragon.yml"
+    try:
+        info = path.stat()
+        file_generation = (info.st_ino, info.st_mtime_ns)
+    except FileNotFoundError:
+        file_generation = None
+    return service.ctx.current_instance_idx, config_revision_from_path(path), file_generation
+
+
+def _capture_window(window):
+    from .global_capture import geometry, process_created
+    if not window.identity_valid() or (rect := geometry(window)) is None:
+        raise ValueError("取景窗口已关闭或不可用，请重新取景。")
+    x1, y1, x2, y2 = rect
+    return window.bound.path, window.bound.hwnd, window.process_id, process_created(window), (x2 - x1, y2 - y1)
+
+
+@dataclass(frozen=True)
+class CaptureOrigin:
+    account: tuple
+    window: tuple
+
+    def require_current(self, service):
+        from .global_capture import standalone_window
+        if _capture_account(service) != self.account:
+            raise ValueError("取景后的账号配置已变化，请重新取景。")
+        with standalone_window(self.window[0]) as window:
+            if _capture_window(window) != self.window:
+                raise ValueError("取景窗口或客户区尺寸已变化，请重新取景。")
 
 
 def decode_client_image(encoded):
@@ -52,16 +86,22 @@ def encode_client_image(path):
 
 def route_map(service, area_id, anchor):
     from .map_transaction import MapTransaction
-    MapTransaction(service.data).assert_clear()
     from .onedragon_library import LibraryStore
     from one_dragon.base.geometry.point import Point
     store = LibraryStore(service)
     with profile_lock(service.data):
+        MapTransaction(service.data).assert_clear()
+        revision = store._route_map_revision(area_id)
         large_map = store._map(area_id)
         if not isinstance(anchor, list) or len(anchor) != 2: raise ValueError("请先设置有效的起点。")
         height, width = large_map.road_mask.shape[:2]
         point = Point(coordinate(anchor[0], width), coordinate(anchor[1], height))
-    return large_map, point
+        def validate_map():
+            MapTransaction(service.data).assert_clear()
+            if store._route_map_revision(area_id) != revision:
+                raise ValueError("定位地图已变化，请重新读取地图和路线。")
+        validate_map()
+    return large_map, point, validate_map
 
 
 def locate_position(ctx, large_map, anchor, image):
@@ -96,6 +136,8 @@ class RouteCaptureJob:
         self.control = None
         self.job_id, self.state, self.error = "", "idle", ""
         self.result = None
+        self.origin = None
+        self.validate_map = None
         self.cancelled = threading.Event()
         self.closed = False
 
@@ -104,20 +146,23 @@ class RouteCaptureJob:
 
     def start(self, area_id, anchor, game_path):
         self.service._assert_idle()
-        large_map, point = route_map(self.service, area_id, anchor)
-        return self._start(large_map, point, game_path)
+        large_map, point, validate_map = route_map(self.service, area_id, anchor)
+        return self._start(large_map, point, game_path, validate_map=validate_map)
 
-    def _start(self, large_map, point, game_path):
+    def _start(self, large_map, point, game_path, *, validate_map=None):
         self.service._assert_idle()
         if self.closed: raise RuntimeError("截图会话已关闭。")
         game = Path(game_path)
         if game.name.casefold() != "zenlesszonezero.exe" or not game.is_file(): raise ValueError("请选择有效的 ZenlessZoneZero.exe。")
+        with profile_lock(self.service.data):
+            account = _capture_account(self.service)
         with self.lock:
             if self.busy: raise RuntimeError("截图任务仍在处理，请继续观察原任务。")
             self.job_id, self.state, self.error = uuid.uuid4().hex, "capturing", ""
-            self.result = None; self.cancelled.clear()
+            self.result = self.origin = None; self.cancelled.clear()
+            self.validate_map = validate_map
             self.control = ExecutionControl(self._probe, self._release, lambda: True, lambda: None, lambda: None)
-            self.worker = threading.Thread(target=self._work, args=(large_map, point, str(game.resolve())),
+            self.worker = threading.Thread(target=self._work, args=(large_map, point, str(game.resolve()), account),
                                            name="AutoZZZ-Route-Capture", daemon=False)
             self.worker.start()
         return self.status(self.job_id)
@@ -133,19 +178,25 @@ class RouteCaptureJob:
             from .onedragon_gamepad import release_controller_inputs
             release_controller_inputs(self.controller)
 
-    def _work(self, large_map, anchor, game_path):
+    def _work(self, large_map, anchor, game_path, account):
+        result = origin = None
         try:
             with RunLock(), profile_lock(self.service.data):
                 from .map_transaction import MapTransaction
                 MapTransaction(self.service.data).assert_clear()
+                if _capture_account(self.service) != account:
+                    raise ValueError("取景前的账号配置已变化，请重新取景。")
+                if self.validate_map is not None:
+                    self.validate_map()
                 from .onedragon_host import ManagedController
-                self.controller = ManagedController(self.service.ctx, self.control)
                 watch_stop = threading.Event()
                 watcher = None
+                controller = self.controller = ManagedController(self.service.ctx, self.control)
                 try:
-                    self.controller.bind(game_path)
-                    watcher = threading.Thread(target=self._watch, args=(watch_stop,), name="AutoZZZ-Route-Hotkeys", daemon=True)
-                    watcher.start()
+                    controller.bind(game_path)
+                    watch_thread = threading.Thread(target=self._watch, args=(watch_stop,), name="AutoZZZ-Route-Hotkeys", daemon=True)
+                    watch_thread.start()
+                    watcher = watch_thread
                     while not self.cancelled.is_set():
                         self.control.poll()
                         if self.control.stopped: raise ExecutionStopped(self.control.error or "截图已停止。")
@@ -153,8 +204,10 @@ class RouteCaptureJob:
                             self.cancelled.wait(.02); continue
                         try:
                             with self.control.scope():
-                                _, screen = self.controller.screenshot()
-                                result = self._calculate(large_map, anchor, screen)
+                                _, screen = controller.screenshot()
+                                candidate = self._calculate(large_map, anchor, screen)
+                                self.control.checkpoint(require_frame=True)
+                                witness = CaptureOrigin(account, _capture_window(controller.game_win))
                                 self.control.checkpoint(require_frame=True)
                         except ObservationExpired:
                             continue  # 保留同一任务，恢复焦点后重新获取画面。
@@ -162,21 +215,28 @@ class RouteCaptureJob:
                             try: self.control.checkpoint(require_frame=True)
                             except ObservationExpired: continue
                             raise
-                        if self.cancelled.is_set(): break
-                        with self.lock: self.result, self.state = result, "success"
-                        return
-                    self.state = "cancelled"
+                        result, origin = candidate, witness
+                        break
                 finally:
                     watch_stop.set()
-                    if watcher is not None: watcher.join()
-                    self.control.stop()
-                    self.controller.cleanup_after_app_shutdown()
+                    try:
+                        if watcher is not None: watcher.join()
+                    finally:
+                        try: stopped = self.control.stop()
+                        finally:
+                            try: controller.cleanup_after_app_shutdown()
+                            finally: self.controller = None
+                    if result is not None and stopped["error"]:
+                        raise ExecutionStopped(stopped["error"])
+            with self.lock:
+                if self.cancelled.is_set() or result is None:
+                    self.state = "cancelled"
+                else:
+                    self.result, self.origin, self.state = result, origin, "success"
         except Exception as exc:
             with self.lock:
                 self.error = str(exc)
                 self.state = "cancelled" if self.cancelled.is_set() else "failed"
-        finally:
-            self.controller = None
 
     def _watch(self, stopped):
         from .windows import user32
@@ -192,9 +252,20 @@ class RouteCaptureJob:
                 self.control.stop(str(exc)); return
             stopped.wait(.01)
 
+    def _check_job(self, job_id):
+        if job_id != self.job_id or not self.job_id:
+            raise ValueError("截图任务编号无效，请继续查询原任务。")
+
     def status(self, job_id):
         with self.lock:
-            if job_id != self.job_id or not self.job_id: raise ValueError("截图任务编号无效，请继续查询原任务。")
+            self._check_job(job_id)
+            if not self.busy and self.state == "success":
+                try:
+                    self.origin.require_current(self.service)
+                    if self.validate_map is not None: self.validate_map()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self.result = self.origin = None
+                    self.state, self.error = "failed", str(exc)
             state = self.state
             control = self.control.status() if self.control is not None else {}
             if self.busy and state == "capturing": state = control.get("state", state)
@@ -202,11 +273,15 @@ class RouteCaptureJob:
                         result=copy.deepcopy(self.result), control=control)
 
     def cancel(self, job_id):
+        control = None
         with self.lock:
-            self.status(job_id)
-            if self.busy:
+            self._check_job(job_id)
+            if self.busy and self.state == "capturing":
                 self.cancelled.set()
-                self.control.stop()
+                if self.controller is not None:
+                    control = self.control
+        if control is not None:
+            control.stop()
         return self.status(job_id)
 
     def pause(self, job_id, paused):

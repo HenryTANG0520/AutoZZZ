@@ -414,8 +414,10 @@ class OneDragonService:
     def map_capture_start(self,data:dict,game_path:str,rotate:bool=False):
         self._assert_idle()
         from .onedragon_map_capture import MapCaptureJob
-        if self._map_capture is None:self._map_capture=MapCaptureJob(self)
-        return self._map_capture.start_map(data,game_path,rotate)
+        job=MapCaptureJob(self)
+        result=job.start_map(data,game_path,rotate)
+        self._map_capture=job
+        return result
 
     def map_capture_status(self,job_id:str):
         if self._map_capture is None:raise ValueError('地图取景尚未开始。')
@@ -434,8 +436,12 @@ class OneDragonService:
         from .onedragon_route_recorder import decode_client_image, locate_position, route_map
         from .run_lock import profile_lock
         frame = decode_client_image(image)
-        large_map, point = route_map(self, area_id, anchor)
-        with profile_lock(self.data): return locate_position(self.ctx, large_map, point, frame)
+        large_map, point, validate_map = route_map(self, area_id, anchor)
+        with profile_lock(self.data):
+            validate_map()
+            result = locate_position(self.ctx, large_map, point, frame)
+            validate_map()
+            return result
 
     def route_capture_start(self, area_id: str, anchor: list, game_path: str):
         self._assert_idle()

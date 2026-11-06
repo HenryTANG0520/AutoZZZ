@@ -118,6 +118,7 @@ class MapStore:
         self.base_icons={identifier:icon.to_dict() for identifier,icon in zip(ids,rows)}
         self.state=dict(id=uuid.uuid4().hex,key=key,version=1,revision=revision,large=large,ids=ids,
                         anchor=None if image is None else Point(image.shape[1]//2,image.shape[0]//2),mini=None,views=[],match=None,
+                        mini_origin=None,map_origin=None,
                         transform=[1.,1.,0.,0.],steps=[],base_size=None if image is None else [image.shape[1],image.shape[0]],
                         dirty=False,threshold=self.preferences['threshold'],use_icons=self.preferences['use_icons'],warning='',base_missing=image is None)
         self.undo=None
@@ -260,14 +261,19 @@ class MapStore:
             from one_dragon.base.matcher.match_result import MatchResult
             try:
                 changed=action in ('merge','scale','icons')
-                if action=='captured':state['mini']=self._payload(value);state['views']=list(value.get('views',[]));state['match']=None;state['warning']=value['warning']
+                if action=='captured':
+                    job=self.service._map_capture
+                    if job is None:raise ValueError('取景结果已失效，请重新取景。')
+                    payload,origin=job.result_for(data,value)
+                    state['mini']=self._payload(payload);state['views']=list(payload.get('views',[]))
+                    state['mini_origin']=origin;state['match']=None;state['warning']=payload['warning']
                 elif action=='import':
                     from .onedragon_route_recorder import decode_client_image
                     if not isinstance(value,list) or not 1<=len(value)<=2:raise ValueError("请选择同一位置的 1—2 张客户区截图。")
                     frames=[read_mini(self.ctx,decode_client_image(item),state['threshold']) for item in value]
                     snapshots=[item[0] for item in frames];state['views']=[item[1] for item in frames]
                     state['mini']=snapshots[0] if len(snapshots)==1 else utils.merge_mini_map(*snapshots)
-                    state['match']=None;state['warning']=''
+                    state['mini_origin']=None;state['match']=None;state['warning']=''
                 elif action=='append_frame':
                     from .onedragon_route_recorder import decode_client_image
                     if state['mini'] is None:raise ValueError('请先导入第一张客户区截图。')
@@ -288,7 +294,11 @@ class MapStore:
                     state['anchor']=self._point(value,width,height)
                     if state['mini'] is not None:
                         h,w=state['mini'].road_mask.shape[:2];state['match']=MatchResult(1,state['anchor'].x-w//2,state['anchor'].y-h//2,w,h)
-                elif action=='merge':self._merge()
+                elif action=='merge':
+                    for origin in {state['map_origin'],state['mini_origin']}:
+                        if origin is not None:origin.require_current(self.service)
+                    self._merge()
+                    state['map_origin']=state['mini_origin'] or state['map_origin']
                 elif action=='scale':
                     if type(value) not in (int,float) or not 25<=value<=400:raise ValueError("缩放比例须为 25—400%。")
                     import cv2
@@ -347,7 +357,10 @@ class MapStore:
         self.service._assert_idle()
         with profile_lock(self.root):
             self.tx.assert_clear();state=self._current(data)
-            if key!=state['key'] or revision!=state['revision'] or self.revision(key)!=revision:raise ValueError("地图或关联路线已变化，请重新读取。")
+            def unchanged():
+                if state['map_origin'] is not None:state['map_origin'].require_current(self.service)
+                return self.revision(key)==revision
+            if key!=state['key'] or revision!=state['revision'] or not unchanged():raise ValueError("地图或关联路线已变化，请重新读取。")
             large=state['large']
             if large.road_mask is None:raise ValueError("请先建立地图。")
             icons,ids=self._icons([dict(i.to_dict(),id=identifier) for i,identifier in zip(large.icon_list,state['ids'])],strict=True)
@@ -371,7 +384,7 @@ class MapStore:
                     operation['data']=[str(number) if isinstance(old,str) else number for number,old in zip((x,y),previous)]
                 if updated!=original:writes[path]=yaml.safe_dump(updated,allow_unicode=True,sort_keys=False).encode('utf-8');changed_routes+=1
             scope=self._scope(key);after=dict(scope,**{path.relative_to(self.root).as_posix():raw for path,raw in writes.items()})
-            archive=self.tx.publish(writes,self._metadata(key,revision,scope_revision(after),changed_routes),lambda:self.revision(key)==revision)
+            archive=self.tx.publish(writes,self._metadata(key,revision,scope_revision(after),changed_routes),unchanged)
             self.library._refresh();result=self._read(key);result['notice']=f'已保存地图及 {changed_routes} 条关联路线';result['archive_id']=archive
             return result
 

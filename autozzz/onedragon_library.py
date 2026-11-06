@@ -97,7 +97,22 @@ class LibraryStore:
         digest = hashlib.sha256(str(path).casefold().encode())
         for item in (path, template):
             digest.update(b"\0" + (self._bytes(item) if item is not None and item.is_file() else b"<absent>"))
+        if kind == "world_patrol_route":
+            for revision in self._route_map_revision(key.rpartition("_")[0]):
+                digest.update(b"\0" + revision.encode("ascii"))
         return digest.hexdigest()
+
+    def _route_map_paths(self, area_id):
+        if not isinstance(area_id, str) or area_id not in self.areas:
+            raise ValueError("请选择有效地图。")
+        area = self.areas[area_id]
+        directory = self.root / "assets/game_data/world_patrol" / area.entry.entry_id / area.full_id
+        return self._inside(directory / "road_mask.png"), self._inside(directory / "icon.yml")
+
+    def _route_map_revision(self, area_id):
+        from .map_transaction import MapTransaction, fingerprint
+        tx = MapTransaction(self.root)
+        return tuple(fingerprint(tx.read(path)) for path in self._route_map_paths(area_id))
 
     def _raw(self, kind, key):
         from one_dragon.utils.yaml_utils import safe_load
@@ -190,16 +205,19 @@ class LibraryStore:
                         areas=[dict(id=a.full_id, name=a.full_name, entry_id=a.entry.entry_id, entry_name=a.entry.entry_name) for a in self.areas.values()])
 
     def _map(self, area_id):
-        if area_id not in self.areas: raise ValueError("请选择有效地图。")
-        from zzz_od.application.world_patrol.world_patrol_area import road_mask_path, icon_yaml_path, WorldPatrolLargeMapIcon, WorldPatrolLargeMap
-        from one_dragon.base.config.yaml_operator import YamlOperator
-        from one_dragon.utils import cv2_utils
-        area = self.areas[area_id]
-        path, icon_path = self._inside(road_mask_path(area)), self._inside(icon_yaml_path(area))
+        path, icon_path = self._route_map_paths(area_id)
+        import yaml
+        from zzz_od.application.world_patrol.world_patrol_area import WorldPatrolLargeMapIcon, WorldPatrolLargeMap
+        from one_dragon.utils import cv2_utils, yaml_utils
+        from .map_transaction import MapTransaction
         image = cv2_utils.read_image(str(path)) if path.is_file() else None
         if image is None: raise ValueError("所选区域缺少地图资料，暂时不能编辑路线。")
         if image.shape[0] * image.shape[1] > 64_000_000: raise ValueError("地图像素过多。")
-        rows = YamlOperator(str(icon_path)).data
+        raw = MapTransaction(self.root).read(icon_path)
+        try:
+            rows = yaml_utils.safe_load(raw) if raw is not None else None
+        except yaml.YAMLError as exc:
+            raise ValueError("地图图标数据不完整。") from exc
         if not isinstance(rows, list): raise ValueError("地图图标数据不完整。")
         icons = [WorldPatrolLargeMapIcon(**row) for row in rows]
         return WorldPatrolLargeMap(area_id, image, icons)

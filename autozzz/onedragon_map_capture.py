@@ -32,3 +32,15 @@ class MapCaptureJob(RouteCaptureJob):
 
     def status(self,job_id):
         return dict(super().status(job_id),kind='map',draft_id=self.draft_id,draft_version=self.draft_version)
+
+    def result_for(self, data, value):
+        with self.lock:
+            # Older callers return the preview itself. Accept it only when it is
+            # identical to this job's server-side result and passes the same checks.
+            matches = value == self.job_id if isinstance(value, str) else isinstance(value, dict) and value == self.result
+            if self.busy or self.state != 'success' or not matches or self.result is None:
+                raise ValueError('取景结果已失效，请重新取景。')
+            if (data['draft_id'], data['version']) != (self.draft_id, self.draft_version):
+                raise ValueError('取景后地图草稿已变化，请重新取景。')
+            self.origin.require_current(self.service)
+            return self.result, self.origin
