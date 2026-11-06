@@ -1,7 +1,9 @@
 import ctypes as C
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
@@ -77,6 +79,42 @@ class ScheduledRuntimeTests(unittest.TestCase):
         path=Path(result['record']);before=path.read_bytes()
         self.assertEqual(json.loads(before)['state'],'success');self.assertEqual(self.run_job(execute)['state'],'duplicate')
         self.assertEqual(execute.call_count,1);self.assertEqual(path.read_bytes(),before)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows record sharing')
+    def test_history_read_does_not_abort_scheduled_run(self):
+        folder = self.store.path.parent / 'runs' / self.plan.id / uuid.UUID(self.instance).hex
+        path = folder / 'record.json'
+        original_replace = os.replace
+        denied = []
+        executor = Mock(return_value=dict(state='success', report='fixture'))
+        with contextlib.ExitStack() as history:
+            def desktop_check():
+                reader = history.enter_context(path.open(encoding='utf-8'))
+                self.assertEqual(json.load(reader)['state'], 'starting')
+                return True
+
+            def replace_record(source, target):
+                try:
+                    return original_replace(source, target)
+                except PermissionError as exc:
+                    denied.append(exc.winerror)
+                    history.close()
+                    raise
+
+            with patch('autozzz.schedule_runtime.os.replace', side_effect=replace_record):
+                result = run_scheduled(self.plan.id, self.store.path, self.plan.fingerprint, root=self.root,
+                                       manager_factory=lambda _: self.manager, execute_task=executor,
+                                       check_desktop=desktop_check)
+
+        self.assertEqual(len(denied), 1)
+        self.assertIn(denied[0], (5, 32))
+        self.assertEqual(result['state'], 'success')
+        before = path.read_bytes()
+        self.assertEqual(json.loads(before)['state'], 'success')
+        self.assertEqual(self.run_job(executor)['state'], 'duplicate')
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(list(folder.glob('*.tmp')))
+        executor.assert_called_once()
 
     def test_stale_disabled_or_changed_system_task_never_starts_executor(self):
         execute=Mock();self.matches=False

@@ -59,8 +59,19 @@ def process_identity() -> dict:
 def write_record(path: Path,value: dict) -> None:
     temporary=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
     try:
-        temporary.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8');os.replace(temporary,path)
-    finally:temporary.unlink(missing_ok=True)
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+        # A short Windows history read can hold the destination open across a replace.
+        deadline = time.monotonic() + .5
+        while True:
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError as exc:
+                if getattr(exc, 'winerror', None) not in (5, 32) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.025)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def execute(plan,review,stop,emit,report_root):
