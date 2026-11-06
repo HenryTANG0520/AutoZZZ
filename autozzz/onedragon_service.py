@@ -85,6 +85,8 @@ class OneDragonService:
         ctx=ManagedZContext();ctx.plugin_run_lease=self._run_lease
         ctx.autozzz_runtime_revision=self.runtime_revision
         ctx.autozzz_runtime_guard=self.runtime_guard.check_execution
+        from .onedragon_audio import install_audio_dodge
+        install_audio_dodge(ctx,self.runtime_revision)
         ctx.register_application_factory();self._ctx=ctx
         return ctx
 
