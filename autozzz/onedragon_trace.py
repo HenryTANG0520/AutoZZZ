@@ -42,6 +42,7 @@ class TraceRuntime:
         self.ctx=ctx;self.bus=ctx.debug_trace_bus;self.lock=threading.RLock()
         self.closed=False;self.enabled=False;self.epoch=None;self.generation=0;self.discarded=0
         self.originals={}
+        self.boss_timing=None
         self.bus.enabled=False;self.bus.clear()
         from .trace_auto_capture import AutomaticOverlayCapture
         self.automatic_capture=AutomaticOverlayCapture(self)
@@ -69,14 +70,28 @@ class TraceRuntime:
                     original(item)
         return publish
 
-    def configure(self,enabled,clear=False):
-        if type(enabled)is not bool or type(clear)is not bool:raise ValueError('追踪开关须为布尔值。')
+    def configure(self,enabled,clear=False,*,boss_timing=False,execution=None):
+        if any(type(value) is not bool for value in (enabled,clear,boss_timing)):
+            raise ValueError('追踪开关须为布尔值。')
         control=self._control()
+        if boss_timing and (not enabled or execution is None or execution.ctx is not self.ctx or execution.control is not control):
+            raise ValueError('首领时序需要开启追踪并先初始化同一工作进程的执行环境。')
+        if boss_timing:
+            from .onedragon_boss_timing import BossTimingTrace
+            timing=BossTimingTrace(self,execution.battle_control)
         with control.lock if control is not None else nullcontext():
             with self.lock:
                 if self.closed:raise RuntimeError('追踪连接已关闭。')
                 self._sync(control)
-                if clear or self.enabled!=enabled:self.generation+=1;self.bus.clear()
+                timing_changed=boss_timing!=(self.boss_timing is not None)
+                if timing_changed:
+                    if boss_timing:
+                        timing.install()
+                        self.boss_timing=timing
+                    else:
+                        self.boss_timing.close()
+                        self.boss_timing=None
+                if clear or self.enabled!=enabled or timing_changed:self.generation+=1;self.bus.clear()
                 self.enabled=enabled;self.bus.enabled=enabled
                 return dict(enabled=enabled,generation=self.generation,epoch=self.epoch)
 
@@ -139,6 +154,9 @@ class TraceRuntime:
     def close(self):
         with self.lock:
             self.closed=True;self.enabled=False;self.bus.enabled=False;self.bus.clear()
+            if self.boss_timing is not None:
+                self.boss_timing.close()
+                self.boss_timing=None
             for name,original in self.originals.items():setattr(self.bus,name,original)
             self.originals.clear()
             self.automatic_capture.close()

@@ -141,7 +141,8 @@ class OneDragonService:
     def pip_activate(self,epoch):return self.pip_service.activate(epoch)
     def pip_stop(self):return self.pip_service.stop()
 
-    def trace_configure(self,enabled,clear=False):return self.ctx.debug_trace_runtime.configure(enabled,clear)
+    def trace_configure(self,enabled,clear=False,*,boss_timing=False):
+        return self.ctx.debug_trace_runtime.configure(enabled,clear,boss_timing=boss_timing,execution=self._execution)
     def trace_snapshot(self):return self.ctx.debug_trace_runtime.snapshot()
     @property
     def global_capture(self):

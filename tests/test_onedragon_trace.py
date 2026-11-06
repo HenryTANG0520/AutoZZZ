@@ -1,10 +1,11 @@
 from collections import deque
+from contextvars import ContextVar
 import json
 import threading
 import time
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 
 from autozzz.onedragon_control import ExecutionControl,WindowState
 from autozzz.onedragon_trace import TraceRuntime,KINDS,plain_debug
@@ -75,6 +76,31 @@ class TraceTests(unittest.TestCase):
         for value in ('true',1,None):
             with self.assertRaises(ValueError):self.trace.configure(value)
 
+    def test_boss_timing_hooks_are_explicit_and_restored_on_disable(self):
+        from autozzz.onedragon_boss_timing import BossTimingTrace
+
+        original=Mock()
+        guard=NS(_observe_hud=original)
+        execution=NS(ctx=self.ctx,control=self.control,battle_control=guard)
+        timing=BossTimingTrace.__new__(BossTimingTrace)
+        timing.hooks=[]
+        timing.install=lambda:timing._hook(guard,'_observe_hud',timing._hud)
+        with patch('autozzz.onedragon_boss_timing.BossTimingTrace',return_value=timing) as create:
+            regular=self.trace.configure(True)
+            create.assert_not_called()
+            self.assertIs(guard._observe_hud,original)
+            enabled=self.trace.configure(True,boss_timing=True,execution=execution)
+            self.assertIsNot(guard._observe_hud,original)
+            self.assertGreater(enabled['generation'],regular['generation'])
+            self.assertTrue(self.trace.configure(True)['enabled'])
+            self.assertIs(guard._observe_hud,original)
+            self.bus.add_timeline(item('timeline'))
+            self.assertEqual(len(self.trace.snapshot()['items']['timeline']),1)
+            self.trace.configure(True,boss_timing=True,execution=execution)
+            self.assertFalse(self.trace.configure(False)['enabled'])
+            self.assertIs(guard._observe_hud,original)
+            self.assertFalse(timing.hooks)
+
     def test_epoch_change_during_serialization_discards_entire_old_snapshot(self):
         self.trace.configure(True);self.bus.add_vision(item('vision'));original=self.trace._record
         def record(*args):
@@ -99,6 +125,78 @@ class TraceTests(unittest.TestCase):
         hidden=[];view=NS(overlay=NS(enabled=True,hide=lambda:hidden.append(True)),cover=NS(get=lambda:False),
                           font_size=NS(get=lambda:'invalid'),opacity=NS(get=lambda:'85'),layers={},sources={},status=NS(set=lambda _:None))
         self.assertFalse(TraceWindow.overlay_options(view));self.assertFalse(view.overlay.enabled);self.assertEqual(hidden,[True])
+
+
+class BossTimingFailureTests(unittest.TestCase):
+    class Incomplete:
+        def __init__(self,**values):
+            self.__dict__.update(values)
+            self.failed_reads=[]
+
+        def __getattr__(self,name):
+            self.failed_reads.append(name)
+            raise RuntimeError('Diagnostic metadata is no longer available')
+
+    def setUp(self):
+        from autozzz.onedragon_boss_timing import BossTimingTrace
+
+        self.timing=BossTimingTrace.__new__(BossTimingTrace)
+        for name in ('round','task','atom'):
+            setattr(self.timing,name,ContextVar(name,default=None))
+
+    def assert_native_unchanged(self,hook,args,result):
+        native=Mock(return_value=result)
+        self.assertIs(hook(native,*args),result)
+        native.assert_called_once_with(*args)
+        failure=ValueError('Native error')
+        native=Mock(side_effect=failure)
+        with self.assertRaises(ValueError) as raised:
+            hook(native,*args)
+        self.assertIs(raised.exception,failure)
+        native.assert_called_once_with(*args)
+
+    def test_diagnostic_metadata_failures_preserve_each_native_call(self):
+        timing=self.timing
+        result,screen=object(),object()
+        with self.subTest(hook='round'):
+            incomplete=self.Incomplete()
+            self.assert_native_unchanged(timing._round,(incomplete,),result)
+            self.assertEqual(incomplete.failed_reads,['_current_node']*2)
+
+        with self.subTest(hook='hud'):
+            operation=NS(last_screenshot=screen,last_screenshot_time=1)
+            timing.round.set(NS(operation=lambda:operation,thread=threading.get_ident(),origin=None))
+            hud=self.Incomplete()
+            self.assert_native_unchanged(timing._hud,(object(),screen,1),hud)
+            self.assertEqual(hud.failed_reads,['normal_available'])
+
+        button=self.Incomplete()
+        executor=NS(_current_op=button,op_list=[button])
+        with self.subTest(hook='submit'):
+            info=self.Incomplete(op_list=executor.op_list,trigger='按键禁用-终结技')
+            operator=NS(current_execution_info=info,running_executor=executor)
+            timing.runtime=NS(ctx=NS(auto_battle_context=NS(auto_op=operator)))
+            timing.round.set(NS(origin=(1,1,{})))
+            self.assert_native_unchanged(timing._submit,(executor,),result)
+            self.assertEqual(info.failed_reads,['state_list']*2)
+            self.assertIsNone(timing.task.get())
+
+        with self.subTest(hook='atomic'):
+            timing.task.set(NS(executor=executor,number=1,origin=(1,1,{})))
+            timing.atom_kinds={type(button):'button'}
+            self.assert_native_unchanged(timing._atomic,(button,),result)
+            self.assertEqual(button.failed_reads,['btn_name']*2)
+            self.assertIsNone(timing.atom.get())
+
+    def test_timing_clock_failure_preserves_the_existing_input_callback(self):
+        self.timing.atom.set((NS(origin=(1,1,{}),number=1),0))
+        result=object()
+        action=Mock(return_value=result)
+        guarded_input=Mock(side_effect=lambda callback:callback())
+        with patch('autozzz.onedragon_boss_timing.perf_counter',side_effect=RuntimeError('Clock unavailable')):
+            self.assertIs(self.timing._input(guarded_input,action),result)
+        guarded_input.assert_called_once()
+        action.assert_called_once_with()
 
 
 class SubscriptionTests(unittest.TestCase):
