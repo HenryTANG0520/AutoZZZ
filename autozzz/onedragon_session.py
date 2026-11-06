@@ -47,8 +47,14 @@ class RuntimeSession:
     def trace(self,enabled,clear=False,*,capture=False):return self.trace_subscription.configure(enabled,clear,capture=capture)
     def take_trace(self):return self.trace_subscription.take()
 
+    def _is_control_connection(self):
+        paths = getattr(self, 'paths', None)
+        return getattr(paths, 'program_control', False) or getattr(paths, 'sdk_control', False)
+
     def stop(self):
         self.stop_requested.set()
+        if self._is_control_connection():
+            return
         client=getattr(self,'_handoff_client',None)
         if client is not None:
             self._stopped_handoff=client
@@ -384,7 +390,7 @@ class RuntimeSession:
                             except Exception as exc:
                                 self.emit(dict(type='log',message='MCP收尾事件未完成：'+str(exc)));break
                             if self.phase:self.closing.wait(.02)
-                    if not getattr(self.paths,'program_control',False):
+                    if not self._is_control_connection():
                         try:self._call(client,"stop_execution")
                         except Exception as exc:self.emit(dict(type="log",message=str(exc)))
                 while client is not None:

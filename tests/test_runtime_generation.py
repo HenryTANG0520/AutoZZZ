@@ -86,6 +86,30 @@ class RuntimeGenerationTests(unittest.TestCase):
             with self.subTest(method=method), self.assertRaisesRegex(RuntimeError, '仅提供程序更新操作'):
                 validate_worker_request(service, method, program_control=True)
 
+    def test_retained_worker_excludes_release_and_sdk_control_requests(self):
+        from autozzz.runtime_generation import PROGRAM_UPDATE_METHODS, SDK_CONTROL_METHODS
+
+        service = NS(runtime_guard=RuntimeGeneration(self.data, '-'), _rotation_sealed=False, _rotation_guard=None)
+        for method in PROGRAM_UPDATE_METHODS | SDK_CONTROL_METHODS:
+            with self.subTest(method=method), self.assertRaisesRegex(RuntimeError, '不提供程序更新与 SDK 管理'):
+                validate_worker_request(service, method, retain_host=True)
+        validate_worker_request(service, 'execution_status', retain_host=True)
+
+    def test_control_session_close_does_not_enqueue_execution_stop(self):
+        from threading import Event
+        from autozzz.onedragon_session import RuntimeSession
+
+        for mode in ('program_control','sdk_control'):
+            with self.subTest(mode=mode):
+                session = RuntimeSession.__new__(RuntimeSession)
+                session.paths = NS(**{mode:True})
+                session.stop_requested = Event()
+                session.closing = Event()
+                session.send = Mock()
+                session.close()
+                self.assertTrue(session.closing.is_set())
+                session.send.assert_not_called()
+
     def test_program_control_prepare_skips_old_profile_initialization(self):
         paths = RuntimePaths.discover_program_control(self.data, 'cn')
         self.assertIn('--program-control', paths.identity_arguments())

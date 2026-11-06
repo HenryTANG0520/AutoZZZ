@@ -69,7 +69,9 @@ def verify_stable_control(args, *, program=False):
     raise ValueError(name+' 控制连接的源码、解释器或区服目录与稳定发行不符。')
 
 
-def validate_worker_request(service,method,*,sdk_control=False,program_control=False):
+def validate_worker_request(service,method,*,sdk_control=False,program_control=False,retain_host=False):
+    if retain_host and (method in PROGRAM_UPDATE_METHODS or method in SDK_CONTROL_METHODS):
+        raise RuntimeError('原宿主失联保护模式不提供程序更新与 SDK 管理。')
     if program_control and method != 'hello' and method not in PROGRAM_UPDATE_METHODS:
         raise RuntimeError('程序版本控制连接仅提供程序更新操作。')
     if sdk_control and method!='hello' and method not in SDK_CONTROL_METHODS:
@@ -178,7 +180,8 @@ def main() -> int:
                             raise RuntimeError('原宿主失联保护模式未开放此操作。')
                         if method in ('prepare_application', 'start_application') and request['params'].get('app_id') != 'charge_plan':
                             raise ValueError('原宿主失联保护模式只允许准备或启动体力刷本。')
-                validate_worker_request(service,method,sdk_control=args.sdk_control,program_control=args.program_control)
+                validate_worker_request(service,method,sdk_control=args.sdk_control,program_control=args.program_control,
+                                        retain_host=owner is not None)
                 if method == "hello":
                     result = dict(protocol=PROTOCOL_VERSION, revision=actual_revision,
                                   python=sys.version.split()[0], pid=os.getpid(), input_enabled=False,task_lease=run_lease is not None)
