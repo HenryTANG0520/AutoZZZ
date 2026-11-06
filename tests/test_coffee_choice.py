@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from autozzz.coffee_choice import choose_coffee
+from autozzz.coffee_choice import choose_coffee, configured_coffee
 
 
 class CoffeeChoiceTests(unittest.TestCase):
@@ -15,6 +15,15 @@ class CoffeeChoiceTests(unittest.TestCase):
     def test_completed_or_skipped_simulation_does_not_select_sixty(self):
         for extra in (dict(plan_times=1, run_times=1), dict(skipped=True)):
             self.assertEqual(choose_coffee([dict(category_name='实战模拟室', **extra)]), '汀曼特调')
+
+    def test_native_coffee_ignores_skip_from_previous_run_without_changing_plan(self):
+        plan = SimpleNamespace(category_name='实战模拟室', plan_times=1, run_times=0, skipped=True)
+        config = SimpleNamespace(plan_list=[plan], loop=False)
+
+        self.assertEqual(configured_coffee(config, SimpleNamespace()), '鲜萃红茶')
+        self.assertTrue(plan.skipped)
+        plan.run_times = 1
+        self.assertEqual(configured_coffee(config, SimpleNamespace()), '汀曼特调')
 
     def test_new_game_day_projects_reset_without_changing_progress(self):
         plan = SimpleNamespace(category_name='实战模拟室', plan_times=1, run_times=1)

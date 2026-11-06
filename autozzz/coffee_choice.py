@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 
-def choose_coffee(plans, loop=False, *, reset_due=False):
+def choose_coffee(plans, loop=False, *, reset_due=False, ignore_runtime_skip=False):
     for plan in plans:
         get = plan.get if isinstance(plan, dict) else lambda key, default=None: getattr(plan, key, default)
         if (get('category_name') == '实战模拟室'
                 and get('plan_times', 1) > 0
                 and (loop or get('plan_times', 1) > (0 if reset_due else get('run_times', 0)))
-                and not get('skipped', False)):
+                and (ignore_runtime_skip or not get('skipped', False))):
             return '鲜萃红茶'
     return '汀曼特调'
 
@@ -20,7 +20,8 @@ def configured_coffee(config, account):
 
         # Use the same refresh day as ChargePlanRunRecord, without resetting progress here.
         reset_due = config.last_daily_reset_dt != os_utils.get_dt(account.game_refresh_hour_offset)
-    return choose_coffee(config.plan_list, config.loop, reset_due=reset_due)
+    # A new ChargePlanApp run clears all in-memory skips from its previous run.
+    return choose_coffee(config.plan_list, config.loop, reset_due=reset_due, ignore_runtime_skip=True)
 
 
 def saved_coffee(root, server):
