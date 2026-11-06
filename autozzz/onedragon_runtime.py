@@ -1,6 +1,7 @@
 """固定版本一条龙的独立运行环境和本机进程通信。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 import ctypes
 import json
@@ -222,9 +223,26 @@ class _Reply:
 
 class OneDragonClient:
     """保留原请求的客户端；超时不重启、不重发。"""
-    def __init__(self, paths: RuntimePaths, log: Callable[[str], None] | None = None,run_lease=None):
+    def __init__(self, paths: RuntimePaths, log: Callable[[str], None] | None = None,run_lease=None,
+                 *, retain_on_host_loss: bool = False, recovery_scope: str | None = None,
+                 trusted_handoff: str | None = None):
+        if type(retain_on_host_loss) is not bool:
+            raise ValueError('保留原宿主任务的开关必须为布尔值。')
+        if retain_on_host_loss and (os.name != 'nt' or run_lease is not None or paths.management_only):
+            raise ValueError('当前工作进程不能保留原宿主失联的任务。')
+        if (recovery_scope is None) != (trusted_handoff is None):
+            raise ValueError('本机恢复需要独立可信启动方。')
+        if recovery_scope is not None:
+            if not retain_on_host_loss:
+                raise ValueError('恢复通道需要启用原宿主失联保护。')
+            from .recovery_discovery import validate_recovery_scope
+            validate_recovery_scope(recovery_scope)
         self.paths, self.log = paths, log
         self.run_lease=run_lease
+        self._retain_on_host_loss = retain_on_host_loss
+        self._recovery_scope = recovery_scope
+        self._trusted_handoff = trusted_handoff
+        self._host_owner = None
         self.process: subprocess.Popen | None = None
         self._replies: dict[str, _Reply] = {}
         self._lock = threading.RLock()
@@ -269,12 +287,31 @@ class OneDragonClient:
             # 独立解释器只通过明确的模块路径加载桥接代码。
             package_root = self.paths.bridge_root
             environment["PYTHONPATH"] = str(package_root)
-            self.process = subprocess.Popen(
-                [str(self.paths.python), "-s", "-P", "-u", "-m", "autozzz.onedragon_worker",
-                 "--source", str(self.paths.source.resolve()), "--data", str(self.paths.data.resolve()),*self.paths.identity_arguments()],
-                cwd=package_root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            command = [str(self.paths.python), "-s", "-P", "-u", "-m", "autozzz.onedragon_worker",
+                       "--source", str(self.paths.source.resolve()), "--data", str(self.paths.data.resolve()),
+                       *self.paths.identity_arguments()]
+            try:
+                inherited = nullcontext(None)
+                if self._retain_on_host_loss:
+                    from .worker_host import HostLossOwner
+                    self._host_owner = HostLossOwner()
+                    command.extend(("--retain-host-owner", self._host_owner.descriptor()))
+                    if self._recovery_scope is not None:
+                        command.extend(("--recovery-scope", self._recovery_scope))
+                        from .trusted_handoff import forward_to_worker
+                        command.extend(("--trusted-handoff", self._trusted_handoff))
+                        inherited = forward_to_worker(self._trusted_handoff)
+                with inherited as startup:
+                    options = {} if startup is None else dict(startupinfo=startup, close_fds=True)
+                    self.process = subprocess.Popen(
+                        command, cwd=package_root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), **options,
+                    )
+            except BaseException:
+                if self._host_owner is not None:
+                    self._host_owner.close()
+                    self._host_owner = None
+                raise
             self._reader = threading.Thread(target=self._read, name="AutoZZZ-OneDragon-Responses", daemon=True)
             self._logger = threading.Thread(target=self._logs, name="AutoZZZ-OneDragon-Logs", daemon=True)
             self._reader.start()
@@ -299,6 +336,13 @@ class OneDragonClient:
         if self.run_lease is not None and hello.get("task_lease") is not True:
             self.close()
             raise RuntimeUnavailable("工作进程未确认轮换任务锁，不能开始执行。")
+        if self._retain_on_host_loss and hello.get("recovery_host") is not True:
+            self.close()
+            raise RuntimeUnavailable("工作进程未核实原 SDK 宿主，不能开始执行。")
+        if (self._recovery_scope is not None
+                and (hello.get("recovery_channel") is not True or hello.get("trusted_handoff") is not True)):
+            self.close()
+            raise RuntimeUnavailable("原工作进程不支持受保护的恢复通道。")
         self.worker_pid = hello.get("pid")
         if os.name == "nt":
             if type(self.worker_pid) is not int or self.worker_pid <= 0:
@@ -317,12 +361,41 @@ class OneDragonClient:
         self._hello=hello
         return hello
 
+    def handoff_worker_identity(self) -> tuple[int, int]:
+        """Return the exact started SDK process, independently of discovery."""
+        from .task_lease import _created
+        from .worker_host import _ancestor_of, _kernel
+
+        with self._lock:
+            if self._trusted_handoff is None or self._hello is None or not self.alive:
+                raise RuntimeUnavailable('未确认支持可信交接的原 SDK worker。')
+            kernel = _kernel()
+            created = _created(kernel, self._worker_handle)
+            launched = self.process
+            if launched.poll() is not None:
+                raise RuntimeUnavailable('原 SDK 启动进程已退出。')
+            launch_created = _created(kernel, int(launched._handle))
+            if ((self.worker_pid == launched.pid and created != launch_created)
+                    or (self.worker_pid != launched.pid
+                        and not _ancestor_of(kernel, launched.pid, launch_created, self.worker_pid, created))):
+                raise RuntimeUnavailable('原 SDK worker 不属于当前启动进程。')
+            return self.worker_pid, created
+
+    def signal_host_stop(self) -> None:
+        """Deliver UI stop intent even if the session thread is inside an RPC."""
+        owner = self._host_owner
+        if owner is not None:
+            owner.signal_stop()
+
     def submit(self, method: str, **params: Any) -> str:
         request_id = uuid.uuid4().hex
         payload = (json.dumps({"id": request_id, "method": method, "params": params},
                               ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         if len(payload) > MAX_MESSAGE_BYTES:
             raise ValueError("一条龙请求过大。")
+        owner = self._host_owner
+        if method == 'stop_execution' and owner is not None:
+            owner.signal_stop()
         with self._write_lock:
             with self._lock:
                 if self._closed or self._terminal_error or not self.alive:
@@ -399,7 +472,13 @@ class OneDragonClient:
 
     def close(self, timeout: float = 10) -> None:
         deadline = time.monotonic() + timeout
-        with self._write_lock:
+        owner = self._host_owner
+        if owner is not None:
+            owner.signal_close()
+        lock_timeout = max(0.0, deadline - time.monotonic()) if self._retain_on_host_loss else -1
+        if not self._write_lock.acquire(timeout=lock_timeout):
+            raise RequestPending("process-write-shutdown")
+        try:
             if self.process is None:
                 return
             if not self._closed:
@@ -408,10 +487,14 @@ class OneDragonClient:
                     self.process.stdin.close()
                 except (OSError, ValueError):
                     pass
+        finally:
+            self._write_lock.release()
         try:
-            self.process.wait(timeout)
+            process_timeout = max(0.0, deadline - time.monotonic()) if self._retain_on_host_loss else timeout
+            self.process.wait(process_timeout)
         except subprocess.TimeoutExpired as exc:
             raise RequestPending("process-shutdown") from exc
+        known_exit = True
         if self._worker_handle is not None:
             waited = self._kernel.WaitForSingleObject(self._worker_handle, max(0, round((deadline-time.monotonic())*1000)))
             if waited == 258:
@@ -422,9 +505,13 @@ class OneDragonClient:
             known_exit = self._kernel.GetExitCodeProcess(self._worker_handle, ctypes.byref(exit_code))
             self._kernel.CloseHandle(self._worker_handle)
             self._worker_handle = None
-            if not known_exit:
-                raise RuntimeUnavailable("无法读取一条龙实际工作进程的退出码。")
-            self.worker_exit_code = exit_code.value
+            if known_exit:
+                self.worker_exit_code = exit_code.value
+        if owner is not None:
+            owner.close()
+            self._host_owner = None
+        if not known_exit:
+            raise RuntimeUnavailable("无法读取一条龙实际工作进程的退出码。")
         for thread in (self._reader, self._logger):
             if thread:
                 thread.join(timeout=1)

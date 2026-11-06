@@ -66,14 +66,28 @@ class ExecutionControl:
         self.geometry: tuple[int, int, int, int] | None = None
         self.manual_paused = self.focus_waiting = self.stopped = False
         self.backend_paused = False
+        self._recovery_blocked = False
+        self._recovery_continuing = False
         self.error = ""
         self.changed = threading.Event()
         self.input_validator: Callable[[], None] | None = None
+        self.capture_observer: Callable[[Callable[[], Any]], Any] | None = None
+        self.recovery_window_invalid: Callable[[], None] | None = None
 
     @property
     def task_epoch(self) -> int:
         value = _observation_epoch.get()
         return self.epoch if value is None else value
+
+    @property
+    def recovery_blocked(self) -> bool:
+        with self.lock:
+            return self._recovery_blocked
+
+    @property
+    def recovery_continuing(self) -> bool:
+        with self.lock:
+            return self._recovery_continuing
 
     @contextmanager
     def scope(self, epoch: int | None = None) -> Iterator[None]:
@@ -91,7 +105,7 @@ class ExecutionControl:
         self.changed.set()
 
     def _apply_pause(self) -> None:
-        desired = self.manual_paused or self.focus_waiting
+        desired = self.manual_paused or self.focus_waiting or self._recovery_blocked
         if desired and not self.backend_paused:
             try:
                 self.release()
@@ -116,6 +130,12 @@ class ExecutionControl:
                 else:
                     if not state.valid:
                         self.stop(state.reason or "游戏窗口已关闭或身份发生变化。")
+                    elif self._recovery_blocked or self._recovery_continuing:
+                        if not state.focused or (self.geometry is not None and state.geometry != self.geometry):
+                            if self.recovery_window_invalid is not None:
+                                self.recovery_window_invalid()
+                            if self._recovery_continuing:
+                                self.stop("续接期间失去原窗口焦点或客户区发生变化。")
                     else:
                         with self.lock:
                             geometry_changed = state.geometry is not None and self.geometry != state.geometry
@@ -135,7 +155,7 @@ class ExecutionControl:
 
     def set_manual_pause(self, paused: bool) -> dict:
         with self._transitions:
-            if self.stopped:
+            if self.stopped or self._recovery_blocked or self._recovery_continuing:
                 return self.status()
             with self.lock:
                 if self.manual_paused != paused:
@@ -147,13 +167,56 @@ class ExecutionControl:
     def toggle_pause(self) -> dict:
         return self.set_manual_pause(not self.manual_paused)
 
+    def block_for_recovery(self) -> dict:
+        """冻结原任务的观察和输入，保留原任务供停止和核对。"""
+        with self._transitions:
+            with self.lock:
+                if self._recovery_blocked:
+                    return self.status()
+                self._recovery_blocked = True
+                self._invalidate()
+            if not self.stopped:
+                try:
+                    self.release()
+                    if not self.backend_paused:
+                        self.backend_paused = self.pause_backend() is not False
+                    if not self.backend_paused:
+                        raise RuntimeError("未确认原任务已暂停。")
+                except Exception as exc:
+                    try:
+                        self.stop(f"恢复阻塞清理失败：{exc}")
+                    except RuntimeError:
+                        pass  # stop 已禁止输入并记录错误。
+            return self.status()
+
     def reset(self) -> None:
         """实际结束上一运行后调用；代次继续增长，旧异步任务不会重新有效。"""
         with self._transitions, self.lock:
+            if self._recovery_blocked or self._recovery_continuing:
+                raise RuntimeError("原任务已因恢复核对阻塞，不能重置。")
             self.manual_paused = self.focus_waiting = self.backend_paused = self.stopped = False
             self.error = ""
             self._invalidate()
             self.run_epoch = self.epoch
+
+    def continue_recovery(self, epoch: int, authorize: Callable[[], bool]) -> bool:
+        """Allow the original SDK to acquire a new frame. Device input has a separate gate."""
+        with self._transitions:
+            self.poll()
+            with self.lock:
+                if (self.stopped or not self._recovery_blocked or self._recovery_continuing
+                        or not self.backend_paused or self.manual_paused or self.focus_waiting
+                        or self.epoch != epoch or not authorize()):
+                    return False
+                self._invalidate()
+                self._recovery_blocked = self.backend_paused = False
+                self._recovery_continuing = True
+            try:
+                self.resume_backend()
+            except Exception:
+                self.stop("原 SDK 续接未完成。")
+                return False
+            return not self.stopped
 
     def stop(self, error: str = "") -> dict:
         with self._transitions:
@@ -177,16 +240,28 @@ class ExecutionControl:
 
     def status(self) -> dict:
         with self.lock:
-            state = "stopped" if self.stopped else "paused" if self.manual_paused else "focus_wait" if self.focus_waiting else "running"
-            return dict(state=state, manual_paused=self.manual_paused, focus_waiting=self.focus_waiting,
-                        observation_epoch=self.epoch, fresh_frame=self.observed_epoch == self.epoch,
-                        error=self.error)
+            if self.stopped:
+                state = "stopped"
+            elif self._recovery_blocked:
+                state = "recovery_blocked"
+            else:
+                state = "paused" if self.manual_paused else "focus_wait" if self.focus_waiting else "running"
+            result = dict(state=state, manual_paused=self.manual_paused, focus_waiting=self.focus_waiting,
+                          observation_epoch=self.epoch, fresh_frame=self.observed_epoch == self.epoch,
+                          error=self.error)
+            if self._recovery_blocked:
+                result["recovery_blocked"] = True
+            if self._recovery_continuing:
+                result["recovery_continuing"] = True
+            return result
 
     def checkpoint(self, *, require_frame: bool = False) -> None:
         self.poll()
         with self.lock:
             if self.stopped:
                 raise ExecutionStopped(self.error or "已停止。")
+            if self._recovery_blocked:
+                raise ObservationExpired("原任务已因恢复核对阻塞。")
             if self.manual_paused or self.focus_waiting:
                 raise ObservationExpired("等待解除暂停或游戏恢复焦点。")
             if self.task_epoch != self.epoch:
@@ -200,14 +275,16 @@ class ExecutionControl:
         if managed:
             with self.lock:
                 epoch = self.epoch
-                if self.stopped or self.manual_paused or self.focus_waiting or self.task_epoch != epoch:
+                if (self.stopped or self._recovery_blocked or self.manual_paused or self.focus_waiting
+                        or self.task_epoch != epoch):
                     raise ObservationExpired("截图开始前状态发生变化。")
                 self._capture_sequence += 1
                 sequence = self._capture_sequence
                 started = time.perf_counter()
                 self.capture_receipt = None
                 self.capture_changed.notify_all()
-        result = capture()
+        observer = self.capture_observer
+        result = capture() if observer is None else observer(capture)
         if managed:
             finished = time.perf_counter()
         self.checkpoint()
@@ -224,6 +301,11 @@ class ExecutionControl:
     def discard_frame(self) -> None:
         """截图失效时松键并换代；重新建立条件执行器后仍须取得新图。"""
         with self._transitions:
+            if self._recovery_blocked:
+                return
+            if self._recovery_continuing:
+                self.stop("续接期间截图失效。")
+                return
             with self.lock:self._invalidate()
             self.release()
             if self.stopped:return
@@ -235,7 +317,8 @@ class ExecutionControl:
         self.checkpoint(require_frame=True)
         with self.lock:
             # 短小的物理输入与代次变更互斥，不能在检查后由另一线程恢复旧输入。
-            if self.stopped or self.manual_paused or self.focus_waiting or self.task_epoch != self.epoch:
+            if (self.stopped or self._recovery_blocked or self.manual_paused or self.focus_waiting
+                    or self.task_epoch != self.epoch):
                 raise ObservationExpired("输入前状态发生变化。")
             if self.input_validator is not None:self.input_validator()
             return action()
@@ -247,14 +330,15 @@ class ExecutionControl:
         while time.monotonic() < deadline:
             self.poll()
             with self.lock:
-                if self.stopped or self.manual_paused or self.focus_waiting or epoch != self.epoch:
+                if self.stopped or self._recovery_blocked or self.manual_paused or self.focus_waiting or epoch != self.epoch:
                     return False
                 if self.input_validator is not None:
                     try:self.input_validator()
                     except ObservationExpired:return False
             self.changed.wait(min(.01, max(0, deadline - time.monotonic())))
             self.changed.clear()
-        return True
+        with self.lock:
+            return not self._recovery_blocked
 
 
 class UpstreamControlAdapter:
@@ -297,9 +381,10 @@ class UpstreamControlAdapter:
                 return operation.round_fail("任务已停止")
 
         def guarded_publish(service, records):
-            if (not control.stopped and not control.manual_paused and not control.focus_waiting
-                    and control.task_epoch == control.epoch):
-                return publish(service, records)
+            with control.lock:
+                if (not control.stopped and not control._recovery_blocked and not control.manual_paused
+                        and not control.focus_waiting and control.task_epoch == control.epoch):
+                    return publish(service, records)
             return None
 
         def scoped_callback(future, fn):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,11 @@ import sys
 
 from .onedragon_runtime import MAX_MESSAGE_BYTES, PROTOCOL_VERSION, UPSTREAM_REVISION, RuntimePaths
 from .runtime_generation import PROGRAM_UPDATE_METHODS, SDK_CONTROL_METHODS
+
+_HOST_LOSS_METHODS = frozenset({
+    'hello', 'catalog', 'initialize_execution', 'prepare_application', 'start_application',
+    'execution_status', 'pause_execution', 'stop_execution', 'game_launch_options',
+})
 
 
 def close_service(service):
@@ -92,6 +98,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--data", required=True, type=Path)
+    parser.add_argument("--retain-host-owner", help=argparse.SUPPRESS)
+    parser.add_argument("--recovery-scope", help=argparse.SUPPRESS)
+    parser.add_argument("--trusted-handoff", help=argparse.SUPPRESS)
     add_runtime_identity_arguments(parser)
     controls=parser.add_mutually_exclusive_group()
     controls.add_argument('--sdk-control',action='store_true')
@@ -101,26 +110,54 @@ def main() -> int:
     sys.stdout = sys.stderr
     service = None
     run_lease = None
+    owner = None
+    transport_ended = False
     try:
         if sys.version_info[:2] != (3, 11):
             raise RuntimeError("一条龙必须使用独立的 Python 3.11 环境。")
+        if args.management_only and any(value is not None for value in
+                                        (args.retain_host_owner, args.recovery_scope, args.trusted_handoff)):
+            raise ValueError('控制连接不允许保留失联任务。')
         program_profile=None
         if args.sdk_control:verify_stable_control(args)
         if args.program_control:program_profile=verify_stable_control(args,program=True)
+        if args.recovery_scope is not None and args.retain_host_owner is None:
+            raise ValueError('恢复通道需要原宿主失联保护。')
+        if (args.recovery_scope is None) != (args.trusted_handoff is None):
+            raise ValueError('本机恢复需要独立可信启动方。')
         actual_revision=verify_worker_identity(args)
         from .onedragon_service import METHODS, OneDragonService
         from .task_lease import JoinedRunLease, LEASE_ENV
         if args.program_control and LEASE_ENV in os.environ:
             raise ValueError('程序版本控制连接不能借用运行任务锁。')
         run_lease=JoinedRunLease.from_environment(program_update=args.sdk_control)
+        service_options = {}
+        if args.retain_host_owner is not None:
+            if os.name != 'nt' or run_lease is not None or args.management_only:
+                raise ValueError('当前工作进程不能保留原宿主失联的任务。')
+            from .worker_host import WorkerHost
+            owner = WorkerHost(args.retain_host_owner, recovery_scope=args.recovery_scope,
+                               trusted_handoff=args.trusted_handoff)
+            service_options['recovery_host'] = owner
         service = OneDragonService(args.source, args.data,run_lease=run_lease,
             runtime_revision=actual_revision,stable_data=args.stable_data,product_root=args.product_root,
-            runtime_generation=args.selection_generation,management_only=args.management_only)
+            runtime_generation=args.selection_generation,management_only=args.management_only,**service_options)
         if args.sdk_control:service._sdk_control_lease=run_lease
         if args.program_control:service._program_control_profile=program_profile
-        while True:
-            line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1)
+        if owner is not None:
+            owner.start(service)
+        stdio = owner.stdio if owner is not None else lambda: nullcontext(True)
+        while owner is None or owner.can_dispatch():
+            try:
+                with stdio() as connected:
+                    line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1) if connected else b""
+            except OSError:
+                if owner is None:
+                    raise
+                break
             if not line:
+                break
+            if owner is not None and not owner.can_dispatch():
                 break
             if len(line) > MAX_MESSAGE_BYTES or not line.endswith(b"\n"):
                 raise ValueError("请求过大或未完整结束。")
@@ -133,15 +170,31 @@ def main() -> int:
                 if not isinstance(request_id, str) or not isinstance(request["params"], dict):
                     raise ValueError("请求编号和参数无效。")
                 method = request["method"]
+                if owner is not None:
+                    if method == 'stop_execution':
+                        owner.prevent_retention()
+                    if args.trusted_handoff is None:
+                        if method not in _HOST_LOSS_METHODS:
+                            raise RuntimeError('原宿主失联保护模式未开放此操作。')
+                        if method in ('prepare_application', 'start_application') and request['params'].get('app_id') != 'charge_plan':
+                            raise ValueError('原宿主失联保护模式只允许准备或启动体力刷本。')
                 validate_worker_request(service,method,sdk_control=args.sdk_control,program_control=args.program_control)
                 if method == "hello":
                     result = dict(protocol=PROTOCOL_VERSION, revision=actual_revision,
                                   python=sys.version.split()[0], pid=os.getpid(), input_enabled=False,task_lease=run_lease is not None)
                     if args.program_control:result['program_control']=True
+                    if owner is not None:
+                        result['recovery_host'] = True
+                        if args.recovery_scope is not None:
+                            result['recovery_channel'] = True
+                            result['trusted_handoff'] = True
                 elif method in METHODS:
                     if method=='mcp_stop':result=getattr(service,method)(**request['params'])
                     else:
-                        with service._dispatch_lock:result = getattr(service, method)(**request["params"])
+                        with service._dispatch_lock:
+                            if owner is not None and not owner.can_dispatch():
+                                break
+                            result = getattr(service, method)(**request["params"])
                 else:
                     raise ValueError(f"未开放的一条龙方法：{method}")
                 response = dict(id=request_id, result=result)
@@ -150,13 +203,30 @@ def main() -> int:
                     raise ValueError("响应过大。")
             except Exception as exc:
                 encoded = json.dumps(dict(id=request_id, error=f"{type(exc).__name__}: {exc}"), ensure_ascii=False)
-            output.write(encoded + "\n")
-            output.flush()
+            try:
+                with stdio() as connected:
+                    if not connected:
+                        break
+                    output.write(encoded + "\n")
+                    output.flush()
+            except OSError:
+                if owner is None:
+                    raise
+                break
+        transport_ended = True
     finally:
         try:
-            if service:close_service(service)
+            try:
+                if owner is not None:
+                    owner.finish_transport(may_retain=transport_ended)
+            finally:
+                if service:close_service(service)
         finally:
-            if run_lease is not None:run_lease.close()
+            try:
+                if owner is not None:
+                    owner.close()
+            finally:
+                if run_lease is not None:run_lease.close()
     return 0
 
 

@@ -1,6 +1,7 @@
 """界面持有的一条龙进程会话；准备、运行、暂停和关闭使用同一连接。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import queue
 import json
 from datetime import datetime
@@ -13,8 +14,10 @@ from .onedragon_runtime import OneDragonClient,RequestPending,RuntimePaths
 
 
 class RuntimeSession:
-    def __init__(self,paths:RuntimePaths,emit:Callable[[dict],None],report_root:Path|None=None):
+    def __init__(self,paths:RuntimePaths,emit:Callable[[dict],None],report_root:Path|None=None,*,source_handoff=None):
         self.paths,self.emit=paths,emit
+        self.source_handoff=source_handoff
+        self._active_client=self._handoff_client=self._stopped_handoff=None
         from .onedragon_trace_session import TraceSubscription
         self.trace_subscription=TraceSubscription(emit)
         self.commands=queue.Queue()
@@ -46,6 +49,10 @@ class RuntimeSession:
 
     def stop(self):
         self.stop_requested.set()
+        client=getattr(self,'_handoff_client',None)
+        if client is not None:
+            self._stopped_handoff=client
+            client.signal_host_stop()
         if self.runner is not None:self.runner.stop()
         self.send("stop")
 
@@ -215,6 +222,10 @@ class RuntimeSession:
                     else self._call(client,"start_application",**params))
             self.phase="running"
             self.job_id=result["job_id"]
+            if client is not None and client is getattr(self, '_handoff_client', None) and params['app_id']=='charge_plan':
+                if not self.stop_requested.is_set() and not self.closing.is_set():
+                    try:self.source_handoff.register(client,self.job_id)
+                    except (OSError,RuntimeError,ValueError) as exc:self._log('可信交接未登记：'+str(exc))
         elif command=="pause":
             if self.runner is not None:self.runner.toggle_pause()
             else:self._call(client,"pause_execution",**params)
@@ -290,11 +301,24 @@ class RuntimeSession:
             self.mcp_event_sequence=sequence
         if sequence:self._call(client,'mcp_events_ack',sequence=sequence)
 
+    def _start_client(self):
+        handoff=getattr(self,'source_handoff',None)
+        context=nullcontext({}) if handoff is None else handoff.worker_options(self.paths)
+        with context as options:
+            client=OneDragonClient(self.paths,log=self._log,**options)
+            self._active_client=client
+            self._handoff_client=client if options else None
+            client.start()
+            if options and (self.stop_requested.is_set() or self.closing.is_set()):
+                self._stopped_handoff=client
+                client.signal_host_stop()
+            return client
+
     def _work(self):
-        client=OneDragonClient(self.paths,log=self._log)
+        self._active_client=None
         prepared_once=False
         try:
-            client.start()
+            client=self._start_client()
             self.emit(dict(type="connected"))
             while not self.closing.is_set():
                 try:command,params=self.commands.get(timeout=.2)
@@ -302,7 +326,7 @@ class RuntimeSession:
                 if command is not None:
                     try:
                         if command=="prepare" and not self.phase:
-                            if prepared_once:
+                            if prepared_once or client is self._stopped_handoff:
                                 self.emit(dict(type="phase",phase="正在重新准备：等待原进程退出"))
                                 while True:
                                     try:client.close(timeout=5);break
@@ -314,8 +338,7 @@ class RuntimeSession:
                                 if self.stop_requested.is_set():
                                     self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=False,uses_charge=False)))
                                     continue
-                                client=OneDragonClient(self.paths,log=self._log)
-                                client.start()
+                                client=self._start_client()
                             elif self.stop_requested.is_set():
                                 self.emit(dict(type="state",state=dict(state="stopped",busy=False,ready=False,uses_charge=False)))
                                 continue
@@ -347,9 +370,10 @@ class RuntimeSession:
         except Exception as exc:self.emit(dict(type="error",message=str(exc),busy=False))
         finally:
             self.trace_subscription.disconnected()
-            exited=False
+            client=self._active_client
+            exited=client is None
             try:
-                if client.alive:
+                if client is not None and client.alive:
                     if self.mcp_active:
                         try:self._call(client,'mcp_stop')
                         except Exception as exc:self.emit(dict(type='log',message='MCP关闭未完成：'+str(exc)))
@@ -363,7 +387,7 @@ class RuntimeSession:
                     if not getattr(self.paths,'program_control',False):
                         try:self._call(client,"stop_execution")
                         except Exception as exc:self.emit(dict(type="log",message=str(exc)))
-                while True:
+                while client is not None:
                     try:
                         client.close(timeout=5)
                         exited=True

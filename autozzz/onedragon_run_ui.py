@@ -258,7 +258,10 @@ class ExecutionWindow:
         if app_id=='_rotation':
             from .onedragon_rotation_session import RotationSession
             self.session=RotationSession(RuntimePaths.discover(ROOT,profile),self.events.put)
-        else:self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put)
+        else:
+            handoff = getattr(ui, 'source_handoff', None) if app_id == 'charge_plan' else None
+            options = {} if handoff is None else dict(source_handoff=handoff)
+            self.session=RuntimeSession(RuntimePaths.discover(ROOT,profile),self.events.put,**options)
         self.worker=self.session.worker
         self.update_buttons()
         self.poll_token=self.window.after(80,self.poll)

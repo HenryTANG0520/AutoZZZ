@@ -2,21 +2,63 @@
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager, nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import hashlib
 from pathlib import Path
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 import uuid
 
-from .onedragon_control import ExecutionControl, UpstreamControlAdapter, WindowState, validate_finish_after_battle, validate_runtime_timeout
+from .onedragon_control import (
+    ExecutionControl, ExecutionStopped, ObservationExpired, UpstreamControlAdapter, WindowState,
+    validate_finish_after_battle, validate_runtime_timeout,
+)
 from .onedragon_patrol import PATROL_INCOMPLETE_ERROR, patrol_incomplete
 from .run_lock import RunLock, profile_lock
 
 
+@dataclass(frozen=True)
+class _BattleRecoveryPoint:
+    job_id: str
+    slot: Any
+    future: Any
+    application: Any
+    operation: Any
+    node: Any
+    plan: Any
+    plan_snapshot: dict
+    charge: Any
+    reservation: str
+    ledger_revision: str
+    window: Any
+    binding: Any
+    process_id: int
+    process_handle: int
+    frame: Any
+    frame_time: float
+    operation_thread: int
+    epoch: int
+    permit_version: int
+    observed_at: float
+    graph_visit: Any = None
+
+
+@dataclass
+class _BattleContinuation:
+    point: _BattleRecoveryPoint
+    authority: Callable[[], bool]
+    requested_at: float
+    epoch: int
+    first_frame: Any = None
+    frame: Any = None
+    victory: bool = False
+
+
 class OneDragonExecution:
-    def __init__(self, ctx: Any,run_lease=None,rotation_guard=None):
+    HOST_LOSS_FRAME_SECONDS = 2
+
+    def __init__(self, ctx: Any,run_lease=None,rotation_guard=None, *, recovery_host=None):
         from zzz_od.backend.backend_context import ZzzBackendContext
         self.ctx = ctx
         from one_dragon.utils import os_utils
@@ -46,6 +88,13 @@ class OneDragonExecution:
                                         self._resume_backend, self._stop_backend)
         self.run_lease=run_lease
         self.rotation_guard=rotation_guard
+        self._recovery_host = recovery_host
+        self._recovery_point: _BattleRecoveryPoint | None = None
+        self._host_loss_status: dict | None = None
+        self._recovery_source = self._recovery_frame = self._recovery_observer = None
+        self._recovery_observation_stop = threading.Event()
+        self._recovery_window_changed = threading.Event()
+        self._continuation: _BattleContinuation | None = None
         self.control.input_validator=self._validate_task_input
         self.ctx.execution_control = self.control
         self.adapter = UpstreamControlAdapter(self.control)
@@ -107,10 +156,412 @@ class OneDragonExecution:
                 yield
 
     def _validate_task_input(self):
+        host = getattr(self, '_recovery_host', None)
+        if host is not None and not host.input_allowed() and not self._continued_input_allowed():
+            raise ObservationExpired('原运行宿主已不可用，等待停止或保留当前战斗。')
         guard=getattr(self.ctx,'autozzz_runtime_guard',None)
         if guard is not None:guard()
         if self.run_lease is not None:self.run_lease.check()
         if self.client_exit is not None:self.client_exit.input_guard()
+
+    def _continued_input_allowed(self):
+        continuation = getattr(self, '_continuation', None)
+        if continuation is None or continuation.frame is None or continuation.victory:
+            return False
+        from .recovery_observation import MAX_GAP_SECONDS
+
+        tracked = self._recovery_frame
+        if (tracked is None
+                or tracked[2] is not continuation.frame or not self._continuation_matches(continuation)
+                or not self.ctx.run_context.is_context_running or getattr(self.ctx.controller, 'using_background', False)
+                or not 0 <= time.perf_counter() - continuation.frame.finished_at <= MAX_GAP_SECONDS):
+            return False
+        battle = self.battle_control
+        point = continuation.point
+        return (point.operation.current_node.node is point.node and battle.allowed
+                and battle.allowed_epoch == continuation.epoch
+                and battle.permit_reason == 'battle_visible')
+
+    def _track_recovery_capture(self, capture):
+        from .recovery_observation import CapturedFrame, native_recovery_capture
+
+        continuation = self._continuation if self.control.recovery_continuing else None
+        first = continuation is not None and continuation.frame is None
+        if continuation is not None and threading.get_ident() != continuation.point.operation_thread:
+            raise ObservationExpired("续接只允许原 SDK 操作线程采集画面。")
+        if first and (continuation.first_frame is not None or not self._recovery_observer.reserve_first_frame()):
+            self._fail_recovery_continuation()
+            raise ExecutionStopped("原 SDK 首帧交接未核实。")
+        with self.control.lock:
+            self._recovery_frame = None
+        source = self._recovery_source
+        identity = None
+        try:
+            if source is None:
+                source = self._recovery_source = native_recovery_capture(self.ctx.controller.game_win)
+            identity = source.identity()
+        except Exception:
+            pass  # Ordinary SDK capture still works. This frame cannot be an anchor.
+        started_at = time.perf_counter()
+        result = capture()
+        frame = None
+        if identity is not None:
+            try:
+                stamp, image = result
+                snapshot = image.copy()
+                snapshot.setflags(write=False)
+                if source.identity() == identity:
+                    frame = CapturedFrame(identity, snapshot, started_at, time.perf_counter())
+            except Exception:
+                pass
+        if frame is not None:
+            with self.control.lock:
+                self._recovery_frame = (stamp, image, frame)
+                if first:
+                    continuation.first_frame = frame
+        elif continuation is not None:
+            self._fail_recovery_continuation()
+            raise ExecutionStopped("续接截图的原窗口或画面不可核实。")
+        return result
+
+    def _tracked_frame(self, screen, stamp):
+        tracked = self._recovery_frame
+        if tracked is not None:
+            captured_stamp, sdk_image, frame = tracked
+            if captured_stamp == stamp and sdk_image is screen:
+                return frame
+        return None
+
+    def _remember_recoverable_battle(self, screen, screenshot_time):
+        """Record only the exact verified frame of the original paid battle node."""
+        from .budget_records import BudgetRecords
+        from zzz_od.operation.compendium.area_patrol import AreaPatrol
+        from zzz_od.operation.compendium.combat_simulation import CombatSimulation
+        from zzz_od.operation.compendium.expert_challenge import ExpertChallenge
+
+        control = self.control
+        with self.lock, control.lock:
+            if control.recovery_blocked or control.recovery_continuing:
+                return
+            previous = self._recovery_point
+            self._recovery_point = None
+            if (self._recovery_host is None or self.run_lease is not None or self.rotation_guard is not None
+                    or self.state != 'running' or not self._input_ready or self.cancelled.is_set()
+                    or self.prepared_app != 'charge_plan' or self.resource_control is not None
+                    or self.hunt_control is not None or control.stopped
+                    or control.manual_paused or control.focus_waiting
+                    or control.task_epoch != control.epoch or control.observed_epoch != control.epoch):
+                return
+            receipt = control.capture_receipt
+            if (receipt is None or receipt.epoch != control.epoch or receipt.screen is not screen
+                    or receipt.wall_time != screenshot_time):
+                return
+            charge = self.charge_control
+            battle = self.ctx.auto_battle_context
+            if (charge is None or charge.restore_mode != '不使用' or charge.restore_authorized
+                    or charge.synthesis_authorized or charge.budget.data['battle_limit'] != 1
+                    or battle.last_check_end_result is not None or not battle.last_check_in_battle
+                    or not self.battle_control.allowed or self.battle_control.permit_reason != 'battle_visible'
+                    or self.battle_control.allowed_epoch != control.epoch):
+                return
+
+            operation = charge.owner
+            reservation = charge.reservation
+            if type(operation) not in (AreaPatrol, CombatSimulation, ExpertChallenge) or not reservation:
+                return
+            node = operation.current_node.node
+            plan = operation.plan
+            application = self.ctx.run_context.current_application
+            slot = self.backend.run_slot
+            future = slot.future
+            window = self.ctx.controller.game_win
+            if (node is None or node.cn != '自动战斗' or operation.last_screenshot is not screen
+                    or operation.last_screenshot_time != screenshot_time or application is None
+                    or application.app_id != 'charge_plan' or application.current_plan is not plan
+                    or plan.is_agent_plan or not plan.plan_id or future is None or future.done()
+                    or window.bound is None or not window.process_id or not window.process_handle):
+                return
+            pending = charge.budget.pending
+            if (len(pending) != 1 or pending[0]['id'] != reservation or pending[0]['source'] != plan.uid
+                    or pending[0]['cost'] != charge.cost):
+                return
+            if previous is not None and previous.charge is charge and previous.reservation == reservation:
+                ledger_revision = previous.ledger_revision
+            else:
+                budget = charge.budget
+                try:
+                    ledger, ledger_revision = BudgetRecords(budget.path.parent)._read(budget.path)
+                except (OSError, ValueError):
+                    return
+                if ledger != budget.data:
+                    return
+            capture_age = time.time() - screenshot_time
+            if not 0 <= capture_age <= self.HOST_LOSS_FRAME_SECONDS or not self._recovery_host.input_allowed():
+                return
+            thread = threading.get_ident()
+            graph = getattr(charge, 'recovery_graph', None)
+            visit = None if graph is None else graph.current(operation, reservation)
+            if visit is not None and visit.thread != thread:
+                visit = None
+            self._recovery_point = _BattleRecoveryPoint(
+                job_id=self.job_id, slot=slot, future=future, application=application, operation=operation,
+                node=node, plan=plan, plan_snapshot=plan.to_dict(), charge=charge,
+                reservation=reservation, ledger_revision=ledger_revision,
+                window=window, binding=window.bound, process_id=window.process_id, process_handle=window.process_handle,
+                frame=screen, frame_time=screenshot_time, operation_thread=thread, epoch=control.epoch,
+                permit_version=self.battle_control.permit_version, observed_at=time.monotonic() - capture_age,
+                graph_visit=visit,
+            )
+
+    def _same_recovery_run(self, point):
+        window = getattr(self.ctx.controller, 'game_win', None)
+        operation = point.operation
+        return (self.state == 'running' and self._input_ready and not self.cancelled.is_set()
+                and self.job_id == point.job_id and self.backend.run_slot is point.slot
+                and point.slot.future is point.future
+                and not point.future.done() and self.ctx.run_context.current_application is point.application
+                and point.application.current_plan is point.plan and self.charge_control is point.charge
+                and point.charge.owner is operation and point.charge.reservation == point.reservation
+                and operation.plan is point.plan
+                and operation.plan.to_dict() == point.plan_snapshot
+                and window is point.window and window.bound is point.binding
+                and window.process_id == point.process_id and window.process_handle == point.process_handle)
+
+    def _same_recoverable_battle(self, point):
+        operation = point.operation
+        return (self._same_recovery_run(point) and operation.current_node.node is point.node
+                and operation.last_screenshot is point.frame and operation.last_screenshot_time == point.frame_time
+                and self.ctx.auto_battle_context.last_check_end_result is None
+                and self.battle_control.permit_version == point.permit_version)
+
+    @staticmethod
+    def _recovery_ledger(point):
+        from .budget_records import BudgetRecords
+
+        budget = point.charge.budget
+        try:
+            ledger, revision = BudgetRecords(budget.path.parent)._read(budget.path)
+        except (OSError, ValueError):
+            return None
+        if ledger == budget.data and revision == point.ledger_revision:
+            return ledger
+        return None
+
+    def suspend_for_host_loss(self) -> bool:
+        """Called once by the worker's exact host monitor. A false result requires stop."""
+        host = getattr(self, '_recovery_host', None)
+        if host is None or host.input_allowed():
+            return False
+        control = self.control
+        with self.lock, control.lock:
+            point = self._recovery_point
+            if (point is None or not 0 <= time.monotonic() - point.observed_at <= self.HOST_LOSS_FRAME_SECONDS
+                    or not 0 <= time.time() - point.frame_time <= self.HOST_LOSS_FRAME_SECONDS
+                    or control.epoch != point.epoch or control.observed_epoch != point.epoch
+                    or control.stopped or not self._same_recoverable_battle(point)):
+                return False
+
+        paused = control.block_for_recovery()
+        if (paused['state'] != 'recovery_blocked' or paused['observation_epoch'] != point.epoch + 1
+                or not point.window.identity_valid()):
+            return False
+        ledger = self._recovery_ledger(point)
+        with self.lock:
+            if (ledger is None or control.stopped
+                    or self._recovery_point is not point or not self._same_recoverable_battle(point)):
+                return False
+            self._host_loss_status = dict(
+                job_id=point.job_id, plan_id=point.plan.plan_id, reservation_id=point.reservation,
+                budget_id=ledger['id'], ledger_revision=point.ledger_revision, game_process_id=point.process_id,
+                original_observation_epoch=point.epoch, observation_epoch=paused['observation_epoch'],
+            )
+            return True
+
+    def _frozen_recovery_matches(self, point, status):
+        return (self._recovery_point is point and self._host_loss_status is status
+                and self.control.recovery_blocked and not self.control.stopped
+                and self.control.epoch == status['observation_epoch']
+                and self.ctx.run_context.is_context_pause and self._same_recoverable_battle(point))
+
+    @staticmethod
+    def _recovery_graph_matches(point, *, terminal=False):
+        graph = getattr(point.charge, 'recovery_graph', None)
+        return graph is not None and graph.matches(point.graph_visit, terminal=terminal)
+
+    def _continuation_matches(self, continuation):
+        return (continuation is not None and self._continuation is continuation
+                and self._recovery_point is continuation.point and not self._recovery_window_changed.is_set()
+                and self.control.recovery_continuing and not self.control.stopped
+                and self.control.epoch == continuation.epoch and continuation.authority()
+                and self._same_recovery_run(continuation.point)
+                and self._recovery_graph_matches(continuation.point, terminal=continuation.victory))
+
+    def _observation_scope(self):
+        with self.lock, self.control.lock:
+            point, status = self._recovery_point, self._host_loss_status
+            if (point is None or status is None or self._recovery_window_changed.is_set()
+                    or getattr(self.ctx.controller, 'using_background', False)):
+                return False
+            if self.control.recovery_continuing:
+                continuation = self._continuation
+                operation = point.operation
+                node = operation.current_node.node
+                terminal = (continuation is not None and continuation.victory
+                            and node is operation._node_map.get('战斗结束'))
+                valid = (self._continuation_matches(continuation)
+                         and (self.ctx.run_context.is_context_pause or self.ctx.run_context.is_context_running)
+                         and (node is point.node or terminal))
+            else:
+                valid = self._frozen_recovery_matches(point, status) and self._recovery_graph_matches(point)
+        return valid and point.window.identity_valid() and self._recovery_ledger(point) is not None
+
+    def start_recovery_observation(self, deadline):
+        from .recovery_observation import RecoveryObservation, native_encounter_evidence
+        from zzz_od.operation.compendium.area_patrol import AreaPatrol
+
+        point = self._recovery_point
+        anchor = None if point is None else self._tracked_frame(point.frame, point.frame_time)
+        source = self._recovery_source
+        if (anchor is None or source is None or not self._recovery_graph_matches(point)
+                or anchor.identity.pid != point.process_id
+                or anchor.identity.hwnd != point.binding.hwnd):
+            return
+        elapsed_clock = None
+        if type(point.operation) is AreaPatrol:
+            from .recovery_battle_clock import read_patrol_elapsed
+            elapsed_clock = lambda frame: read_patrol_elapsed(self.ctx, frame.image, frame.finished_at)
+        observer = RecoveryObservation(anchor, source, native_encounter_evidence, self._observation_scope,
+                                       elapsed_clock=elapsed_clock)
+        self._recovery_observer = observer
+        if observer.failure is not None:
+            return
+
+        def sample():
+            while not self._recovery_observation_stop.is_set() and time.monotonic() < deadline:
+                state = observer.sample()
+                if state == 'failed':
+                    if not self._recovery_observation_stop.is_set() and self.control.recovery_continuing:
+                        self._fail_recovery_continuation()
+                    return
+                if state in ('finished', 'awaiting_first_frame'):
+                    return
+                self._recovery_observation_stop.wait(.08)
+
+        threading.Thread(target=sample, name='AutoZZZ-RecoveryObservation', daemon=True).start()
+
+    def end_recovery_observation(self):
+        self._recovery_observation_stop.set()
+
+    def _fail_recovery_continuation(self):
+        self.cancelled.set()
+        self.control.stop("无法继续核实原战斗，保留待核对预留。")
+
+    def _continued_battle_frame(self, screen, stamp, in_battle, end_result):
+        continuation = self._continuation
+        if not self.control.recovery_continuing or continuation is None:
+            return
+        observer = self._recovery_observer
+        frame = self._tracked_frame(screen, stamp)
+        if frame is not None and frame.started_at >= continuation.requested_at and continuation.authority():
+            if in_battle and end_result is None:
+                if continuation.frame is None:
+                    verified = frame is continuation.first_frame and observer.finish(frame)
+                else:
+                    verified = observer.continue_frame(frame)
+                if verified:
+                    with self.control.lock:
+                        continuation.frame = frame
+                    return
+            elif (not in_battle and end_result == '普通战斗-完成' and continuation.frame is not None
+                  and observer.continue_frame(frame, victory=True)):
+                continuation.victory = True
+                return
+        self._fail_recovery_continuation()
+        raise ExecutionStopped("未核实原战斗的续接画面。")
+
+    def begin_recovery_resume(self, authority, deadline):
+        observer = self._recovery_observer
+        if (observer is None or not authority() or time.monotonic() >= deadline
+                or not observer.verified(timeout=.10)):
+            return None
+        with self.lock, self.control.lock:
+            point, status = self._recovery_point, self._host_loss_status
+            if (point is None or status is None or self._continuation is not None
+                    or not self._frozen_recovery_matches(point, status) or not self._recovery_graph_matches(point)):
+                return None
+        continuation = _BattleContinuation(point, authority, time.perf_counter(), status['observation_epoch'] + 1)
+
+        def may_settle():
+            if (not continuation.victory or not self._continuation_matches(continuation)
+                    or not self.ctx.run_context.is_context_running):
+                return False
+            operation = point.operation
+            frame = self._tracked_frame(operation.last_screenshot, operation.last_screenshot_time)
+            return frame is not None and observer.confirm_victory(frame)
+
+        try:
+            point.charge.arm_recovery_continuation(
+                point.operation, point.plan, point.reservation, point.ledger_revision, may_settle=may_settle,
+            )
+        except (OSError, ValueError, RuntimeError):
+            return None
+        if not observer.verified(timeout=.10):
+            return None
+        self._continuation = continuation
+
+        def authorize():
+            return (time.monotonic() < deadline and authority() and not self._recovery_window_changed.is_set()
+                    and observer.failure is None and self._frozen_recovery_matches(point, status)
+                    and self._recovery_graph_matches(point))
+
+        if not self.control.continue_recovery(status['observation_epoch'], authorize):
+            return None
+        if not self.ctx.run_context.is_context_running:
+            self._fail_recovery_continuation()
+            return None
+        return dict(status, observation_epoch=continuation.epoch, control=self.control.status(),
+                    continuity=dict(state='awaiting_new_frame'))
+
+    def recovery_snapshot(self) -> dict | None:
+        """Validate the original paused run and its ledger for a recovery request."""
+        control = self.control
+        with self.lock, control.lock:
+            point, status = self._recovery_point, self._host_loss_status
+            if point is None or status is None:
+                return None
+            continuation = self._continuation if control.recovery_continuing else None
+            if continuation is None:
+                if not self._frozen_recovery_matches(point, status):
+                    return None
+            elif not self._continuation_matches(continuation):
+                return None
+        if self._recovery_ledger(point) is None or not point.window.identity_valid():
+            return None
+        with self.lock, control.lock:
+            if continuation is not None:
+                if not self._continuation_matches(continuation):
+                    return None
+                state = 'continued' if continuation.frame is not None else 'awaiting_new_frame'
+                return dict(status, observation_epoch=continuation.epoch, control=control.status(),
+                            continuity=dict(state=state))
+            if not self._frozen_recovery_matches(point, status):
+                return None
+            graph = getattr(point.charge, 'recovery_graph', None)
+            graph_visit = dict(state='unverified') if graph is None else graph.status(point.graph_visit)
+        observer = self._recovery_observer
+        if graph_visit['state'] != 'original':
+            continuity = dict(state='unverified', reason='graph_visit_' + graph_visit['state'])
+        elif observer is None:
+            continuity = dict(state='unverified', reason='no_capture_anchor')
+        elif observer.verified():
+            continuity = (dict(state='elapsed_observed', input_authorized=False)
+                          if observer.clock_only else dict(state='verified'))
+        elif observer.failure is not None:
+            continuity = dict(state='unverified', reason=observer.failure)
+        else:
+            continuity = dict(state='sampling')
+        return dict(status, control=dict(state='recovery_blocked', recovery_blocked=True),
+                    graph_visit=graph_visit, continuity=continuity)
 
     def _probe(self) -> WindowState:
         if self.client_exit is not None:return self.client_exit.probe()
@@ -205,11 +656,15 @@ class OneDragonExecution:
         guard=getattr(self.ctx,'autozzz_runtime_guard',None)
         if guard is not None:guard()
         with self.lock:
+            host = getattr(self, '_recovery_host', None)
+            if host is not None and not host.input_allowed():
+                raise RuntimeError('原运行宿主已不可用，不能创建新任务。')
             if self.closed or self.busy:
                 raise RuntimeError("已有一条龙任务仍在处理，请查询原任务状态。")
             if expected_prepared_job is not None and (self.state != 'prepared' or self.job_id != expected_prepared_job):
                 raise RuntimeError('人工登录期间原准备任务已变化，请重新准备。')
             self.cancelled.clear()
+            self._recovery_point = self._host_loss_status = None
             self.single_battle_state = None
             self.startup_focus = None
             patrol_control = getattr(self, "patrol_control", None)
@@ -637,8 +1092,22 @@ class OneDragonExecution:
                         self.charge_control=ChargeBudgetControl(self.ctx,self.control,ledger,budget["max_per_battle"],
                             restore_mode=self.prepared_requirements.get('restore_charge','不使用'),restore_authorized=ACTION in self.resource_confirmation.accepted,
                             synthesis_authorized=SYNTHESIS in self.resource_confirmation.accepted,
-                            evidence_dir=self.data/'autozzz/charge-evidence'/self.job_id)
+                            evidence_dir=self.data/'autozzz/charge-evidence'/self.job_id,
+                            track_recovery_graph=(app_id == 'charge_plan' and self.run_lease is None
+                                                  and self.rotation_guard is None and getattr(
+                                                      getattr(self, '_recovery_host', None), 'continuity_enabled', False)))
                         self.charge_control.install()
+                        if (getattr(self, '_recovery_host', None) is not None and app_id == 'charge_plan'
+                                and budget['battle_limit'] == 1 and self.run_lease is None
+                                and self.rotation_guard is None):
+                            self.battle_control.on_normal_frame = self._remember_recoverable_battle
+                            if getattr(self._recovery_host, 'continuity_enabled', False) is True:
+                                self._recovery_source = self._recovery_frame = self._recovery_observer = None
+                                self._recovery_observation_stop.clear()
+                                self._recovery_window_changed.clear()
+                                self.control.capture_observer = self._track_recovery_capture
+                                self.control.recovery_window_invalid = self._recovery_window_changed.set
+                                self.battle_control.on_continued_frame = self._continued_battle_frame
                     if self.prepared_requirements.get("uses_hunt"):
                         from .onedragon_hunt import NotoriousHuntControl
                         self.hunt_control=NotoriousHuntControl(self.ctx,self.control)
@@ -674,6 +1143,14 @@ class OneDragonExecution:
                         else:
                             self._run_bound_app(app_id, factory, **binding)
                 finally:
+                    if getattr(self, '_recovery_host', None) is not None:
+                        self.end_recovery_observation()
+                        with self.lock:
+                            self.battle_control.on_normal_frame = None
+                            self.battle_control.on_continued_frame = None
+                            self.control.capture_observer = None
+                            self.control.recovery_window_invalid = None
+                            self._recovery_point = None
                     if self.hunt_control is not None:self.hunt_control.close()
                     if self.charge_control is not None:self.charge_control.close()
                     if self.group_control is not None:self.group_control.close()
@@ -748,7 +1225,7 @@ class OneDragonExecution:
                 if patrol_control is not None and patrol_incomplete(patrol_control.status()):
                     self.error = PATROL_INCOMPLETE_ERROR
                     result_state = 'failed'
-            close_ready=keep_running_on_success and result_state=='success'
+            close_ready=keep_running_on_success and result_state=='success' and getattr(self, '_continuation', None) is None
             if not close_ready:self.state=result_state
         finally:
             if not close_ready:
@@ -792,6 +1269,9 @@ class OneDragonExecution:
 
     def _set_manual_pause(self,paused):
         with self.lock:
+            if (getattr(self.control, 'recovery_blocked', False) is True
+                    or getattr(self.control, 'recovery_continuing', False) is True):
+                return
             if paused:self.manual_pause.set()
             else:self.manual_pause.clear()
             if self._input_ready:self.control.set_manual_pause(paused)
@@ -875,6 +1355,9 @@ class OneDragonExecution:
                                      foreground_borrowing=getattr(controller,'_foreground_borrowing',False),
                                      gamepad=getattr(controller,'_gamepad_type',None),requires_foreground=getattr(controller,'_foreground_required',False))
             if self.charge_control is not None:result["budget"]=self.charge_control.status()
+            host_loss = getattr(self, '_host_loss_status', None)
+            if host_loss is not None:
+                result['host_loss'] = dict(host_loss, recovery_blocked=self.control.recovery_blocked)
             if self.state in ("running", "stopping"):
                 result["control"] = self.control.status() if self._input_ready else dict(state="paused" if self.manual_pause.is_set() else "starting",manual_paused=self.manual_pause.is_set(),focus_waiting=False)
                 result["run"] = asdict(self.backend.query_status())

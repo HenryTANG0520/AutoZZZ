@@ -48,18 +48,27 @@ class NativeChargeRecovery:
         return dict(version=1, budget_id=data['id'], server=data['server'], ledger_revision=revision,
                     reservation_id=identifier, cost=entry['cost'], plan_uid=source, source_result=SOURCE_VICTORY)
 
-    def record_victory(self, budget, reservation_id: str, *, source_result: str, plan_uid: str) -> dict:
-        """Called under the original run lock after the source victory node succeeds."""
-        if source_result != SOURCE_VICTORY:
-            raise ValueError('原生战斗未核实胜利。')
+    def pending_binding(self, budget, reservation_id: str, *, plan_uid: str,
+                        expected_revision: str | None = None) -> dict:
         path = self._path(budget.data['id'])
         if Path(budget.path).resolve() != path:
             raise ValueError('胜利记录不属于当前战斗预算。')
         data, revision = self.records._read(path)
+        if expected_revision is not None and revision != expected_revision:
+            raise ValueError('原待核对出战的预算版本已变化。')
         binding = self._binding(data, revision)
         if data != budget.data or binding['reservation_id'] != reservation_id or binding['plan_uid'] != plan_uid:
             raise ValueError('胜利记录与原待核对出战不一致。')
-        atomic_json(self._path(data['id'], receipt=True), binding)
+        return binding
+
+    def record_victory(self, budget, reservation_id: str, *, source_result: str, plan_uid: str,
+                       expected_revision: str | None = None) -> dict:
+        """Called under the original run lock after the source victory node succeeds."""
+        if source_result != SOURCE_VICTORY:
+            raise ValueError('原生战斗未核实胜利。')
+        binding = self.pending_binding(budget, reservation_id, plan_uid=plan_uid,
+                                       expected_revision=expected_revision)
+        atomic_json(self._path(binding['budget_id'], receipt=True), binding)
         return binding
 
     def verified_receipt(self, data: dict, revision: str) -> dict | None:

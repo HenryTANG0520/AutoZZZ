@@ -29,7 +29,7 @@ def plain(value: Any) -> Any:
 
 
 class OneDragonService:
-    def __init__(self, source: Path, data: Path,run_lease=None,*,runtime_revision=None,stable_data=None,product_root=None,runtime_generation=None,management_only=False):
+    def __init__(self, source: Path, data: Path,run_lease=None,*,runtime_revision=None,stable_data=None,product_root=None,runtime_generation=None,management_only=False,recovery_host=None):
         self.source, self.data = source.resolve(), data.resolve()
         from .onedragon_runtime import UPSTREAM_REVISION
         self.runtime_revision=runtime_revision or UPSTREAM_REVISION
@@ -60,6 +60,7 @@ class OneDragonService:
         self._dispatch_lock=threading.RLock()
         self._mcp_service=None
         self._run_lease=run_lease
+        self._recovery_host = recovery_host
         self._rotation_guard=None
         self._rotation_sealed=False
 
@@ -718,7 +719,12 @@ class OneDragonService:
         EnvironmentStore(self).validate_models(self.ctx.model_config)
         if self._execution is None:
             from .onedragon_execution import OneDragonExecution
-            self._execution = OneDragonExecution(self.ctx,run_lease=self._run_lease,rotation_guard=self._rotation_guard) if self._run_lease is not None else OneDragonExecution(self.ctx)
+            if self._run_lease is not None:
+                self._execution = OneDragonExecution(self.ctx, run_lease=self._run_lease, rotation_guard=self._rotation_guard)
+            elif getattr(self, '_recovery_host', None) is not None:
+                self._execution = OneDragonExecution(self.ctx, recovery_host=self._recovery_host)
+            else:
+                self._execution = OneDragonExecution(self.ctx)
         return self._execution.initialize(server, game_path, region,instance_idx)
 
     def execution_status(self) -> dict:

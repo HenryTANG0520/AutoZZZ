@@ -29,10 +29,11 @@ STATUS_NAMES = {
 
 class AutoZZZWindow:
     def __init__(self, root: tk.Tk, config_path: Path = CONFIG_PATH, *, server: str | None = None,
-                 game_path: str | None = None, background_helpers: bool = True):
+                 game_path: str | None = None, background_helpers: bool = True, source_handoff=None):
         from .localization_tk import install_tk_localization
         install_tk_localization()
         self.root, self.config_path = root, Path(config_path)
+        self.source_handoff = source_handoff
         load_error = None
         try:
             self.settings = Settings.load(self.config_path)
@@ -831,9 +832,19 @@ class AutoZZZWindow:
         self.root.destroy()
 
 
-def main(config_path: Path = CONFIG_PATH, *, server: str | None = None, game_path: str | None = None) -> None:
+def main(config_path: Path = CONFIG_PATH, *, server: str | None = None, game_path: str | None = None,
+         source_handoff=None, recovered=None) -> None:
     from . import windows  # noqa: F401 - establish DPI awareness before creating Tk
 
     root = tk.Tk()
-    AutoZZZWindow(root, config_path, server=server, game_path=game_path)
+    def open_normal():
+        options = {} if source_handoff is None else dict(source_handoff=source_handoff)
+        AutoZZZWindow(root, config_path, server=server, game_path=game_path, **options)
+
+    if recovered is None or not recovered.worker.alive():
+        open_normal()
+    else:
+        from .source_handoff_ui import show_recovered_charge
+
+        show_recovered_charge(root, recovered, open_normal)
     root.mainloop()

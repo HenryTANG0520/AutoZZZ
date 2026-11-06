@@ -48,6 +48,8 @@ class BattleInputControl:
         self._diagnostic_emitted=0
         self._stateful_atomic_types=()
         self._atomic_wait_status=None
+        self.on_normal_frame = None
+        self.on_continued_frame = None
 
     def _current_permit(self):
         scope = _permit_scope.get()
@@ -466,6 +468,9 @@ class BattleInputControl:
                                         check_battle_end_hollow_result,check_battle_end_defense_result)
             ended = battle.last_check_end_result is not None
             owner.control.checkpoint(require_frame=True)
+            if owner.on_continued_frame is not None:
+                owner.on_continued_frame(screen, screenshot_time, hud.in_battle and not hud.blocks_ordinary,
+                                         battle.last_check_end_result)
             if ended:
                 owner._frame_permit('battle_end_confirmed')
                 if battle.auto_op is not None:battle.auto_op.stop_running()
@@ -483,7 +488,11 @@ class BattleInputControl:
             frame = _chain_frame.set((battle, screen, screenshot_time, chain) if chain is not None else None)
             try:
                 with attack_hud_scope(hud):
-                    return check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
+                    result = check(battle,screen,screenshot_time,False,False,False,check_distance,sync)
+                on_normal_frame = owner.on_normal_frame
+                if hud.in_battle and not hud.blocks_ordinary and result and on_normal_frame is not None:
+                    on_normal_frame(screen, screenshot_time)
+                return result
             finally:
                 _chain_frame.reset(frame)
                 _permit_scope.reset(scope)

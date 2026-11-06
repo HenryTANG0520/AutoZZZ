@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -36,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument('--program-update-status',nargs='?',const=True,type=Path,metavar='TRANSACTION',
                       help='查看本机或指定程序更新事务的阶段、结果与恢复脚本')
     mode.add_argument('--scheduled-run',metavar='ID',help='运行已启用且由 Windows 启动的固定计划')
+    mode.add_argument('--source-recovery', action='store_true', help='从当前源码目录启动并监护一次体力刷本')
+    parser.add_argument('--trusted-handoff', help=argparse.SUPPRESS)
+    parser.add_argument('--_source-original', help=argparse.SUPPRESS)
+    parser.add_argument('--_source-replacement', help=argparse.SUPPRESS)
     parser.add_argument('--schedule-store',type=Path,help='当前安装目录的计划资料清单')
     parser.add_argument('--schedule-revision',help='已注册系统计划的配置版本')
     parser.add_argument('--update-report',type=Path,help='保存程序更新交接报告；报告已存在时不会重复更新')
@@ -145,9 +150,29 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.wasSuccessful() else 1
 
     if not any((args.check, args.launch, args.run, args.battle, args.battle_prepare, args.battle_resume, args.battle_catalog)):
+        if (args.source_recovery and os.name == 'nt' and not getattr(sys, 'frozen', False)
+                and Path.cwd().resolve() == ROOT):
+            from .source_handoff import supervise
+
+            gui_args = ['--config', str(args.config.resolve())]
+            if args.server is not None:
+                gui_args.extend(('--server', args.server))
+            if args.game_path is not None:
+                gui_args.extend(('--game-path', args.game_path))
+            result = supervise(ROOT, gui_args)
+            if result is not None:
+                return result
         from .gui import main as gui_main
 
-        gui_main(args.config, server=args.server, game_path=args.game_path)
+        gui_options = dict(server=args.server, game_path=args.game_path)
+        if os.name == 'nt' and (args._source_original is not None or args._source_replacement is not None):
+            from .source_handoff import gui_context
+
+            with gui_context(ROOT, original=args._source_original, startup=args.trusted_handoff,
+                             replacement=args._source_replacement) as handoff:
+                gui_main(args.config, **gui_options, **handoff)
+        else:
+            gui_main(args.config, **gui_options)
         return 0
 
     try:
