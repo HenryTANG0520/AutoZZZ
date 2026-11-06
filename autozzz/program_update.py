@@ -86,7 +86,9 @@ class ProgramUpdate:
         return cls(job,probe=probe)
 
     def state(self,name,**values):
-        self.data.update(state=name,**values);write_json(self.journal,self.data)
+        next_state=dict(self.data,state=name,**values)
+        write_json(self.journal,next_state)
+        self.data.update(next_state)
         if self.after_state is not None:self.after_state(name)
 
     def _marker(self,path,expected):return path.is_dir() and (path/MANIFEST).is_file() and digest(path/MANIFEST)==expected
@@ -99,6 +101,9 @@ class ProgramUpdate:
     def _users(root):
         managed=read_manifest(root)['files']
         return {name:path for name,path in files(root) if name!=MANIFEST and name not in managed}
+
+    def _user_hashes(self,root):
+        return {name:digest(path) for name,path in self._users(root).items()}
 
     def apply(self):
         if self.data['state']!='prepared':raise ValueError('该事务已经执行过，请查询或恢复原事务。')
@@ -118,14 +123,18 @@ class ProgramUpdate:
                 destination=filesystem_path(self.candidate/name)
                 destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,destination)
                 if digest(destination)!=hashes[name]:raise ValueError('用户文件复制未核实：'+name)
-            if {name:digest(path) for name,path in self._users(self.target).items()}!=hashes:raise ValueError('复制期间用户文件已变化。')
+            if self._user_hashes(self.target)!=hashes:raise ValueError('复制期间用户文件已变化。')
             if self.probe(self.target):raise RuntimeError('安装目录有新进程启动，更新尚未替换。')
             self.state('moving_old');os.rename(filesystem_path(self.target),filesystem_path(self.backup));self.state('old_moved')
-            if {name:digest(path) for name,path in self._users(self.backup).items()}!=hashes:
+            if self._user_hashes(self.backup)!=hashes:
                 raise ValueError('归档时用户文件已变化，已停止安装。')
-            self.state('moving_new');os.rename(filesystem_path(self.candidate),filesystem_path(self.target));self.state('installed')
+            self.state('moving_new')
+            if not self._marker(self.candidate,self.data['new_manifest']):raise ValueError('待安装程序包已变化。')
+            os.rename(filesystem_path(self.candidate),filesystem_path(self.target));self.state('installed')
             verify_package(self.target)
+            if not self._marker(self.target,self.data['new_manifest']):raise ValueError('安装后的程序包与已验证版本不一致。')
             if any(digest(filesystem_path(self.target/name))!=expected for name,expected in hashes.items()):raise ValueError('安装后用户文件核对失败。')
+            if self._user_hashes(self.backup)!=hashes:raise ValueError('安装核对期间归档用户文件已变化，已停止安装。')
             self.state('completed');return dict(self.data)
         except Exception as exc:
             self.data['error']=str(exc)
@@ -145,10 +154,15 @@ class ProgramUpdate:
         archived={name:digest(path) for name,path in files(self.backup) if name in before}
         if archived!=before:raise ValueError('旧程序归档已变化，未自动回退。')
         if self.probe(self.target):raise RuntimeError('待恢复目录仍有程序运行。')
+        expected=self.data.get('user_files',{})
         if self.target.exists():
             if not new_here or self.candidate.exists():raise ValueError('恢复目标存在其他文件，未覆盖。')
-            expected=self.data.get('user_files',{})
-            actual=self._users(self.target)
-            if set(actual)!=set(expected) or any(digest(actual[name])!=value for name,value in expected.items()):raise ValueError('新目录中的用户资料已变化，未自动回退。')
+            if self._user_hashes(self.target)!=expected:raise ValueError('新目录中的用户资料已变化，未自动回退。')
             os.rename(filesystem_path(self.target),filesystem_path(self.candidate))
+        # A blocked archive restore can leave the previously active directory here on retry.
+        candidate_known=self._marker(self.candidate,self.data['new_manifest'])
+        if not candidate_known and self.data['state'] in ('installed','needs_recovery'):
+            raise ValueError('待恢复的候选目录身份未核实，未自动回退。')
+        if candidate_known and self._user_hashes(self.candidate)!=expected:
+            raise ValueError('候选目录中的用户资料已变化，未自动回退。')
         os.rename(filesystem_path(self.backup),filesystem_path(self.target));self.state('rolled_back');return True

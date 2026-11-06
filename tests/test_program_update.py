@@ -1,14 +1,16 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
-from autozzz.onedragon_bundle import MANIFEST_NAME,digest
+from autozzz.onedragon_bundle import MANIFEST_NAME,digest,filesystem_path
 from autozzz.program_package import MANIFEST,create_manifest,extract_package,read_manifest,verify_package,preserve_user_files
-from autozzz.program_update import ProgramUpdate
+from autozzz.program_update import ProgramUpdate, verify_preflight, write_json
 
 
 def package(root,version):
@@ -65,6 +67,116 @@ class ProgramUpdateTests(unittest.TestCase):
         with self.assertRaises(OSError):transaction.apply()
         self.assertEqual(verify_package(self.old)['version'],'old')
         self.assertEqual(verify_package(transaction.candidate)['version'],'new')
+
+    def test_failed_completion_journal_write_restores_original_installation(self):
+        transaction = self.prepare()
+
+        def write_except_completion(path, data):
+            if path == transaction.journal and data['state'] == 'completed':
+                raise OSError('fixture could not commit update journal')
+            write_json(path, data)
+
+        with patch('autozzz.program_update.write_json', side_effect=write_except_completion):
+            with self.assertRaisesRegex(OSError, 'could not commit'):
+                transaction.apply()
+        self.assertEqual(verify_package(self.old)['version'], 'old')
+        self.assertEqual((self.old / 'config.json').read_bytes(), b'current settings')
+        self.assertEqual(verify_package(transaction.candidate)['version'], 'new')
+        self.assertFalse(transaction.backup.exists())
+        self.assertEqual(ProgramUpdate(transaction.job).data['state'], 'rolled_back')
+
+    def test_retry_after_archive_rename_denial_rechecks_candidate_user_files(self):
+        transaction = self.prepare()
+        rename = os.rename
+
+        def deny_completion(path, data):
+            if path == transaction.journal and data['state'] == 'completed':
+                raise PermissionError('fixture completion write denied')
+            write_json(path, data)
+
+        def deny_archive_restore(source, destination):
+            if source == filesystem_path(transaction.backup):
+                raise PermissionError('fixture archive rename denied')
+            rename(source, destination)
+
+        with (patch('autozzz.program_update.write_json', side_effect=deny_completion),
+              patch('autozzz.program_update.os.rename', side_effect=deny_archive_restore)):
+            with self.assertRaisesRegex(PermissionError, 'completion write denied'):
+                transaction.apply()
+        self.assertFalse(self.old.exists())
+        self.assertEqual(ProgramUpdate(transaction.job).data['state'], 'needs_recovery')
+        self.assertEqual((transaction.backup / 'config.json').read_bytes(), b'current settings')
+
+        updated = b'settings saved during recovery'
+        (transaction.candidate / 'config.json').write_bytes(updated)
+        retry = ProgramUpdate(transaction.job, probe=lambda _: [])
+        with self.assertRaisesRegex(ValueError, '用户资料已变化'):
+            retry.recover()
+        self.assertFalse(self.old.exists())
+        self.assertEqual(verify_package(transaction.backup)['version'], 'old')
+        self.assertEqual((transaction.backup / 'config.json').read_bytes(), b'current settings')
+        self.assertEqual(verify_package(transaction.candidate)['version'], 'new')
+        self.assertEqual((transaction.candidate / 'config.json').read_bytes(), updated)
+        self.assertEqual(ProgramUpdate(transaction.job).data['state'], 'needs_recovery')
+
+        create_manifest(transaction.candidate, 'v1.2.4', 'c' * 40)
+        with self.assertRaisesRegex(ValueError, '候选目录身份未核实'):
+            retry.recover()
+        self.assertFalse(self.old.exists())
+        self.assertEqual((transaction.candidate / 'config.json').read_bytes(), updated)
+        self.assertEqual(ProgramUpdate(transaction.job).data['state'], 'needs_recovery')
+
+    def test_valid_but_different_manifest_cannot_replace_preflight_version(self):
+        for stage in ('moving_new', 'installed'):
+            with self.subTest(stage=stage):
+                old = package(self.root / stage / 'AutoZZZ', 'v1.2.2')
+                (old / 'config.json').write_bytes(b'original settings')
+                source = package(self.root / stage / 'source', 'v1.2.3')
+                transaction = ProgramUpdate.prepare(old, source, probe=lambda _: [])
+                report = transaction.job / 'runtime-report.json'
+                write_json(report, dict(state='success', bundled=True, worker_exited=True, game_started=False,
+                                        game_input_sent=False, revision='a'*40, applications=30,
+                                        strategies=dict(auto_battle=1, dodge=1)))
+                transaction.state('prepared', preflight=dict(manifest=transaction.data['new_manifest'], report=digest(report)))
+                verify_preflight(transaction)
+
+                def change_manifest(state):
+                    if state != stage:
+                        return
+                    path = transaction.candidate if stage == 'moving_new' else old
+                    (path / 'AutoZZZ.exe').write_bytes(b'fixture from another release')
+                    create_manifest(path, 'v1.2.4', 'c'*40)
+                    self.assertEqual(verify_package(path)['version'], 'v1.2.4')
+
+                transaction.after_state = change_manifest
+                with self.assertRaisesRegex(ValueError, '已变化|不一致'):
+                    transaction.apply()
+                if stage == 'moving_new':
+                    self.assertEqual(transaction.data['state'], 'rolled_back')
+                    original, substituted = old, transaction.candidate
+                else:
+                    self.assertEqual(transaction.data['state'], 'needs_recovery')
+                    original, substituted = transaction.backup, old
+                self.assertEqual(verify_package(original)['version'], 'v1.2.2')
+                self.assertEqual(verify_package(substituted)['version'], 'v1.2.4')
+                self.assertEqual((original / 'config.json').read_bytes(), b'original settings')
+
+    def test_late_archived_user_edit_is_restored_when_promotion_can_roll_back(self):
+        transaction = self.prepare()
+        updated = b'late save from the old installation'
+
+        def save_old_settings(state):
+            if state == 'installed':
+                (transaction.backup / 'config.json').write_bytes(updated)
+
+        transaction.after_state = save_old_settings
+        with self.assertRaisesRegex(ValueError, '用户文件已变化'):
+            transaction.apply()
+        self.assertEqual(transaction.data['state'], 'rolled_back')
+        self.assertEqual(verify_package(self.old)['version'], 'old')
+        self.assertEqual((self.old / 'config.json').read_bytes(), updated)
+        self.assertEqual(verify_package(transaction.candidate)['version'], 'new')
+        self.assertEqual((transaction.candidate / 'config.json').read_bytes(), b'current settings')
 
     def test_process_loss_recovery_reads_actual_directories_at_each_rename_boundary(self):
         for state in ('moving_old','old_moved','moving_new','installed'):
