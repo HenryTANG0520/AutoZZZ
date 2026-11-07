@@ -79,7 +79,12 @@ class OneDragonService:
 
     def _create_context(self):
         """调用方持有 profile_lock；专用设置在整个界面生命周期保留它。"""
+        from .onedragon_log import OVERLAY_LOG_ENV, scope_console_logs
         from .gamepad_install import activate_gamepad_support
+        if os.environ.get(OVERLAY_LOG_ENV) == "1":
+            from one_dragon.utils.log_utils import log
+
+            scope_console_logs(log, lambda: self._ctx)
         try:activate_gamepad_support(self.data)
         except (ValueError,OSError) as exc:
             # 损坏的可选依赖不进入sys.path；保留前台功能与显式修复入口。

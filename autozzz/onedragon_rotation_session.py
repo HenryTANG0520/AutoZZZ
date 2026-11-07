@@ -11,6 +11,7 @@ import threading
 import uuid
 
 from .onedragon_patrol import PATROL_INCOMPLETE_ERROR, patrol_incomplete
+from .onedragon_log import log_event, overlay_state_event
 from .onedragon_runtime import OneDragonClient,RequestPending,RemoteError
 from .rotation_snapshot import snapshot
 from .task_lease import RunLeaseOwner
@@ -105,6 +106,7 @@ class RotationSession:
     def _state(self):
         resources=[] if self.plan is None else [dict(item,text=row['name']+'：'+item['text']) for row in self.plan['instances'] for item in row['resources']]
         source=copy.deepcopy(self.source_state)
+        legacy_binding=source.pop('legacy_log_binding',None)
         if self.budget_state:source['budget']=copy.deepcopy(self.budget_state)
         run_hotkeys = dict(self.run_hotkeys)
         key_status = self._run_key_events.status() if self._run_key_events is not None else {}
@@ -119,10 +121,10 @@ class RotationSession:
                       control=dict(manual_paused=self.manual,focus_waiting=source.get('control',{}).get('focus_waiting',False)),
                       rotation=dict(accounts=copy.deepcopy(self.accounts),current=self.current,returning=self.returning,
                                     job_id=self.report.get('job_id') if self.report is not None else None))
-        self.emit(dict(type='state',state=source))
+        self.emit(overlay_state_event(source, legacy_binding))
 
     def _log(self,message):
-        self.emit(dict(type='log',message=str(message)))
+        self.emit(log_event(message))
         if self.report_dir is not None and self.report is not None and self.report['status']=='running':
             with (self.report_dir/'run.log').open('a',encoding='utf-8') as stream:stream.write(str(message)+'\n')
 
@@ -213,7 +215,7 @@ class RotationSession:
             if (method == 'start_application' and not state['busy'] and state['state'] == 'success'
                     and patrol_incomplete(state.get('world_patrol'))):
                 state = dict(state, state='failed', error=PATROL_INCOMPLETE_ERROR)
-            self.source_state=state
+            self.source_state=dict(state, legacy_log_binding=getattr(self.client, "legacy_log_binding", None))
             if state.get('budget'):self.budget_state=state['budget']
             with self.lock:
                 if game and state.get('handoff_control'):

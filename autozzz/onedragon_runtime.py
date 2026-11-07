@@ -14,6 +14,8 @@ import time
 import uuid
 from typing import Any, Callable
 
+from .onedragon_log import OVERLAY_LOG_ENV, decode_worker_log
+
 UPSTREAM_REVISION = "f80b68456306d2afb97be72436dcda27f2ed6b59"
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -238,6 +240,7 @@ class OneDragonClient:
             from .recovery_discovery import validate_recovery_scope
             validate_recovery_scope(recovery_scope)
         self.paths, self.log = paths, log
+        self.legacy_log_binding = "legacy:" + uuid.uuid4().hex
         self.run_lease=run_lease
         self._retain_on_host_loss = retain_on_host_loss
         self._recovery_scope = recovery_scope
@@ -281,6 +284,7 @@ class OneDragonClient:
             environment.pop(LEASE_ENV,None)
             if self.run_lease is not None:environment[LEASE_ENV]=self.run_lease.export()
             environment["PYTHONUTF8"] = "1"
+            environment[OVERLAY_LOG_ENV] = "1" if self.log is not None else "0"
             for name in ('PYTHONHOME','PYTHONUSERBASE','VIRTUAL_ENV','CONDA_PREFIX','PYTHONSTARTUP'):
                 environment.pop(name,None)
             environment['PYTHONNOUSERSITE']='1'
@@ -466,7 +470,8 @@ class OneDragonClient:
         for line in iter(self.process.stderr.readline, b""):
             if self.log:
                 try:
-                    self.log(line.decode("utf-8", errors="replace").rstrip())
+                    text = line.decode("utf-8", errors="replace").rstrip()
+                    self.log(decode_worker_log(text, self.legacy_log_binding))
                 except Exception:
                     pass  # 日志接收器异常不能阻塞进程排空 stderr。
 

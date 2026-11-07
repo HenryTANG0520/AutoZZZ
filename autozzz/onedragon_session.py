@@ -10,6 +10,7 @@ import threading
 import uuid
 from typing import Any,Callable
 
+from .onedragon_log import log_event, overlay_state_event
 from .onedragon_runtime import OneDragonClient,RequestPending,RuntimePaths
 
 
@@ -85,7 +86,7 @@ class RuntimeSession:
         elif event.get("type")=="paused":self.emit(dict(type="bootstrap_paused",paused=event["paused"]))
 
     def _log(self,message):
-        self.emit(dict(type="log",message=message))
+        self.emit(log_event(message))
         with self.report_lock:
             if self.report_dir is not None and self.report is not None and self.report.get("status")=="running":
                 try:
@@ -266,7 +267,7 @@ class RuntimeSession:
                 return
             if self.phase=="running":self._finish_report(state)
             self.phase=""
-        self.emit(dict(type="state",state=state))
+        self.emit(overlay_state_event(state, getattr(client, "legacy_log_binding", None)))
 
     def _mcp_events(self,client,events):
         """Consume durable ordered task events before acknowledging their removal.
@@ -301,7 +302,8 @@ class RuntimeSession:
                     if len(raw)>16*1024*1024 or not decoder.eof or decoder.unused_data:raise ValueError('MCP终态事件大小或编码无效。')
                     final=json.loads(raw)
                 if not event.get('is_prepare'):self._finish_report(final)
-                self.phase='';self.emit(dict(type='state',state=final))
+                self.phase=''
+                self.emit(overlay_state_event(final, getattr(client, "legacy_log_binding", None)))
             else:raise RuntimeError('MCP事件类型无效。')
             sequence=current
             self.mcp_event_sequence=sequence

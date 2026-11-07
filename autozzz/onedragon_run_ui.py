@@ -12,6 +12,7 @@ from .localization_tk import PresentationVar
 from .localization import application_name,tr
 from . import theme
 from .config import GAME_PATHS,ROOT,Settings
+from .onedragon_log import valid_log_binding
 from .onedragon_patrol import PATROL_INCOMPLETE_ERROR
 from .onedragon_patrol_results import ATTENTION, patrol_attention, patrol_counts, patrol_label, patrol_result
 from .onedragon_runtime import RuntimePaths
@@ -595,7 +596,11 @@ class ExecutionWindow:
                     if self.trace_window is not None and not self.trace_window.closed:self.trace_window.error(event['message'],version=event.get('version'))
                 elif kind=="log":
                     self.write(event["message"])
-                    if self.busy and not self.ui.closing:self.ui.overlay.append(event["message"])
+                    if self.busy and not self.ui.closing:
+                        target = self.ui.overlay_game_handle
+                        if ("overlay_log_binding" not in event or
+                                isinstance(target, tuple) and len(target) == 4 and event["overlay_log_binding"] == target[3]):
+                            self.ui.overlay.append(event["message"])
                 elif kind=="phase":
                     self.bootstrapping=event.get("bootstrapping",self.bootstrapping)
                     self.status.set(event["phase"])
@@ -672,6 +677,16 @@ class ExecutionWindow:
                             pid = identity.get("process_id") if isinstance(identity, dict) else None
                             target = ((target, pid) if type(target) is int and target > 0 and type(pid) is int and pid > 0
                                       and identity.get("window_handle") == target else None)
+                            if target is not None and "window_process_created" in state:
+                                created = state["window_process_created"]
+                                target = (*target, created) if type(created) is int and 0 < created < 2**64 else None
+                                binding = state.get("overlay_log_binding")
+                                if target is not None and valid_log_binding(binding):
+                                    target = (*target, binding)
+                        legacy_binding = event.get("legacy_log_binding")
+                        if target is not None and legacy_binding is not None:
+                            hwnd, pid = target if isinstance(target, tuple) else (target, None)
+                            target = (hwnd, pid, None, legacy_binding)
                         self._set_overlay_target(target)
                     self.busy=state["busy"]
                     self.bootstrapping=False

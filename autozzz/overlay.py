@@ -9,6 +9,9 @@ import time
 import tkinter as tk
 
 
+_REVOKED_BINDING = object()
+
+
 @dataclass(frozen=True)
 class LogLine:
     text: str
@@ -89,7 +92,7 @@ class NativePresentation:
             raise OSError(C.get_last_error(), "覆盖日志无法从截图中排除")
         return handle
 
-    def game_bounds(self, handle, *, require_foreground=True, process_id=None):
+    def game_bounds(self, handle, *, require_foreground=True, process_id=None, process_created=None):
         if (not isinstance(handle, int) or not self.user32.IsWindow(handle)
                 or self.user32.IsIconic(handle) or (require_foreground and self.user32.GetForegroundWindow() != handle)):
             return None
@@ -97,6 +100,20 @@ class NativePresentation:
             current_pid = W.DWORD()
             if not self.user32.GetWindowThreadProcessId(handle, C.byref(current_pid)) or current_pid.value != process_id:
                 return None
+            if process_created is not None:
+                from .task_lease import _created
+                from .windows import kernel32
+
+                process = kernel32.OpenProcess(0x1000, False, process_id)  # PROCESS_QUERY_LIMITED_INFORMATION
+                if not process:
+                    return None
+                try:
+                    if _created(kernel32, process) != process_created:
+                        return None
+                except RuntimeError:
+                    return None
+                finally:
+                    kernel32.CloseHandle(process)
         rect, point = W.RECT(), W.POINT()
         if not self.user32.GetClientRect(handle, C.byref(rect)) or not self.user32.ClientToScreen(handle, C.byref(point)):
             return None
@@ -156,6 +173,8 @@ class GameLogOverlay:
         if self.closed:
             return
         self.sync_target()
+        if self._target is _REVOKED_BINDING:
+            return
         self.lines.append(LogLine(f"{time.strftime('%H:%M:%S')}  {message}", level))
         self._dirty = True
 
@@ -180,21 +199,24 @@ class GameLogOverlay:
             return None
         target = self.game_handle()
         previous = getattr(self, "_target", None)
-        if target != previous:
+        # Keep startup logs before the first binding. Logs after a detach belong to no window.
+        binding = _REVOKED_BINDING if target is None and previous is not None else target
+        if binding != previous:
             self._hide()
-            if target is not None:
-                if previous is not None:
-                    self.lines.clear()
-                    self.linger_until = 0.0
-                    self.status = "等待当前游戏状态"
-                    self._dirty = True
-                self._target = target
+            if previous is not None:
+                self.lines.clear()
+                self.linger_until = 0.0
+                self.status = "等待当前游戏状态"
+                self._dirty = True
+            self._target = binding
         return target
 
     def _game_bounds(self, target, *, desktop=False):
         options = {"require_foreground": False} if desktop else {}
         if isinstance(target, tuple):
-            target, options["process_id"] = target
+            if len(target) >= 3:
+                options["process_created"] = target[2]
+            target, options["process_id"] = target[:2]
         return self.presentation.game_bounds(target, **options)
 
     def _can_show(self, target, game):

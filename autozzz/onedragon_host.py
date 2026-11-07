@@ -243,9 +243,11 @@ class ManagedController(ZPcController):
         self.screenshot_controller = WindowCapture(self,self.game_win, self.standard_width, self.standard_height)
 
     def bind(self, game_path: str) -> None:
+        from uuid import uuid4
         from .windows import find_game, user32, kernel32, W, C
         self.game_win.clear_binding()
         bound = find_game(game_path)
+        bound.overlay_log_binding = uuid4().hex
         pid = W.DWORD()
         user32.GetWindowThreadProcessId(bound.hwnd, C.byref(pid))
         handle = kernel32.OpenProcess(0x101000, False, pid.value)

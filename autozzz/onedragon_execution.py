@@ -1385,11 +1385,28 @@ class OneDragonExecution:
             if patrol is not None:
                 result["world_patrol"] = patrol
             result.update(active_seconds=round(self.active_seconds,2),time_limited=self.time_limited)
-            bound=getattr(getattr(self.ctx.controller,"game_win",None),"bound",None)
+            window = getattr(self.ctx.controller, "game_win", None)
+            bound = getattr(window, "bound", None)
+            pid = getattr(window, "process_id", None)
             result["window_handle"]=None if bound is None else bound.hwnd
             result['window_path']=None if bound is None else getattr(bound,'path',None)
-            pid=getattr(getattr(self.ctx.controller,'game_win',None),'process_id',None)
             result['window_identity']=None if bound is None or pid is None else dict(window_handle=bound.hwnd,process_id=pid)
+            if result['window_identity'] is not None:
+                # Keep the existing window_identity shape for callers that pass it back to the worker.
+                result['window_process_created'] = None
+                handle = getattr(window, "process_handle", None)
+                if handle:
+                    from .task_lease import _created
+                    from .windows import kernel32
+
+                    try:
+                        created = _created(kernel32, handle)
+                    except RuntimeError:
+                        pass
+                    else:
+                        if window.bound is bound and window.process_id == pid and window.process_handle == handle:
+                            result['window_process_created'] = created
+                            result['overlay_log_binding'] = getattr(bound, 'overlay_log_binding', None)
             controller=self.ctx.controller
             if controller is not None and hasattr(controller,'using_background'):
                 result['input']=dict(background=controller.background_mode,requested=controller.using_background,
