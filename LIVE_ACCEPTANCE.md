@@ -1,5 +1,9 @@
 # 实机验收清单
 
+2026-11-07 开发版 `6548d0a` 接入已打开的国际服，在「今日到账」「月卡剩余」及 ×90 同时出现时自动领取月卡，并确认回到街区。启动流程用时约 9 秒，电量消耗为 0。证据见 `runs/global-monthly-6548d0a/result.json` 和 `launch.log`。
+
+同一客户端的基塔布鲁详情由新版 `6008415` 的只读观察识别为周期奖励剩余 3 次，当前未显示无报酬模式。独立首领候选在真实页面返回 `hunt_budget_or_target_mismatch`，未进战斗，设备回调为零。普通权限的 PrintWindow 取图失败，使用与游戏相同的管理员权限后通过。对同一个 3840×2160 页面分别采样 12 次，热态 BitBlt 和 PrintWindow 截图中位数为 47.277 和 59.141 毫秒，页面和资源判定一致。战中逐帧识别及音频闪避仍待实机。证据见 `runs/global-monthly-6548d0a/boss-menu-elevated.stdout`、`boss-weekly-stop.stdout` 和 `capture-backends.json`。
+
 2026-11-06 国服续接验收 `cn-858e6774c665488a` 从冷启动进入街区，绑定原客户端并核实管理员单次授权。原助手在 worker 登记前收到通信断开。该轮计划运行数为 0，账本没有待核对预留，任务锁已释放。原场续接实机仍待验证。随后用户将前台切到国际服。证据见 `runs/parallel-20261106/B3-priority-original-resume/B3-source-live-handoff-preflight/cases/cn-858e6774c665488a/result.json`。
 
 2026-11-06 开发版 `57b72a8` 国服从冷启动进入街区，执行封存入口 `cn-3a7b8034ff29`。第 2 帧在淡出中，程序只等画面恢复；随后从稳定菜单点「更多」，在「菜单-更多功能」找到唯一「训练场」。一共两次点击，无按键遗留、无预算、零电量。按同一窗口身份正常退出客户端和两个 worker，桌面交还 AutoHSR。训练场内和连携待另行验收。证据见 `runs/parallel-20261106/B2-unknown-cold-start-preflight/live/cn-70fb1c5e3e4e/result.json`。
